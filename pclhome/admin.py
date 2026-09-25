@@ -23,6 +23,7 @@ import threading
 import time
 import urllib.parse
 
+from . import ai
 from .log import out, warn
 from .config import Config
 from .generate import generate
@@ -184,7 +185,18 @@ def handle(service, handler, path: str, query: str):
                 "enable_wallpaper": config.enable_wallpaper,
             },
             "store": store.all(),
+            "ai": ai.admin_state(config),
         })
+
+    if action == "ai_reset":
+        if not config.enable_ai:
+            return _json({"ok": False, "error": "ai_disabled"}, 400)
+        body = _read_body(handler)
+        scope = str(body.get("scope") or "all")
+        if scope not in ("quota", "jobs", "keys", "all"):
+            return _json({"ok": False, "error": "bad_scope"}, 400)
+        return _json({"ok": True, "scope": scope,
+                      "result": ai.reset(scope, str(body.get("ip") or ""))})
 
     if action == "stats":
         return _json({"ok": True, "stats": service.stats.summary()})
@@ -380,6 +392,7 @@ async function load() {
   const s = await api('state');
   state.store = s.store || {};
   state.config = s.config || {};
+  state.ai = s.ai || {};
   render();
   loadStats();
   showPanel();
@@ -470,6 +483,9 @@ function render() {
   <div class="card"><h2>访问统计 <small>近 7 天</small></h2>
     <div class="body"><div id="stats"></div></div></div>
 
+  <div class="card"><h2>AI 日志分析</h2>
+    <div class="body"><div id="aiBox"></div></div></div>
+
   <div class="card"><h2>模板</h2>
     <div class="body"><div class="btns">
       <button id="regen">重新生成 XAML</button>
@@ -484,6 +500,27 @@ function render() {
     ${Object.entries(blocks).map(([ip, reason]) => `<tr><td>${esc(ip)}</td><td>${esc(reason)}</td>
       <td><button class="ghost" data-unblock="${esc(ip)}">解封</button></td></tr>`).join('')}
     </table>` : '<div class="hint">暂无封禁记录</div>';
+
+  const ai = state.ai || {};
+  if (!ai.enabled) {
+    $('#aiBox').innerHTML = '<div class="hint">未开启（config.json 里 enable_ai 设为 true 才生效）</div>';
+  } else {
+    const rows = ai.today_rows || [];
+    $('#aiBox').innerHTML = `
+      <div class="hint">模型 <b>${esc(ai.model)}</b> @ ${esc(ai.base)} · 每个 IP 每天 ${ai.daily_limit} 次</div>
+      <div class="hint">${esc(ai.day)}：${rows.length} 个 IP 用过，共 ${ai.today_calls} 次 ·
+        正在分析 ${ai.running} 个 · 留存记录 ${ai.jobs} 条 · 私人密钥 ${ai.own_keys} 个</div>
+      ${rows.length ? `<table><tr><th>IP</th><th>今天用了</th><th></th></tr>
+        ${rows.map(r => `<tr><td>${esc(r.ip)}</td><td>${r.used}</td>
+          <td><button class="ghost" data-aireset="${esc(r.ip)}">重置这个 IP</button></td></tr>`).join('')}
+        </table>` : '<div class="hint">今天还没有人用过</div>'}
+      <div class="btns" style="margin-top:12px">
+        <button id="aiResetQuota">重置今日用量</button>
+        <button class="ghost" id="aiResetJobs">清空分析记录</button>
+        <button class="ghost" id="aiResetKeys">清空私人密钥</button>
+        <button class="danger" id="aiResetAll">全部重置</button>
+      </div>`;
+  }
 
   bind();
 }
@@ -520,6 +557,18 @@ function bind() {
   document.querySelectorAll('[data-unblock]').forEach(btn => {
     btn.onclick = () => api('block', { ip: btn.dataset.unblock, remove: true }).then(() => toast('已解封')).then(load);
   });
+  const aiReset = (scope, ip) => {
+    if (!confirm('确定要重置吗？scope=' + scope + (ip ? ' ip=' + ip : ''))) return;
+    api('ai_reset', { scope: scope, ip: ip || '' })
+      .then(r => toast('已重置：' + JSON.stringify(r.result)))
+      .then(load).catch(e => toast('失败：' + e.message));
+  };
+  [['aiResetQuota', 'quota'], ['aiResetJobs', 'jobs'], ['aiResetKeys', 'keys'], ['aiResetAll', 'all']]
+    .forEach(([id, scope]) => { const el = $('#' + id); if (el) el.onclick = () => aiReset(scope); });
+  document.querySelectorAll('[data-aireset]').forEach(btn => {
+    btn.onclick = () => aiReset('all', btn.dataset.aireset);
+  });
+
   $('#regen').onclick = () => {
     $('#regen').disabled = true;
     api('regenerate').then(() => toast('已重新生成')).catch(e => toast('失败：' + e.message))

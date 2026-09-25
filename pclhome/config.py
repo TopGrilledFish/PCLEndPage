@@ -53,6 +53,10 @@ LUNAR_API = "https://uapis.cn/api/v1/misc/lunartime"
 # AI 日志分析：OpenAI 兼容接口，默认 DeepSeek 官方。
 # 站长密钥（ai_api_key）每 IP 每天限 ai_daily_limit 次；访客也可以填自己的密钥绕过限制。
 AI_API_BASE = "https://api.deepseek.com/v1"
+# V4 Flash。**别用 deepseek-v4-pro**：同一个问题它思考量是 flash 的三倍多
+# （实测 567 token vs 182），费用也高三倍左右。
+# 用 deepseek-flash 这个写法：它是 /models 接口实际列出来的名字，
+# deepseek-v4-flash 也指向同一个模型，但没在列表里，哪天被摘掉不好说。
 AI_MODEL = "deepseek-flash"
 
 # PCL 内置资源：联网图取不到时用它兜底（path 形式，PCL 自己会解析）
@@ -157,7 +161,7 @@ class Config:
     ai_timeout: float = 120.0        # AI 调用超时，比普通接口长得多
     ai_refund_on_failure: bool = True  # 抓日志/AI 调用失败时退还当天次数
     # 结果页脚里点名的模型（公用密钥那一档）。改成厂商的宣传名即可。
-    ai_display_name: str = "DeepSeek V4.1 flash"
+    ai_display_name: str = "DeepSeek V4 Flash"
     max_retries: int = 2
 
     # ---- 缓存 ----

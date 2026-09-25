@@ -154,6 +154,45 @@ class Quota:
             warn("[AI] 扣额度失败：" + str(exc))
             return False
 
+    def rows_for(self, day: str) -> list[dict]:
+        """某天的用量明细，给后台看。"""
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    rows = conn.execute(
+                        "SELECT ip, used, ts FROM ai_usage WHERE day=? "
+                        "ORDER BY used DESC, ts DESC", (day,)).fetchall()
+                    return [{"ip": r[0], "used": int(r[1]), "ts": int(r[2])} for r in rows]
+                finally:
+                    conn.close()
+        except Exception as exc:
+            warn("[AI] 读用量明细失败：" + str(exc))
+            return []
+
+    def reset(self, day: str | None = None, ip: str | None = None) -> int:
+        """删用量记录：带 day 只删那天的，带 ip 只删那个 IP 的。返回删掉的行数。"""
+        clauses, params = [], []
+        if day:
+            clauses.append("day=?")
+            params.append(day)
+        if ip:
+            clauses.append("ip=?")
+            params.append(ip)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    cur = conn.execute("DELETE FROM ai_usage" + where, tuple(params))
+                    conn.commit()
+                    return cur.rowcount
+                finally:
+                    conn.close()
+        except Exception as exc:
+            warn("[AI] 重置用量失败：" + str(exc))
+            return 0
+
     def refund(self, ip: str, day: str) -> None:
         """调用失败时把次数还回去（见 config.ai_refund_on_failure）。"""
         try:
@@ -205,13 +244,13 @@ def set_own_key(ip: str, raw: str) -> bool:
 
 
 def set_own_base(ip: str, raw: str, protocol: str) -> bool:
-    """第二步：存请求地址与协议。地址可写成 ``地址|模型``，模型省略则用协议默认值。
+    """第二步：存请求地址与协议。
 
-    地址留空 = 用协议默认地址（OpenAI → api.openai.com，Anthropic → api.anthropic.com）。
+    地址留空 = 用该协议的官方地址（OpenAI → api.openai.com，Anthropic → api.anthropic.com）。
+    模型在第三步单独填，这里只取地址——万一有人按老写法填了 ``地址|模型``，
+    也只认前半段，免得两个地方都能改模型。
     """
-    parts = [part.strip() for part in (raw or "").split("|")]
-    base = parts[0] if parts else ""
-    model = parts[1] if len(parts) > 1 else ""
+    base = (raw or "").split("|")[0].strip()
     with _own_lock:
         conf = _own_keys.get(ip) or {}
         if base:
@@ -219,13 +258,23 @@ def set_own_base(ip: str, raw: str, protocol: str) -> bool:
         else:
             conf.pop("base", None)
         conf["protocol"] = protocol
+        _own_keys[ip] = conf
+    out("[AI] " + ip + " 自带密钥改为 " + PROTOCOLS[protocol][0]
+        + "，地址 " + describe_own_key(ip))
+    return True
+
+
+def set_own_model(ip: str, raw: str) -> bool:
+    """第三步：存模型名。留空 = 用该协议的默认模型。"""
+    model = (raw or "").strip()
+    with _own_lock:
+        conf = _own_keys.get(ip) or {}
         if model:
             conf["model"] = model
         else:
             conf.pop("model", None)
         _own_keys[ip] = conf
-    out("[AI] " + ip + " 自带密钥改为 " + PROTOCOLS[protocol][0]
-        + "，地址 " + describe_own_key(ip))
+    out("[AI] " + ip + " 自带密钥模型改为 " + describe_own_key(ip))
     return True
 
 
@@ -253,6 +302,28 @@ def get_own_key(ip: str) -> dict | None:
 def clear_own_key(ip: str) -> bool:
     with _own_lock:
         return _own_keys.pop(ip, None) is not None
+
+
+def reset_keys(ip: str | None = None) -> int:
+    """清掉私人密钥（内存里的）。不传 ip 就全清。"""
+    with _own_lock:
+        if ip:
+            return 1 if _own_keys.pop(ip, None) is not None else 0
+        count = len(_own_keys)
+        _own_keys.clear()
+        return count
+
+
+def reset_jobs(ip: str | None = None) -> int:
+    """清掉分析记录（含结果）。不传 ip 就全清。"""
+    with _jobs_lock:
+        if ip:
+            removed = 1 if _jobs.pop(ip, None) is not None else 0
+        else:
+            removed = len(_jobs)
+            _jobs.clear()
+        _save_jobs()
+    return removed
 
 
 # ============ 任务状态 ============
@@ -649,9 +720,13 @@ def build_page(config: Config, ip: str, base_url: str) -> str:
 
     key_hint = ("已保存 " + mask_key(str(own.get("key") or "")) + "，重新填写可覆盖"
                 if own else "sk-...（只存在服务器内存里，重启后要重填）")
-    base_hint = ("留空 = 用官方地址；也可写 地址|模型"
-                 if not own or not own.get("base")
-                 else str(own.get("base")) + "（留空改回官方地址）")
+    protocol = str((own or {}).get("protocol") or "openai")
+    saved_base = str((own or {}).get("base") or "")
+    saved_model = str((own or {}).get("model") or "")
+    base_hint = (saved_base + "（留空改回官方地址）" if saved_base
+                 else "只填地址。留空 = OpenAI 用 api.openai.com，Anthropic 用 api.anthropic.com")
+    model_hint = (saved_model + "（留空保存可恢复默认）" if saved_model
+                  else "例如 " + PROTOCOLS.get(protocol, ("", ""))[1] + "，留空 = 用默认")
 
     return (
         '<local:MyCard Title="AI 智能分析" CanSwap="False">'
@@ -724,8 +799,21 @@ def build_page(config: Config, ip: str, base_url: str) -> str:
         'LogoScale="0.8" Logo="' + ICON_SAVE + '" '
         'EventType="打开帮助" EventData="' + _bind("aibaseinput", base, "/ai_base_anthropic.json") + '" />'
         "</Grid>"
-        '<TextBlock Text="' + _attr("地址可写成 地址|模型，省略模型就用该协议的默认模型。"
-                                   "密钥和地址两步都做过，私人密钥才可用。") + '" '
+        '<TextBlock Text="上面这一格只填地址。模型在下面单独填。" FontSize="11" '
+        'TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{DynamicResource ColorBrush3}" />'
+
+        # 第三步：模型
+        '<TextBlock Text="第三步：填模型名" FontSize="12" '
+        'Foreground="{DynamicResource ColorBrush3}" Margin="0,14,0,6" />'
+        '<Border Height="38" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+        '<local:MyTextBox x:Name="aimodelinput" Height="38" Margin="10,0" HintText="'
+        + _attr(model_hint) + '" Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" />'
+        "</Border>"
+        '<local:MyIconTextButton Margin="0,8,0,0" Height="38" Text="保存模型" '
+        'LogoScale="0.8" Logo="' + ICON_SAVE + '" '
+        'EventType="打开帮助" EventData="' + _bind("aimodelinput", base, "/ai_model.json") + '" />'
+        '<TextBlock Text="' + _attr("留空保存则恢复默认：OpenAI 接口用 " + PROTOCOLS["openai"][1]
+                                   + "，Anthropic 接口用 " + PROTOCOLS["anthropic"][1] + "。") + '" '
         'FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0" '
         'Foreground="{DynamicResource ColorBrush3}" />'
 
@@ -746,6 +834,50 @@ def build_page(config: Config, ip: str, base_url: str) -> str:
 
         "</StackPanel>"
         "</local:MyCard>")
+
+
+def admin_state(config: Config) -> dict:
+    """后台「AI 日志分析」那块要显示的东西。"""
+    if not config.enable_ai:
+        return {"enabled": False}
+    day = beijing_day()
+    rows = QUOTA.rows_for(day)
+    with _jobs_lock:
+        jobs = len(_jobs)
+        running = sum(1 for j in _jobs.values() if j.get("state") == "running")
+    with _own_lock:
+        keys = len(_own_keys)
+    return {
+        "enabled": True,
+        "model": config.ai_model,
+        "base": config.ai_api_base,
+        "display_name": config.ai_display_name,
+        "daily_limit": config.ai_daily_limit,
+        "day": day,
+        "today_rows": rows,
+        "today_calls": sum(r["used"] for r in rows),
+        "jobs": jobs,
+        "running": running,
+        "own_keys": keys,
+    }
+
+
+def reset(scope: str = "all", ip: str = "") -> dict:
+    """后台重置。scope 取 quota / jobs / keys / all；给了 ip 就只动这个 IP。
+
+    不传 ip 时，额度只清**今天**的（历史留着好看趋势）；传了 ip 就把那个 IP 清干净。
+    """
+    ip = (ip or "").strip() or None
+    done = {}
+    if scope in ("quota", "all"):
+        done["quota"] = QUOTA.reset(None if ip else beijing_day(), ip)
+    if scope in ("jobs", "all"):
+        done["jobs"] = reset_jobs(ip)
+    if scope in ("keys", "all"):
+        done["keys"] = reset_keys(ip)
+    out("[AI] 后台重置 " + scope + ("（" + str(ip) + "）" if ip else "（全部）")
+        + "：" + json.dumps(done, ensure_ascii=False))
+    return done
 
 
 def build_popup(title: str, message: str, theme: str = "Blue", back: str = "") -> str:
@@ -788,11 +920,13 @@ _META = {
     "/ai_key.json": ("保存私人密钥", "密钥只存在服务器内存里"),
     "/ai_base_openai.json": ("存为 OpenAI 接口", "地址留空则用 api.openai.com"),
     "/ai_base_anthropic.json": ("存为 Anthropic 接口", "地址留空则用 api.anthropic.com"),
+    "/ai_model.json": ("保存模型", "模型名，留空则用该协议的默认值"),
     "/ai_clear.json": ("清除私人密钥", "清除后回到公用密钥模式"),
 }
 _DO = {"/ai_page.xaml": "page", "/ai.xaml": "builtin", "/ai_own.xaml": "own",
        "/ai_key.xaml": "savekey", "/ai_base_openai.xaml": "base_openai",
-       "/ai_base_anthropic.xaml": "base_anthropic", "/ai_clear.xaml": "clearkey"}
+       "/ai_base_anthropic.xaml": "base_anthropic", "/ai_model.xaml": "savemodel",
+       "/ai_clear.xaml": "clearkey"}
 
 AI_PATHS = set(_META) | set(_DO)
 
@@ -847,6 +981,17 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
             "已存为 " + PROTOCOLS[protocol][0] + " 接口",
             "当前设置：" + describe_own_key(ip) + "\n\n"
             "现在就能用「私人密钥」分析了。", back=page_url))
+
+    if action == "savemodel":
+        if not get_own_key(ip):
+            return _xaml_response(build_popup(
+                "还没有密钥", "请先做第一步：填好 API 密钥并点「保存密钥」。",
+                "Yellow", back=page_url))
+        set_own_model(ip, params.get("q", ""))
+        return _xaml_response(build_popup(
+            "模型已保存",
+            "当前设置：" + describe_own_key(ip) + "\n\n"
+            "输入框留空再点一次就会恢复成该协议的默认模型。", back=page_url))
 
     if action == "clearkey":
         had = clear_own_key(ip)
