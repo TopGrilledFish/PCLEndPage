@@ -1,0 +1,27 @@
+# 运行时数据（后台配置、访问统计、壁纸缓存）
+var/
+
+# 网站图标：**入库**。构建期自动抓取对这 8 个站基本无效（Minecraft Wiki 被
+# Cloudflare 403、MineBBS 只给 WebP、CurseForge 有防盗链），所以手工抓好后跟着
+# 仓库走，clone 下来就能直接用。替换方法见 static/images/icons/README.md。
+
+# 本地配置、日志与移植中间产物
+*.log
+config.json
+build/
+
+# 生成物：由 `python -m pclhome generate` 产出。里面写死了当天的必应壁纸地址，
+# 提交上去过几天就过期了，而且 serve 启动时若发现缺失会自己生成一份，所以不入库。
+Custom.xaml
+Custom.xaml.version
+
+# 系统杂物
+Thumbs.db
+.DS_Store
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/

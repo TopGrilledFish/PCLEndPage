@@ -1,0 +1,882 @@
+# -*- coding: utf-8 -*-
+"""AI 崩溃日志分析。
+
+用户在主页的输入框里粘一个日志链接，PCL 带着这个链接请求 ``/ai.json`` 与
+``/ai.xaml``，服务端在后台线程里抓日志、调 AI，结果写回主页卡片。
+
+**为什么输入框只能填链接，不能直接粘日志原文**
+
+PCL 的事件参数是这么拼出来的::
+
+    EventData="{Binding Path=Text,ElementName=ailoginput,
+                StringFormat='{}<服务器地址>/ai.json?q={0}'}"
+
+``{0}`` 是输入框原文，**PCL 不做 URL 编码**，直接塞进 URL。崩溃日志里全是换行、
+空格和 ``&``，拼出来的请求行是非法的，PCL 那边直接失败——不是服务端能救的。
+链接又短又没有空白字符，才塞得进去。单行的短文本仍可用（见 :func:`split_input`），
+但正常用法是先把日志传到 mclo.gs，再粘链接。
+
+**两种密钥**
+
+1. 站长内置密钥（``config.ai_api_key``）：每 IP 每天 ``config.ai_daily_limit`` 次，
+   额度记在 SQLite 里，按**北京时间**跨天重置。
+2. 用户自带密钥：粘一次存下来，该 IP 不再受限。密钥**只存在内存**里，
+   进程一重启就没了——不落盘，免得替别人保管密钥。日志里一律打码。
+
+**任务状态**落在 ``var/ai_jobs.json``：额度是持久的，结果也必须持久，
+否则服务重启后用户额度用掉了却看不到结果。
+"""
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+import threading
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import parse_qs, unquote
+
+from .config import USER_AGENT, VAR_DIR, Config
+from .log import debug, error, out, warn
+from .store import STATS_DB
+from .xaml import (ICON_AI, ICON_KEY, ICON_SAVE, ICON_TRASH, escape_attr,
+                   escape_url_attr)
+
+JOBS_FILE = VAR_DIR / "ai_jobs.json"
+
+# 额度按这个时区跨天重置
+BEIJING = timezone(timedelta(hours=8))
+
+# 结果保留多久（超过就当过期，卡片不再显示）
+JOB_TTL = 7 * 86400
+
+SYSTEM_PROMPT = (
+    "你是 Minecraft 崩溃日志分析专家。用户会给你一份崩溃日志或报错日志。"
+    "请用简体中文回答，直接给结论，不要客套话。严格按这个结构输出，每部分都很短：\n"
+    "【结论】一句话说清崩在哪里。\n"
+    "【原因】引用日志里的关键行（异常类名、mod 名、类名）说明为什么。\n"
+    "【解决】给出可操作的步骤；能指名具体 mod、具体版本就指名。\n"
+    "如果日志信息不足以判断，就直接说还需要看哪部分，不要编造。"
+)
+
+
+# ============ 输入解析 ============
+
+_URL_RE = re.compile(r"^https?://\S+$", re.I)
+# 只认 mclo.gs 的网页地址。必须锚定主机名，否则会把自家的
+# https://api.mclo.gs/1/raw/<id> 匹配成「mclo.gs/1」而抓错东西。
+_MCLOGS_RE = re.compile(r"^https?://(?:www\.)?mclo\.gs/([A-Za-z0-9]+)", re.I)
+
+# 直接粘文本时截断到这个长度：URL 太长 PCL 那边发不出去
+MAX_INLINE_CHARS = 1200
+
+
+def split_input(raw: str) -> tuple[str, str]:
+    """把输入框内容分成 ``("url" | "text" | "empty", 值)``。"""
+    text = (raw or "").strip()
+    if not text:
+        return "empty", ""
+    if _URL_RE.match(text):
+        return "url", text
+    return "text", text[:MAX_INLINE_CHARS]
+
+
+def normalize_log_url(url: str) -> str:
+    """mclo.gs 的网页地址换成它的 raw 接口；其它地址原样返回。"""
+    match = _MCLOGS_RE.search(url or "")
+    if match:
+        return "https://api.mclo.gs/1/raw/" + match.group(1)
+    return url
+
+
+# ============ 配额（SQLite，按北京时间跨天）============
+
+class Quota:
+    """每个 IP 每天用了几次站长密钥。"""
+
+    def __init__(self, path: Path | None = None):
+        self.path = path or STATS_DB
+        self._lock = threading.Lock()
+        self._ready = False
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path, timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        if not self._ready:
+            conn.execute("CREATE TABLE IF NOT EXISTS ai_usage ("
+                         "ip TEXT NOT NULL, day TEXT NOT NULL, "
+                         "used INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL, "
+                         "PRIMARY KEY (ip, day))")
+            conn.commit()
+            self._ready = True
+        return conn
+
+    def used(self, ip: str, day: str) -> int:
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    row = conn.execute("SELECT used FROM ai_usage WHERE ip=? AND day=?",
+                                       (ip, day)).fetchone()
+                    return int(row[0]) if row else 0
+                finally:
+                    conn.close()
+        except Exception as exc:
+            warn("[AI] 读额度失败：" + str(exc))
+            return 0
+
+    def consume(self, ip: str, day: str, limit: int) -> bool:
+        """够额度就 +1 返回 True，不够返回 False。整段在事务里，不会超发。"""
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    row = conn.execute("SELECT used FROM ai_usage WHERE ip=? AND day=?",
+                                       (ip, day)).fetchone()
+                    used = int(row[0]) if row else 0
+                    if used >= limit:
+                        conn.rollback()
+                        return False
+                    now = int(time.time())
+                    conn.execute(
+                        "INSERT INTO ai_usage (ip, day, used, ts) VALUES (?, ?, 1, ?) "
+                        "ON CONFLICT(ip, day) DO UPDATE SET used = used + 1, ts = ?",
+                        (ip, day, now, now))
+                    conn.commit()
+                    return True
+                finally:
+                    conn.close()
+        except Exception as exc:
+            warn("[AI] 扣额度失败：" + str(exc))
+            return False
+
+    def refund(self, ip: str, day: str) -> None:
+        """调用失败时把次数还回去（见 config.ai_refund_on_failure）。"""
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    conn.execute("UPDATE ai_usage SET used = used - 1 "
+                                 "WHERE ip=? AND day=? AND used > 0", (ip, day))
+                    conn.commit()
+                finally:
+                    conn.close()
+        except Exception as exc:
+            warn("[AI] 退还额度失败：" + str(exc))
+
+
+QUOTA = Quota()
+
+
+def beijing_day(ts: float | None = None) -> str:
+    return datetime.fromtimestamp(ts if ts is not None else time.time(),
+                                  BEIJING).strftime("%Y-%m-%d")
+
+
+# ============ 用户自带密钥（只在内存）============
+
+_own_keys: dict[str, dict] = {}
+_own_lock = threading.RLock()
+
+
+def mask_key(key: str) -> str:
+    """日志里只留头尾，别把明文密钥写进日志文件。"""
+    key = key or ""
+    if len(key) <= 10:
+        return "***"
+    return key[:6] + "***" + key[-4:]
+
+
+def set_own_key(ip: str, raw: str) -> bool:
+    """第一步：存密钥（不动已有的地址/协议设置）。"""
+    key = (raw or "").strip()
+    if not key:
+        return False
+    with _own_lock:
+        conf = _own_keys.get(ip) or {}
+        conf["key"] = key
+        _own_keys[ip] = conf
+    out("[AI] " + ip + " 设置了自带密钥 " + mask_key(key))
+    return True
+
+
+def set_own_base(ip: str, raw: str, protocol: str) -> bool:
+    """第二步：存请求地址与协议。地址可写成 ``地址|模型``，模型省略则用协议默认值。
+
+    地址留空 = 用协议默认地址（OpenAI → api.openai.com，Anthropic → api.anthropic.com）。
+    """
+    parts = [part.strip() for part in (raw or "").split("|")]
+    base = parts[0] if parts else ""
+    model = parts[1] if len(parts) > 1 else ""
+    with _own_lock:
+        conf = _own_keys.get(ip) or {}
+        if base:
+            conf["base"] = base.rstrip("/")
+        else:
+            conf.pop("base", None)
+        conf["protocol"] = protocol
+        if model:
+            conf["model"] = model
+        else:
+            conf.pop("model", None)
+        _own_keys[ip] = conf
+    out("[AI] " + ip + " 自带密钥改为 " + PROTOCOLS[protocol][0]
+        + "，地址 " + describe_own_key(ip))
+    return True
+
+
+def describe_own_key(ip: str) -> str:
+    """给日志与界面用的一句话，带上协议与真实地址（绝不带密钥）。"""
+    conf = get_own_key(ip) or {}
+    if not conf:
+        return "未设置"
+    protocol = str(conf.get("protocol") or "openai")
+    base = conf.get("base") or (config_default_base(protocol))
+    model = conf.get("model") or PROTOCOLS.get(protocol, ("", ""))[1]
+    return PROTOCOLS.get(protocol, ("OpenAI 兼容",))[0] + " · " + base + " · " + model
+
+
+def config_default_base(protocol: str) -> str:
+    return ("https://api.anthropic.com" if protocol == "anthropic"
+            else "https://api.openai.com/v1")
+
+
+def get_own_key(ip: str) -> dict | None:
+    with _own_lock:
+        return _own_keys.get(ip)
+
+
+def clear_own_key(ip: str) -> bool:
+    with _own_lock:
+        return _own_keys.pop(ip, None) is not None
+
+
+# ============ 任务状态 ============
+
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.RLock()
+
+
+def _load_jobs() -> None:
+    try:
+        if not JOBS_FILE.exists():
+            return
+        data = json.loads(JOBS_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return
+        for ip, job in data.items():
+            if not isinstance(job, dict):
+                continue
+            # 上次多半是进程被杀掉了，任务不可能还在跑
+            if job.get("state") == "running":
+                job["state"] = "error"
+                job["text"] = "服务重启，这次分析被中断了。请重新提交。"
+            _jobs[ip] = job
+    except Exception as exc:
+        warn("[AI] 任务记录读取失败：" + str(exc))
+
+
+def _save_jobs() -> None:
+    try:
+        tmp = JOBS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_jobs, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(JOBS_FILE)
+    except Exception as exc:
+        warn("[AI] 任务记录写入失败：" + str(exc))
+
+
+def _set_job(ip: str, **fields) -> None:
+    with _jobs_lock:
+        job = _jobs.get(ip) or {}
+        job.update(fields)
+        job["ts"] = time.time()
+        _jobs[ip] = job
+        _save_jobs()
+
+
+def get_job(ip: str) -> dict | None:
+    with _jobs_lock:
+        job = _jobs.get(ip)
+    if not job:
+        return None
+    if time.time() - float(job.get("ts") or 0) > JOB_TTL:
+        return None
+    return dict(job)
+
+
+_load_jobs()
+
+
+# ============ 抓日志 ============
+
+def fetch_log(config: Config, url: str) -> tuple[bool, str]:
+    """抓日志。返回 ``(是否成功, 文本或错误说明)``。"""
+    target = normalize_log_url(url)
+    request = urllib.request.Request(target, headers={
+        "User-Agent": USER_AGENT, "Accept": "text/plain, */*"})
+    try:
+        with urllib.request.urlopen(request, timeout=config.http_timeout) as resp:
+            raw = resp.read(config.ai_max_log_chars * 4)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return False, "日志不存在（HTTP 404），链接可能过期了"
+        return False, "抓日志失败：HTTP " + str(exc.code)
+    except Exception as exc:
+        return False, "抓日志失败：" + str(exc)
+
+    text = raw.decode("utf-8", "replace")
+    if not text.strip():
+        return False, "日志内容是空的"
+    return True, text
+
+
+def trim_log(text: str, limit: int) -> str:
+    """超长就掐中间：崩溃原因一般在结尾，mod 列表在开头，两头都比中间有用。"""
+    if len(text) <= limit:
+        return text
+    head = int(limit * 0.25)
+    tail = limit - head
+    return (text[:head]
+            + "\n\n……（中间省略 " + str(len(text) - limit) + " 个字符，不影响判断）……\n\n"
+            + text[-tail:])
+
+
+# ============ 调 AI ============
+
+# 用户自带密钥时可以选接口协议。两种协议的请求头、请求体、返回体都不一样。
+PROTOCOLS = {
+    "openai": ("OpenAI 兼容", "gpt-4o-mini"),
+    "anthropic": ("Anthropic", "claude-sonnet-5"),
+}
+
+
+def _endpoint(base: str, protocol: str) -> str:
+    """拼出真正的请求地址。
+
+    地址让用户手填，写法不一致很正常，所以这里容错：
+    ``https://api.openai.com/v1`` 和 ``https://api.openai.com`` 都当同一个用。
+    """
+    base = (base or "").rstrip("/")
+    if protocol == "anthropic":
+        return base + ("/messages" if base.endswith("/v1") else "/v1/messages")
+    return base + ("/chat/completions" if base.endswith("/v1") else "/v1/chat/completions")
+
+
+def _http_error(exc: urllib.error.HTTPError) -> tuple[bool, str]:
+    body = ""
+    try:
+        body = exc.read().decode("utf-8", "replace")[:300]
+    except Exception:
+        pass
+    detail = "：" + body if body else ""
+    known = {401: "API 密钥无效", 402: "API 余额不足",
+             403: "API 拒绝访问（密钥权限或地区限制）",
+             429: "AI 接口限流了，过一会儿再试"}
+    if exc.code in known:
+        return False, known[exc.code] + "（HTTP " + str(exc.code) + "）" + detail
+    return False, "AI 接口返回 HTTP " + str(exc.code) + detail
+
+
+def _too_long(config: Config) -> tuple[bool, str]:
+    """推理模型把 token 全花在思考上、没写出答案时的提示。"""
+    return False, ("AI 没想完就被长度上限截断了（ai_max_tokens="
+                   + str(config.ai_max_tokens) + "）。次数已退还，直接重试即可；"
+                   "如果反复出现，把 config.json 里的 ai_max_tokens 调大。")
+
+
+def _post(url: str, payload: dict, headers: dict, config: Config):
+    """POST JSON。返回 ``(数据, 错误信息)``，两者必有一个为 None。"""
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT, **headers})
+    try:
+        with urllib.request.urlopen(request, timeout=config.ai_timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace")), None
+    except urllib.error.HTTPError as exc:
+        return None, _http_error(exc)
+    except Exception as exc:
+        return None, (False, "连不上 AI 接口：" + str(exc))
+
+
+def _parse_openai(config: Config, data: dict) -> tuple[bool, str]:
+    try:
+        choice = data["choices"][0]
+        text = str((choice.get("message") or {}).get("content") or "").strip()
+        finish = str(choice.get("finish_reason") or "")
+    except Exception:
+        return False, "看不懂 AI 返回的内容：" + json.dumps(data, ensure_ascii=False)[:280]
+    if text:
+        return True, text
+    # deepseek-flash / v4-pro 都是推理模型：先花 token 想，再写答案。
+    # max_tokens 给少了，token 全用在思考上，content 就是空的、finish_reason=length。
+    if finish == "length":
+        return _too_long(config)
+    return False, "AI 返回了空内容（finish_reason=" + (finish or "无") + "）"
+
+
+def _parse_anthropic(config: Config, data: dict) -> tuple[bool, str]:
+    text = "".join(str(block.get("text") or "")
+                   for block in (data.get("content") or [])
+                   if isinstance(block, dict) and block.get("type") == "text").strip()
+    if text:
+        return True, text
+    if str(data.get("stop_reason") or "") == "max_tokens":
+        return _too_long(config)
+    return False, "AI 返回了空内容（stop_reason=" + str(data.get("stop_reason") or "无") + "）"
+
+
+def analyze(config: Config, log_text: str, key_conf: dict) -> tuple[bool, str]:
+    """调 AI。返回 ``(是否成功, 结果或错误说明)``。
+
+    ``key_conf`` 里可以带 ``protocol``（openai / anthropic）、``base``、``model``；
+    缺哪项就用 config 里的默认值。
+    """
+    key = str(key_conf.get("key") or config.ai_api_key)
+    if not key:
+        return False, "没有可用的 API 密钥"
+    protocol = str(key_conf.get("protocol") or "openai").lower()
+    if protocol not in PROTOCOLS:
+        protocol = "openai"
+    base = str(key_conf.get("base") or config.ai_api_base)
+    model = str(key_conf.get("model") or config.ai_model)
+    url = _endpoint(base, protocol)
+    user_content = "日志如下：\n\n" + log_text
+
+    if protocol == "anthropic":
+        payload = {"model": model, "max_tokens": config.ai_max_tokens,
+                   "system": SYSTEM_PROMPT,
+                   "messages": [{"role": "user", "content": user_content}]}
+        headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+        parse = _parse_anthropic
+    else:
+        payload = {"model": model, "max_tokens": config.ai_max_tokens, "temperature": 0.3,
+                   "stream": False,
+                   "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                                {"role": "user", "content": user_content}]}
+        headers = {"Authorization": "Bearer " + key}
+        parse = _parse_openai
+
+    started = time.perf_counter()
+    data, error = _post(url, payload, headers, config)
+    if error:
+        return error
+    elapsed = round((time.perf_counter() - started) * 1000)
+    ok, result = parse(config, data)
+    if not ok:
+        return False, result
+
+    usage = data.get("usage") or {}
+    debug("[AI] " + protocol + " 完成（" + str(elapsed) + "ms，输入 "
+          + str(usage.get("prompt_tokens") or usage.get("input_tokens") or "?")
+          + " tokens，输出 "
+          + str(usage.get("completion_tokens") or usage.get("output_tokens") or "?")
+          + " tokens）")
+    return True, result
+
+
+# ============ 提交任务 ============
+
+def submit(config: Config, ip: str, raw_input: str, use_own: bool) -> tuple[bool, str]:
+    """校验 + 扣额度 + 起后台线程。返回 ``(是否受理, 给用户看的说明)``。"""
+    if not config.enable_ai:
+        return False, "AI 日志分析没有开启。"
+
+    job = get_job(ip)
+    if job and job.get("state") == "running":
+        return False, "上一次分析还没结束，等结果出来再提交。"
+
+    kind, value = split_input(raw_input)
+    if kind == "empty":
+        return False, "输入框是空的。请粘贴日志链接（推荐 mclo.gs），或单行报错文本。"
+    display = value if kind == "url" else "（直接粘贴的文本 " + str(len(value)) + " 字）"
+
+    key_conf: dict = {}
+    who = "公用密钥" if not use_own else "私人密钥"
+    if use_own:
+        saved = get_own_key(ip)
+        if not saved:
+            return False, "还没有保存你的密钥。先在下面「私人密钥设置」里填好密钥并保存。"
+        key_conf = dict(saved)
+        # 没填地址就用该协议的官方地址，别掉进 config 里那个 DeepSeek 地址
+        protocol = str(key_conf.get("protocol") or "openai")
+        if not key_conf.get("base"):
+            key_conf["base"] = config_default_base(protocol)
+    else:
+        key_conf = {"key": config.ai_api_key}
+        if not key_conf["key"]:
+            return False, "站长没有配置公用密钥，请改用「私人密钥」。"
+
+    # 私人密钥不占额度；用公用密钥才扣
+    remaining = None
+    if not use_own and ip not in (config.ai_free_ips or []):
+        if not QUOTA.consume(ip, beijing_day(), config.ai_daily_limit):
+            return False, ("今天的 " + str(config.ai_daily_limit) + " 次已经用完了，"
+                           "北京时间 0 点重置。\n"
+                           "想立刻接着用，可以在下面配一个自己的私人密钥。")
+        remaining = max(0, config.ai_daily_limit - QUOTA.used(ip, beijing_day()))
+
+    out("[AI] " + ip + " 提交分析（" + who + "，" + display + "）")
+    _set_job(ip, state="running", text="", query=display, who=who,
+             remaining=remaining, started=time.time())
+
+    threading.Thread(target=_worker,
+                     args=(config, ip, kind, value, key_conf, use_own),
+                     name="ai-" + ip, daemon=True).start()
+    return True, ("已提交，正在分析。点下面的「确定」刷新主页就能看到结果"
+                  "（通常 10～30 秒，失败的次数会退还）。")
+
+
+def _worker(config: Config, ip: str, kind: str, value: str,
+            key_conf: dict, use_own: bool) -> None:
+    """后台干活：抓日志 → 调 AI → 写结果。异常都变成给用户看的说明。"""
+    try:
+        if kind == "url":
+            ok, log_text = fetch_log(config, value)
+            if not ok:
+                _fail(config, ip, use_own, log_text)
+                return
+        else:
+            log_text = value
+
+        log_text = trim_log(log_text, config.ai_max_log_chars)
+        debug("[AI] " + ip + " 日志 " + str(len(log_text)) + " 字，开始调 " + config.ai_model)
+
+        ok, result = analyze(config, log_text, key_conf)
+        if not ok:
+            _fail(config, ip, use_own, result)
+            return
+
+        _set_job(ip, state="done", text=result, error="")
+        out("[AI] " + ip + " 分析完成，结果 " + str(len(result)) + " 字")
+    except Exception as exc:
+        error("[AI] 任务异常：" + repr(exc))
+        _fail(config, ip, use_own, "分析过程出错了：" + str(exc))
+
+
+def _fail(config: Config, ip: str, use_own: bool, message: str) -> None:
+    """失败：把额度还回去（可配置），并把原因写给用户看。"""
+    if not use_own and config.ai_refund_on_failure and ip not in (config.ai_free_ips or []):
+        QUOTA.refund(ip, beijing_day())
+        message += "\n（今天的次数已经退还，可以直接重试）"
+    warn("[AI] " + ip + " 分析失败：" + message.splitlines()[0][:160])
+    _set_job(ip, state="error", text=message, error=message)
+
+
+# ============ 页面构建 ============
+
+def _attr(value) -> str:
+    """属性值转义；换行写成字符引用，否则 XAML 会把属性值截断在第一个换行。"""
+    return escape_attr(value).replace("\n", "&#xA;").replace("\r", "")
+
+
+def _url_attr(value: str) -> str:
+    """URL 用的属性转义（转发到 xaml.escape_url_attr，保留名字方便阅读）。"""
+    return escape_url_attr(value)
+
+
+def _bind(element: str, base: str, endpoint: str) -> str:
+    """生成 ``EventData``：把某个输入框的原文拼到接口地址后面。
+
+    ``{}`` 是 WPF StringFormat 的转义前缀（告诉它后面的大括号是字面量），
+    ``{0}`` 才是绑定值。PCL 会把输入框原文原样替换进去，不做 URL 编码，
+    所以输入框里只能是链接这种不含空白字符的内容。
+    """
+    fmt = "{}" + base + endpoint + "?q={0}"
+    return "{Binding Path=Text,ElementName=" + element + ",StringFormat='" + fmt + "'}"
+
+
+def _status_line(config: Config, ip: str) -> str:
+    """页面上那行「当前用的是什么密钥、还剩几次」。"""
+    own = get_own_key(ip)
+    if own:
+        return "当前：私人密钥 · " + describe_own_key(ip)
+    if ip in (config.ai_free_ips or []):
+        return "当前：公用密钥（本机免限）"
+    left = max(0, config.ai_daily_limit - QUOTA.used(ip, beijing_day()))
+    if left <= 0:
+        return "当前：公用密钥 · 今天已用完（北京时间 0 点重置）"
+    return "当前：公用密钥 · 今天还剩 " + str(left) + " 次"
+
+
+def _result_block(config: Config, job: dict | None) -> str:
+    """结果区：正在分析 / 分析结果 / 分析失败，外加底部的来源说明。"""
+    if not job:
+        return ""
+    state = job.get("state")
+    if state == "running":
+        return ('<local:MyHint Theme="Blue" Margin="0,14,0,0" Text="正在分析「'
+                + _attr(str(job.get("query") or "")) + '」…… 稍等十几秒后点下面的'
+                '「刷新结果」查看。" />')
+    if state not in ("done", "error"):
+        return ""
+
+    done = state == "done"
+    # 页脚文案：公用密钥点名模型，私人密钥不点（各家模型不一样）
+    if str(job.get("who") or "") == "私人密钥":
+        footer = "内容由 AI 生成，仅供参考"
+    else:
+        footer = "内容由 " + str(config.ai_display_name) + " 生成，仅供参考"
+
+    return (
+        '<StackPanel Margin="0,14,0,0">'
+        '<TextBlock Text="' + ("分析结果" if done else "分析失败") + '" FontSize="14" '
+        'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" Margin="0,0,0,8" />'
+        '<Border Background="{DynamicResource ColorBrush7}" CornerRadius="8" Padding="16,14">'
+        '<TextBlock Text="' + _attr(str(job.get("text") or "")) + '" FontSize="13" '
+        'LineHeight="24" TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush1}" />'
+        "</Border>"
+        '<TextBlock Text="' + _attr(footer) + '" FontSize="11" Margin="0,10,0,0" '
+        'HorizontalAlignment="Right" Foreground="{DynamicResource ColorBrush3}" />'
+        "</StackPanel>")
+
+
+def build_page(config: Config, ip: str, base_url: str) -> str:
+    """「AI 智能分析」整页。入口是欢迎卡片那排按钮里的第 4 个。
+
+    独立成页而不是主页上的一张卡：输入框、两步密钥设置、结果都需要位置，
+    挤在主页里既长又乱；而且分析要十几秒，用户在本页反复点「刷新结果」更顺手。
+    """
+    if not config.enable_ai:
+        return build_popup("AI 智能分析", "站长没有开启 AI 日志分析。", "Yellow")
+
+    base = _url_attr(base_url)
+    job = get_job(ip)
+    own = get_own_key(ip)
+
+    key_hint = ("已保存 " + mask_key(str(own.get("key") or "")) + "，重新填写可覆盖"
+                if own else "sk-...（只存在服务器内存里，重启后要重填）")
+    base_hint = ("留空 = 用官方地址；也可写 地址|模型"
+                 if not own or not own.get("base")
+                 else str(own.get("base")) + "（留空改回官方地址）")
+
+    return (
+        '<local:MyCard Title="AI 智能分析" CanSwap="False">'
+        '<StackPanel Margin="25,40,23,20">'
+
+        # 加粗黑色大标题
+        '<TextBlock Text="MC崩溃？AI智能分析" FontSize="24" FontWeight="Bold" '
+        'Foreground="#FF000000" HorizontalAlignment="Center" />'
+        '<TextBlock TextWrapping="Wrap" FontSize="12" LineHeight="20" Margin="0,10,0,0" '
+        'Foreground="{DynamicResource ColorBrush3}" Text="把崩溃日志传到 mclo.gs'
+        '（主页「功能网站」里有），再把链接粘到下面。日志内容会发给 AI 接口，别放隐私信息。" />'
+
+        # 日志输入
+        '<Border Margin="0,14,0,0" Height="40" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+        '<local:MyTextBox x:Name="ailoginput" Height="40" Margin="10,0" '
+        'HintText="粘贴日志链接，例如 https://mclo.gs/xxxxxxx" '
+        'Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" />'
+        "</Border>"
+        '<Grid Margin="0,10,0,0">'
+        '<Grid.ColumnDefinitions><ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" /></Grid.ColumnDefinitions>'
+        '<local:MyIconTextButton Grid.Column="0" Margin="0,0,5,0" Height="46" Text="公用密钥" '
+        'LogoScale="0.85" Logo="' + ICON_AI + '" ColorType="Highlight" '
+        'EventType="打开帮助" EventData="' + _bind("ailoginput", base, "/ai.json") + '" />'
+        '<local:MyIconTextButton Grid.Column="1" Margin="5,0,0,0" Height="46" Text="私人密钥" '
+        'LogoScale="0.85" Logo="' + ICON_KEY + '" '
+        'EventType="打开帮助" EventData="' + _bind("ailoginput", base, "/ai_own.json") + '" />'
+        "</Grid>"
+
+        # 私人密钥设置
+        '<Border Height="1" Margin="0,20,0,16">'
+        '<Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,0">'
+        '<GradientStop Color="#00000000" Offset="0" />'
+        '<GradientStop Color="#33808080" Offset="0.5" />'
+        '<GradientStop Color="#00000000" Offset="1" />'
+        "</LinearGradientBrush></Border.Background></Border>"
+
+        '<TextBlock Text="私人密钥设置（用自己的密钥，就不受每天次数限制）" FontSize="13" '
+        'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" Margin="0,0,0,10" />'
+
+        # 第一步：密钥
+        '<TextBlock Text="第一步：填 API 密钥" FontSize="12" '
+        'Foreground="{DynamicResource ColorBrush3}" Margin="0,0,0,6" />'
+        '<Border Height="38" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+        '<local:MyTextBox x:Name="aikeyinput" Height="38" Margin="10,0" HintText="'
+        + _attr(key_hint) + '" Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" />'
+        "</Border>"
+        '<Grid Margin="0,8,0,0">'
+        '<Grid.ColumnDefinitions><ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" /></Grid.ColumnDefinitions>'
+        '<local:MyIconTextButton Grid.Column="0" Margin="0,0,5,0" Height="38" Text="保存密钥" '
+        'LogoScale="0.8" Logo="' + ICON_SAVE + '" '
+        'EventType="打开帮助" EventData="' + _bind("aikeyinput", base, "/ai_key.json") + '" />'
+        '<local:MyIconTextButton Grid.Column="1" Margin="5,0,0,0" Height="38" Text="清除设置" '
+        'LogoScale="0.8" Logo="' + ICON_TRASH + '" '
+        'EventType="打开帮助" EventData="' + base + '/ai_clear.json" />'
+        "</Grid>"
+
+        # 第二步：请求地址 + 协议
+        '<TextBlock Text="第二步：填 API 请求地址，并选接口类型" FontSize="12" '
+        'Foreground="{DynamicResource ColorBrush3}" Margin="0,14,0,6" />'
+        '<Border Height="38" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+        '<local:MyTextBox x:Name="aibaseinput" Height="38" Margin="10,0" HintText="'
+        + _attr(base_hint) + '" Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" />'
+        "</Border>"
+        '<Grid Margin="0,8,0,0">'
+        '<Grid.ColumnDefinitions><ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" /></Grid.ColumnDefinitions>'
+        '<local:MyIconTextButton Grid.Column="0" Margin="0,0,5,0" Height="38" Text="OpenAI 接口" '
+        'LogoScale="0.8" Logo="' + ICON_SAVE + '" '
+        'EventType="打开帮助" EventData="' + _bind("aibaseinput", base, "/ai_base_openai.json") + '" />'
+        '<local:MyIconTextButton Grid.Column="1" Margin="5,0,0,0" Height="38" Text="Anthropic 接口" '
+        'LogoScale="0.8" Logo="' + ICON_SAVE + '" '
+        'EventType="打开帮助" EventData="' + _bind("aibaseinput", base, "/ai_base_anthropic.json") + '" />'
+        "</Grid>"
+        '<TextBlock Text="' + _attr("地址可写成 地址|模型，省略模型就用该协议的默认模型。"
+                                   "密钥和地址两步都做过，私人密钥才可用。") + '" '
+        'FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0" '
+        'Foreground="{DynamicResource ColorBrush3}" />'
+
+        # 当前状态
+        '<TextBlock Text="' + _attr(_status_line(config, ip)) + '" FontSize="12" '
+        'FontWeight="Bold" Margin="0,16,0,0" Foreground="{DynamicResource ColorBrush1}" />'
+
+        + _result_block(config, job) +
+
+        # 刷新
+        '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">'
+        '<local:MyIconTextButton Height="36" Text="刷新结果" LogoScale="0.8" '
+        'Logo="M753 271 C691 209 606 171 512 171 c-189 0 -341 153 -341 341 s152 341 341 341 '
+        'c159 0 292 -109 330 -256 h-89 c-35 99 -130 171 -241 171 c-141 0 -256 -115 -256 -256 '
+        's115 -256 256 -256 c71 0 134 29 180 76 L555 469 h299 V171 l-100 100 Z" '
+        'ColorType="Highlight" EventType="打开帮助" EventData="' + base + '/ai_page.json" />'
+        "</StackPanel>"
+
+        "</StackPanel>"
+        "</local:MyCard>")
+
+
+def build_popup(title: str, message: str, theme: str = "Blue", back: str = "") -> str:
+    """提示弹窗。
+
+    确定按钮重新打开 AI 页面（``打开帮助`` 指向 /ai_page.json）：PCL 会重新下载
+    那对 .json/.xaml，于是页面显示的是最新状态（正在分析 / 结果）。
+    用 ``刷新页面`` 只会把当前这个弹窗自己重画一遍，看不到任何新东西。
+    """
+    if back:
+        ok_button = ('<local:MyButton Width="120" Height="35" Text="确定" ColorType="Highlight" '
+                     'EventType="打开帮助" EventData="' + _url_attr(back) + '" />')
+    else:
+        ok_button = ('<local:MyButton Width="120" Height="35" Text="确定" ColorType="Highlight" '
+                     'EventType="刷新主页" EventData="-" />')
+
+    return (
+        '<local:MyCard Title="' + escape_attr(title) + '" CanSwap="False" '
+        'Width="460" HorizontalAlignment="Center" VerticalAlignment="Center">'
+        '<StackPanel Margin="25,40,25,20">'
+        '<local:MyHint Theme="' + theme + '" Text="' + _attr(message) + '" />'
+        '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,24,0,0">'
+        + ok_button +
+        "</StackPanel>"
+        "</StackPanel>"
+        "</local:MyCard>")
+
+
+def popup_json(title: str, desc: str) -> str:
+    return json.dumps({"Title": title, "Description": desc}, ensure_ascii=False)
+
+
+# ============ 路由 ============
+
+# EventData 指向的 .json（PCL 先读它拿页面标题），以及同名的 .xaml（PCL 接着读它当内容）
+_META = {
+    "/ai_page.json": ("AI 智能分析", "MC崩溃？让 AI 帮你找原因"),
+    "/ai.json": ("AI 智能分析", "用站长的公用密钥分析"),
+    "/ai_own.json": ("AI 智能分析", "用你自己的私人密钥分析"),
+    "/ai_key.json": ("保存私人密钥", "密钥只存在服务器内存里"),
+    "/ai_base_openai.json": ("存为 OpenAI 接口", "地址留空则用 api.openai.com"),
+    "/ai_base_anthropic.json": ("存为 Anthropic 接口", "地址留空则用 api.anthropic.com"),
+    "/ai_clear.json": ("清除私人密钥", "清除后回到公用密钥模式"),
+}
+_DO = {"/ai_page.xaml": "page", "/ai.xaml": "builtin", "/ai_own.xaml": "own",
+       "/ai_key.xaml": "savekey", "/ai_base_openai.xaml": "base_openai",
+       "/ai_base_anthropic.xaml": "base_anthropic", "/ai_clear.xaml": "clearkey"}
+
+AI_PATHS = set(_META) | set(_DO)
+
+
+def _json_response(body: str):
+    from .server import Response
+    return Response.text(body, content_type="application/json; charset=utf-8",
+                         headers={"Cache-Control": "no-store"})
+
+
+def _xaml_response(body: str):
+    from .server import Response
+    return Response.xaml(body)
+
+
+def handle(service, path: str, query: str, ip: str, origin: str = ""):
+    """处理 ``/ai*`` 请求；不是我们的路径就返回 None。"""
+    if path in _META:
+        title, desc = _META[path]
+        return _json_response(popup_json(title, desc))
+
+    action = _DO.get(path)
+    if not action:
+        return None
+
+    config = service.config
+    base = config.resolved_base_url(origin)
+    params = parse_query(query)
+    page_url = base + "/ai_page.json"
+
+    if action == "page":
+        return _xaml_response(build_page(config, ip, base))
+
+    if action == "savekey":
+        if set_own_key(ip, params.get("q", "")):
+            return _xaml_response(build_popup(
+                "密钥已保存",
+                "接下来按第二步填好请求地址并选接口类型，就能用「私人密钥」分析了。\n\n"
+                "密钥只存在服务器内存里，服务重启后需要重新填。", back=page_url))
+        return _xaml_response(build_popup(
+            "没保存成功", "密钥输入框是空的。请填 API 密钥（DeepSeek 的是 sk- 开头）。",
+            "Yellow", back=page_url))
+
+    if action in ("base_openai", "base_anthropic"):
+        protocol = "openai" if action == "base_openai" else "anthropic"
+        if not get_own_key(ip):
+            return _xaml_response(build_popup(
+                "还没有密钥", "请先做第一步：填好 API 密钥并点「保存密钥」。",
+                "Yellow", back=page_url))
+        set_own_base(ip, params.get("q", ""), protocol)
+        return _xaml_response(build_popup(
+            "已存为 " + PROTOCOLS[protocol][0] + " 接口",
+            "当前设置：" + describe_own_key(ip) + "\n\n"
+            "现在就能用「私人密钥」分析了。", back=page_url))
+
+    if action == "clearkey":
+        had = clear_own_key(ip)
+        return _xaml_response(build_popup(
+            "已清除" if had else "本来就没设",
+            "已切回公用密钥模式。" if had else "这个 IP 名下没有保存过私人密钥。",
+            back=page_url))
+
+    ok, message = submit(config, ip, params.get("q", ""), use_own=(action == "own"))
+    return _xaml_response(build_popup("已提交" if ok else "没法分析", message,
+                                      "Blue" if ok else "Yellow", back=page_url))
+
+
+def parse_query(query: str) -> dict:
+    """宽松解析查询串。
+
+    PCL 是把输入框原文**直接拼进 URL** 的（不做 URL 编码），所以链接里的 ``/``、
+    ``:``、``?`` 都会原样出现，还可能夹着 ``%``。标准 parse_qs 遇到非法百分号
+    转义会抛异常，这里统一兜住。
+    """
+    try:
+        values = parse_qs(query or "", keep_blank_values=True)
+        return {key: val[0] for key, val in values.items() if val}
+    except Exception:
+        result = {}
+        for pair in (query or "").split("&"):
+            if "=" in pair:
+                key, _, value = pair.partition("=")
+                try:
+                    result[key] = unquote(value)
+                except Exception:
+                    result[key] = value
+        return result
