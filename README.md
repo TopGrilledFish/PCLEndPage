@@ -10,7 +10,7 @@ PCL End Page主页仓库。
 
 ### 使用链接
 
-前往`设置->个性化->主页`，输入联网下载地址`https://end.pcl.烤鱼之巅.top`。
+前往`设置->个性化->主页`，输入联网下载地址`https://end.g-fish.dpdns.org`。
 
 ## 协议
 
