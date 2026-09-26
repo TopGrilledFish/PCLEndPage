@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """计算器：把中文 Minecraft Wiki「计算器」页里能纯算的那几个搬过来。
 
-Wiki 上列了 27 个，但大部分在这儿做不了——伤害/矛/重锤要整套武器附魔数据表，
-旗帜、信标颜色、盔甲颜色、格式化代码文本编辑器要画图，实体运动、爆炸影响、
-运输计算器是逐步模拟，Chunkbase 和互动式地图本来就是外部站点。所以只挑了
-纯数值、一个输入框就能算完的这些，其余的没搬。
+Wiki 上列了 27 个，但大部分在这儿做不了——旗帜、信标颜色、盔甲颜色、格式化代码
+文本编辑器要画图，实体运动、爆炸影响、运输计算器是逐步模拟，矛伤害和重锤下落
+要额外的武器/落差数据，Chunkbase 和互动式地图本来就是外部站点。所以只挑了纯数值、
+一个输入框就能算完的这些，其余的没搬。近战伤害算搬过来了：武器不内置成一张表，
+攻击力直接让使用者填物品栏里那个数。
 
 **每个计算器只有一个输入框，这是被 PCL 逼的**：事件参数只能绑一个控件——
 
@@ -59,6 +60,11 @@ def _need(nums, count, what):
         raise ValueError("只能填数字，多个数用逗号隔开。")
     if len(nums) < count:
         raise ValueError("要填 " + str(count) + " 个数：" + what)
+
+
+def _nth(nums, index: int) -> float:
+    """第 index 个数；没填就按 0 算——伤害计算后面那几个都是可选的。"""
+    return nums[index] if index < len(nums) else 0.0
     return nums
 
 
@@ -261,6 +267,83 @@ def _calc_seed(raw: str):
     ]
 
 
+def _calc_damage(raw: str):
+    """Java 版近战伤害。
+
+    公式照 Wiki「计算器/近战伤害」那个小工具（它实际跑在 tools.minecraft.wiki
+    的 iframe 里），从它的 JS 里逐条抠出来的：
+
+        基础 = 攻击力；每级力量  基础 = 基础 × 1.3 + 1
+                        每级虚弱  基础 = 基础 × 0.8 - 0.5      （夹在 0..2048）
+        附魔 = 锋利 0.5L+0.5，亡灵/节肢杀手各 2.5L，最后取整
+        最终 = 基础 × (0.2 + 0.8 × 充能²) × 暴击倍率 + 附魔 × 充能
+
+    只做 Java 版：基岩版的附魔和力量是另一套加法（每级 +3/-4、附魔 ×1.25），
+    加上去这行输入就更没法填了。也不管重锤下落和矛冲锋——那俩要额外的数据。
+    """
+    nums = _floats(raw)
+    if nums is None:
+        raise ValueError("只能填数字，多个数用逗号隔开。")
+    if not nums:
+        raise ValueError("至少填个攻击力，比如 8。")
+
+    attack = _nth(nums, 0)
+    sharp = int(_nth(nums, 1))
+    smite = int(_nth(nums, 2))
+    bane = int(_nth(nums, 3))
+    strength = int(_nth(nums, 4))
+    weakness = int(_nth(nums, 5))
+    want_crit = _nth(nums, 6) > 0
+    charge = _nth(nums, 7) / 100 if len(nums) > 7 else 1.0
+    charge = min(max(charge, 0.0), 1.0)
+
+    extra = []
+    # 原版里锋利和亡灵/节肢杀手不会同时挂在同一件武器上，Wiki 那个计算器
+    # 遇到同时填了也只按一个算，跟着来。
+    if sharp > 0 and (smite > 0 or bane > 0):
+        smite = bane = 0
+        extra.append("锋利和亡灵/节肢杀手不能共存，这里只算了锋利。")
+    elif smite > 0 and bane > 0:
+        bane = 0
+        extra.append("亡灵杀手和节肢杀手不能共存，这里只算了亡灵杀手。")
+
+    base = attack
+    for _ in range(max(strength, 0)):
+        base = base * 1.3 + 1
+    for _ in range(max(weakness, 0)):
+        base = base * 0.8 - 0.5
+    base = min(max(base, 0.0), 2048.0)
+
+    bonus = (0.5 * sharp + 0.5) if sharp > 0 else 0.0
+    bonus += 2.5 * smite
+    bonus += 2.5 * bane
+    bonus = math.floor(bonus)
+    if smite:
+        extra.append("亡灵杀手只对亡灵生物生效，这里按目标就是亡灵算。")
+    if bane:
+        extra.append("节肢杀手只对节肢生物生效，这里按目标就是节肢生物算。")
+
+    # 充能不到 9 成打不出暴击——游戏里也是这条线
+    crit = want_crit and charge >= 0.9
+    if want_crit and not crit:
+        extra.append("充能不到 90%，这次打不出暴击。")
+    final = base * (0.2 + 0.8 * charge * charge) * (1.5 if crit else 1.0) + bonus * charge
+
+    rows = [("攻击力", _f(attack) + " 点")]
+    if strength or weakness:
+        rows.append(("力量虚弱后", _f(base) + " 点"))
+    rows.append(("附魔加成", ("+" if bonus else "") + _f(bonus) + " 点"))
+    if charge < 1:
+        rows.append(("充能", _f(charge * 100) + "%"))
+    rows.append(("暴击", "有，×1.5" if crit else "没有"))
+    rows.append(("最终伤害", _f(final) + " 点（" + _f(final / 2) + " 颗心）"))
+    for text in extra:
+        rows.append(("说明", text))
+    rows.append(("说明", "这是打到身上的伤害；对方有护甲、保护附魔或抗性提升的话，"
+                         "再用「伤害减免」过一遍。"))
+    return rows
+
+
 def _wiki_icon(name: str) -> str:
     """Wiki 上同名 120px 缩略图的地址。
 
@@ -272,7 +355,13 @@ def _wiki_icon(name: str) -> str:
 
 # icon 取自 Wiki 计算器页各工具自己那个图标，和 id 一一对应。
 CALCS = [
-    {"id": "nether", "name": "下界坐标", "info": "主世界和下界之间的坐标换算，走传送门用得上。",
+    {"id": "damage", "name": "伤害计算", "info": "近战一刀打出多少伤害，按 Java 版公式算。攻击力填物品栏里那个数。",
+     "icon": _wiki_icon("Strength_JE3_BE2.png"),
+     "hint": "至少填攻击力（空手 1、钻石剑 7、下界合金剑 8）；后面可以依次跟 锋利,"
+             "亡灵杀手,节肢杀手,力量,虚弱,暴击0或1,充能%",
+     "run": _calc_damage},
+    {"id": "nether", "name": "主世界与下界坐标互换",
+     "info": "主世界和下界之间的坐标换算，走传送门用得上。",
      "icon": _wiki_icon("Netherrack_JE6_BE2.png"),
      "hint": "填 X,Z，比如 800,-1600；也可以填 X,Y,Z", "run": _calc_nether},
     {"id": "chunk", "name": "区块坐标", "info": "坐标落在哪个区块、哪个区域文件里。",
@@ -288,7 +377,7 @@ CALCS = [
     {"id": "exp", "name": "升级经验", "info": "升到某个等级一共要多少经验。",
      "icon": _wiki_icon("Experience_Orb_Value_17-36.png"),
      "hint": "填一个等级，比如 30", "run": _calc_exp},
-    {"id": "armor", "name": "护甲减伤", "info": "这身装备挨一下会掉多少血。",
+    {"id": "armor", "name": "伤害减免", "info": "这身装备挨一下会掉多少血。",
      "icon": _wiki_icon("Iron_Chestplate_%28item%29_JE2_BE2.png"),
      "hint": "填 伤害,护甲，比如 20,20；还能再跟 韧性,保护等级",
      "run": _calc_armor},
@@ -301,7 +390,7 @@ CALCS = [
     {"id": "uuid", "name": "玩家 UUID", "info": "离线模式下玩家名对应的 UUID。",
      "icon": _wiki_icon("Steve_JE5.png"),
      "hint": "填玩家名，比如 Notch", "run": _calc_uuid},
-    {"id": "seed", "name": "种子散列值", "info": "把一段文字换成种子数字，和游戏里的算法一致。",
+    {"id": "seed", "name": "字符种子转数字", "info": "把一段文字换成种子数字，和游戏里的算法一致。",
      "icon": _wiki_icon("Wheat_Seeds_JE1_BE1.png"),
      "hint": "填一段文字，比如 hello", "run": _calc_seed},
 ]
@@ -373,7 +462,7 @@ def build_landing(base_url: str) -> str:
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
         + note("以下是本主页上提供的互动式工具与计算器列表。", "0,10,0,0")
         + note("照中文 Minecraft Wiki 的计算器页做的，搬了纯数值的那些。"
-               "伤害、旗帜、地图之类的要么要整套数据表、要么得画图，这儿做不了，就没搬。",
+               "旗帜、地图、附魔预览之类的要么要整套数据表、要么得画图，这儿做不了，就没搬。",
                "0,6,0,0")
 
         + '<TextBlock Text="选一个" FontSize="13" FontWeight="Bold" Margin="0,18,0,10" '

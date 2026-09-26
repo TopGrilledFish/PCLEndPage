@@ -331,9 +331,10 @@ def check_rendered(report: Report, config: Config) -> None:
         else:
             report.good("计算器列表 " + str(len(calc.CALCS)) + " 个入口齐全")
 
-        # 图标没有本地镜像就会退回 PCL 内置占位图，那行看着就是"无图标"
+        # 没有本地镜像就会退回 Wiki 远程地址（Wiki 按 UA 拦，多半拉不到），
+        # 再不行才是 PCL 内置占位图。两种情况都算"这行没图标"。
         no_icon = [item["id"] for item in calc.CALCS
-                   if calc._calc_logo("", item).startswith("pack:")]
+                   if "/images/icons/" not in calc._calc_logo("", item)]
         if no_icon:
             report.warning("计算器列表缺图标（会显示成无图标）：" + "、".join(no_icon))
         else:
@@ -342,7 +343,9 @@ def check_rendered(report: Report, config: Config) -> None:
         report.bad("计算器页构建失败：" + repr(exc))
 
     # 公式抽查：这几个都有标准答案，改坏了这里会红
-    known = [("exp", "30", "1395"), ("exp", "16", "352"), ("exp", "32", "1628"),
+    known = [("damage", "8,5", "11"), ("damage", "8,5,0,0,2,0,1", "26.73"),
+             ("damage", "8,0,5,0,0,0,0", "20"),
+             ("exp", "30", "1395"), ("exp", "16", "352"), ("exp", "32", "1628"),
              ("armor", "20 20 8 0", "8"), ("seed", "hello", "99162322"),
              ("color", "#FF8800", "16746496"),
              ("uuid", "Notch", "b50ad385-829d-3141-a216-7e7d7539ba7f"),
