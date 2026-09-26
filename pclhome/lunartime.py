@@ -3,14 +3,15 @@
 
 显示形态：``农历八月十五``，当天有节气时补一句 `` · 秋分``。
 
-接口挂了不会让这行空着——本地 ``lunar.py`` 已经有一套对齐过上游的农历换算，
-自己也能算出月日，只是写不出节气名（那需要另一张表）。所以：
+**月日与节气分工**：月日一律用本地 ``lunar.py`` 的换算（那套已经拿上游 JS 的
+输出当基准向量对齐过），接口只用来取节气名——节气要另一张表，本地算不出来。
+这样三种语言的农历是从同一组数字渲染的，不会出现"简中说八月十五、英文说别的"。
 
-    1. 接口 → 中文月日 + 节气
-    2. 接口不可用 → 本地换算的中文月日（无节气）
-    3. 连本地都算不出（日期越界）→ 整行不显示
+接口挂了不会让这行空着，最多是少一句节气：
+本地换算算不出（日期越界）才整行消失。
 
 按北京时间日期缓存到 ``var/lunar.json``：农历一天只变一次，没必要每次请求都外呼。
+**缓存里存的是数字不是渲染好的文字**，所以一份缓存三种语言都能用。
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from datetime import date
 from pathlib import Path
 
 from .config import VAR_DIR, Config
+from .i18n import DEFAULT_LANG, has, t
 from .log import debug, out, warn
 from .lunar import solar_to_lunar
 from .net import fetch_json
@@ -28,19 +30,27 @@ from .xaml import escape_attr
 LUNAR_CACHE = VAR_DIR / "lunar.json"
 _lock = threading.Lock()
 
-# 农历月名：正月、二月……十月、冬月、腊月
-_MONTHS = ("正月", "二月", "三月", "四月", "五月", "六月",
-           "七月", "八月", "九月", "十月", "冬月", "腊月")
-# 农历日名：初一……初十、十一……十九、二十、廿一……廿九、三十
+# 农历日名的汉字写法：初一……初十、十一……十九、二十、廿一……廿九、三十。
+# 这是中文的数字写法（不是需要翻译的文案），所以留在这儿；英文那边用
+# ``lunar.day_n``（"day 15"）走另一条路。
 _DAY_TENS = ("初", "十", "廿", "三")
 _DAY_UNITS = ("十", "一", "二", "三", "四", "五", "六", "七", "八", "九")
 
 
-def format_lunar_cn(month: int, day: int, is_leap: bool = False) -> str:
-    """本地换算结果 → 中文农历，如 (8, 15) → 八月十五。"""
+def _is_chinese(lang: str) -> bool:
+    return str(lang or "").lower().startswith("zh")
+
+
+def format_lunar(month: int, day: int, is_leap: bool = False,
+                 lang: str = DEFAULT_LANG) -> str:
+    """农历月日 → 该语言的写法。中文是「八月十五」，英文是「8th month, day 15」。"""
     if not 1 <= month <= 12 or not 1 <= day <= 30:
         return ""
-    name = ("闰" if is_leap else "") + _MONTHS[month - 1]
+    name = t("lunar.month." + str(month), lang)
+    if is_leap:
+        name = t("lunar.leap", lang) + name
+    if not _is_chinese(lang):
+        return t("lunar.date", lang, month=name, day=t("lunar.day_n", lang, n=day))
     if day == 10:
         return name + "初十"
     if day == 20:
@@ -48,6 +58,17 @@ def format_lunar_cn(month: int, day: int, is_leap: bool = False) -> str:
     if day == 30:
         return name + "三十"
     return name + _DAY_TENS[day // 10] + _DAY_UNITS[day % 10]
+
+
+def format_lunar_cn(month: int, day: int, is_leap: bool = False) -> str:
+    """中文农历（老接口，日志和体检脚本还在用）。"""
+    return format_lunar(month, day, is_leap, "zh-hans")
+
+
+def format_term(term: str, lang: str) -> str:
+    """节气名。表里没有的原样显示（接口加了新词也不会变空）。"""
+    key = "lunar.term." + str(term or "")
+    return t(key, lang) if has(key, lang) else str(term or "")
 
 
 def _read_cache(path: Path) -> dict:
@@ -66,55 +87,55 @@ def _write_cache(path: Path, payload: dict) -> None:
         warn("[Lunar] 缓存写入失败：" + str(exc))
 
 
-def _local_fallback(today: date) -> str:
-    """不联网时的兜底：用本地农历换算（没有节气，其余与接口形态一致）。"""
+def _parts(today: date, cached: dict) -> dict:
+    """今天的农历数字 + 节气。数字本地算，节气从缓存里拿（拿不到就没有）。"""
     try:
         _, month, day, is_leap = solar_to_lunar(today)
     except Exception:
-        return ""
-    text = format_lunar_cn(month, day, is_leap)
-    return "农历" + text if text else ""
+        return {}
+    return {"month": month, "day": day, "leap": bool(is_leap),
+            "term": str(cached.get("term") or "")}
 
 
-def get_lunar_text(config: Config, today: date, cache_path: Path | None = None) -> str:
-    """返回该显示在日期下面的那行农历文本（接口不可用时退回本地换算）。"""
+def _fetch_term(config: Config, today: date, cache_path: Path, cached: dict) -> dict:
+    """问一次接口补上节气名，结果连同数字一起写回缓存。"""
+    if not config.enable_lunar:
+        return cached
+    if cached.get("date") == today.isoformat() and cached.get("term"):
+        return cached
+
+    data = fetch_json(config.lunar_api, timeout=config.http_timeout,
+                      retries=config.max_retries)
+    term = str((data or {}).get("solar_term") or "").strip() if isinstance(data, dict) else ""
+    if not term:
+        # 接口没给出节气：今天的农历照样显示（没有节气那一截），缓存不动
+        return cached
+    fresh = dict(cached)
+    fresh.update({"date": today.isoformat(), "term": term})
+    _write_cache(cache_path, fresh)
+    return fresh
+
+
+def get_lunar_text(config: Config, today: date, lang: str = DEFAULT_LANG,
+                   cache_path: Path | None = None) -> str:
+    """返回该显示在日期下面的那行农历文本（节气取不到就少那一截）。"""
     cache_path = cache_path or LUNAR_CACHE
+    with _lock:
+        cached = _read_cache(cache_path)
+        cached = _fetch_term(config, today, cache_path, cached)
 
-    if config.enable_lunar:
-        with _lock:
-            cached = _read_cache(cache_path)
-            if cached.get("date") == today.isoformat() and cached.get("text"):
-                debug("[Lunar] 命中缓存：" + str(cached["text"]))
-                return str(cached["text"])
-
-            data = fetch_json(config.lunar_api, timeout=config.http_timeout,
-                              retries=config.max_retries)
-            text = _format_from_api(data, today)
-            if text:
-                _write_cache(cache_path, {"date": today.isoformat(), "text": text})
-                out("[Lunar] 今日农历：" + text)
-                return text
-            if cached.get("text"):
-                warn("[Lunar] 接口不可用，沿用缓存：" + str(cached["text"]))
-                return str(cached["text"])
-
-    text = _local_fallback(today)
-    if text:
-        debug("[Lunar] 本地换算：" + text)
-    return text
-
-
-def _format_from_api(data: dict | None, today: date) -> str:
-    if not isinstance(data, dict):
+    parts = _parts(today, cached)
+    if not parts:
+        warn("[Lunar] 这个日期本地换算不出来：" + today.isoformat())
         return ""
-    month_cn = str(data.get("lunar_month_cn") or "")
-    day_cn = str(data.get("lunar_day_cn") or "")
-    if not month_cn or not day_cn:
+
+    body = format_lunar(parts["month"], parts["day"], parts["leap"], lang)
+    if not body:
         return ""
-    text = "农历" + ("闰" if data.get("is_leap_month") else "") + month_cn + day_cn
-    term = str(data.get("solar_term") or "").strip()
-    if term:
-        text += " · " + term
+    text = t("lunar.prefix", lang) + body
+    if parts["term"]:
+        text += " · " + format_term(parts["term"], lang)
+    debug("[Lunar] " + lang + "：" + text)
     return text
 
 

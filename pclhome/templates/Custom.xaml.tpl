@@ -50,7 +50,10 @@
                                 <Border Width="26" Height="26" CornerRadius="13" Background="{DynamicResource ColorBrush1}" Margin="0,0,8,0" VerticalAlignment="Center">
                                     <local:MyImage Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" Source="pack://application:,,,/images/Blocks/Grass.png" />
                                 </Border>
-                                <TextBlock Text="__GREETING__，{user}！" FontSize="15" FontWeight="Bold" Foreground="White" VerticalAlignment="Center" />
+                                <!-- 问候语两侧的标点也是文案：中文是全角「，」「！」，英文是半角。
+                                     逗号并在 GREETING 那个令牌里（两个令牌占位符挨着写会被
+                                     替换器当成一个），句末那个单独一个令牌。 -->
+                                <TextBlock Text="__GREETING__{user}__T_GREETING_CLOSE__" FontSize="15" FontWeight="Bold" Foreground="White" VerticalAlignment="Center" />
                             </StackPanel>
                             <TextBlock Text="__GREETING_SUB__" FontSize="11" Foreground="#D9FFFFFF" Margin="0,3,0,0" />
                         </StackPanel>

@@ -62,28 +62,29 @@ class HomeData:
 
 
 def build_home_data(config: Config, store: Store, weather: WeatherService,
-                    ip: str, origin: str) -> HomeData:
-    """算出本次请求的全部内容。"""
+                    ip: str, origin: str, lang: str = DEFAULT_LANG) -> HomeData:
+    """算出本次请求的全部内容（文案按 ``lang`` 出）。"""
     date = get_beijing_date()
 
     extra_festivals = store.get_json("custom_festivals", []) or []
     custom_countdown = store.get_json("custom_countdown", None)
 
     saying = get_saying(config, store, date.today)
-    weather_result = weather.get(ip)
-    festival = get_festival(date.today, extra_festivals)
-    lunar_text = get_lunar_text(config, date.today)
+    weather_result = weather.get(ip, lang)
+    festival = get_festival(date.today, extra_festivals, lang)
+    lunar_text = get_lunar_text(config, date.today, lang)
 
     return HomeData(
         ip=ip,
         date=date,
-        greeting_sub=pick_greeting_sub(ip, date.date_str, date.period),
-        # 自定义文案支持 {date}/{weekday}/{year} 占位，接口来的文案不含占位符，替换是空操作
+        greeting_sub=pick_greeting_sub(ip, date.date_str, date.period, lang),
+        # 自定义文案支持 {date}/{weekday}/{year} 占位，接口来的文案不含占位符，替换是空操作。
+        # 每日一言本身不翻译（用户明确要求），所以里面的日期占位保持中文写法。
         quote=format_quote(saying.display, date),
         quote_source=saying.source_name,
-        festival_banner=build_festival_banner(festival),
+        festival_banner=build_festival_banner(festival, lang),
         festival_name=str((festival or {}).get("name") or ""),
-        countdown=build_countdown_xaml(date.today, custom_countdown, extra_festivals),
+        countdown=build_countdown_xaml(date.today, custom_countdown, extra_festivals, lang),
         banner=(build_multi_banner(store.get("banners", None))
                 or build_single_banner(store.get_json("homepage_banner", None))),
         lunar=build_lunar_xaml(lunar_text),
@@ -118,7 +119,9 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str,
         # 星期整串在这儿拼：简中是"星期一"，英文就是"Monday"，没有前缀
         "T_WEEKDAY": escape_attr(t("date.weekday_prefix", lang)
                                  + t("date.weekday." + str((date.today.weekday() + 1) % 7), lang)),
-        "GREETING": t("greeting." + (date.period or "morning"), lang),
+        # 问候语带上后面那个逗号：中文「下午好，」、英文「Good afternoon, 」
+        "GREETING": (t("greeting." + (date.period or "morning"), lang)
+                     + t("home.greeting_open", lang)),
         "GREETING_SUB": escape_attr(data.greeting_sub),
         "QUOTE": escape_attr(data.quote),
         "FESTIVAL_BANNER": data.festival_banner,
@@ -129,6 +132,10 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str,
 
         # 模板里原本烘死的四处静态文字
         "T_WELCOME": escape_attr(t("home.welcome", lang)),
+        # 问候语句末那个标点：中文「！」、英文「!」。
+        # 它紧跟在 {user} 后面，而 {user} 由 PCL 自己填，所以这里绝不能走
+        # escape_attr（会把花括号转义掉，PCL 就认不出来了）。
+        "T_GREETING_CLOSE": t("home.greeting_close", lang),
         "T_MONTH_SUFFIX": escape_attr(t("date.month_suffix", lang)),
         "T_DAY_SUFFIX": escape_attr(t("date.day_suffix", lang)),
         "T_QUOTE_LABEL": escape_attr(t("home.quote_label", lang)),

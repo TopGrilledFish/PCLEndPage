@@ -179,39 +179,53 @@ def note(text: str, margin: str = "0,8,0,0") -> str:
 
 
 def nav_row(base: str, refresh_url: str = "", extra_text: str = "",
-            extra_url: str = "") -> str:
+            extra_url: str = "", lang: str = "") -> str:
     """页面底部那排：刷新 / 回到某页 / 返回主页。
 
     「返回主页」专门治「进得太深、左上角要按好几下」：它直接再翻开一份主页
     （见 ai.handle 里的 ``home`` 动作），一下就到，不用沿路往回退。
     """
+    from .i18n import DEFAULT_LANG, t
+    lang = lang or DEFAULT_LANG
     items = []
     if refresh_url:
-        items.append(("刷新结果", ICON_REFRESH, refresh_url))
+        items.append((t("btn.refresh_result", lang), ICON_REFRESH, refresh_url))
     if extra_url:
         items.append((extra_text, ICON_BACK, extra_url))
-    items.append(("返回主页", ICON_HOME, base + "/home.json"))
+    items.append((t("btn.back_home", lang), ICON_HOME, base + "/home.json"))
     cells = [help_button(text, logo, url, 36, margin=("8,0,0,0" if index else ""))
              for index, (text, logo, url) in enumerate(items)]
     return ('<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" '
             'Margin="0,18,0,0">' + "".join(cells) + "</StackPanel>")
 
 
-REFRESH_BUTTON = (
-    '<local:MyIconTextButton Margin="0,24,0,0" Height="40" HorizontalAlignment="Center" Text="刷新页面" '
-    'LogoScale="0.9" ColorType="Highlight" '
-    'Logo="M512 128a384 384 0 1 1 0 768 384 384 0 0 1 0-768z M512 192a320 320 0 1 0 0 640 320 320 0 0 0 0-640z '
-    'M480 288h64v208l144 88-32 56-176-104V288z" EventType="刷新页面" EventData="-" />'
-)
+_REFRESH_LOGO = ("M512 128a384 384 0 1 1 0 768 384 384 0 0 1 0-768z "
+                 "M512 192a320 320 0 1 0 0 640 320 320 0 0 0 0-640z "
+                 "M480 288h64v208l144 88-32 56-176-104V288z")
 
 
-def build_fallback_xaml(title: str, message: str, eta: str = "", reason: str = "") -> str:
+def refresh_button(lang: str = "") -> str:
+    from .i18n import DEFAULT_LANG, t
+    return ('<local:MyIconTextButton Margin="0,24,0,0" Height="40" HorizontalAlignment="Center" Text="'
+            + escape_attr(t("btn.refresh_page", lang or DEFAULT_LANG)) + '" '
+            'LogoScale="0.9" ColorType="Highlight" Logo="' + _REFRESH_LOGO + '" '
+            'EventType="刷新页面" EventData="-" />')
+
+
+def build_fallback_xaml(title: str, message: str, eta: str = "", reason: str = "",
+                        lang: str = "", maintenance: bool = False) -> str:
     """兜底页：封禁/拒绝 → 简洁提示；服务器维护 → 带旋转动画的加载页。
 
     对应上游 buildFallbackXaml。任何组装异常都回退到这里，
     保证 PCL 永远不会拿到一页空白。
+
+    以前靠 ``title != "服务器正在更新"`` 判断是不是维护页——文案一翻译这个判断
+    就废了，所以改成显式的 ``maintenance`` 开关，文案由调用方按语言取好传进来。
     """
-    if title != "服务器正在更新":
+    from .i18n import DEFAULT_LANG, t
+    lang = lang or DEFAULT_LANG
+
+    if not maintenance:
         return ("<StackPanel>"
                 '<local:MyCard Title="" Margin="0,0,0,12">'
                 '<StackPanel Margin="30,40,30,32">'
@@ -224,12 +238,11 @@ def build_fallback_xaml(title: str, message: str, eta: str = "", reason: str = "
                 'Foreground="{DynamicResource ColorBrush1}" TextAlignment="Center" HorizontalAlignment="Center" Margin="0,18,0,0"/>'
                 '<TextBlock Text="' + escape_attr(message) + '" FontSize="15" Foreground="{DynamicResource ColorBrush3}" '
                 'TextAlignment="Center" TextWrapping="Wrap" MaxWidth="420" HorizontalAlignment="Center" LineHeight="24" Margin="0,10,0,0"/>'
-                + REFRESH_BUTTON +
+                + refresh_button(lang) +
                 "</StackPanel>"
                 "</local:MyCard>"
                 "</StackPanel>")
 
-    status_text = "短暂的等待，是为了之后更长久的顺畅，感谢您的耐心。"
     spinner = ('<Grid Width="64" Height="64" HorizontalAlignment="Center">'
                '<Ellipse Width="64" Height="64" Stroke="#22000000" StrokeThickness="5"/>'
                '<Ellipse Width="64" Height="64" Stroke="#FF4C8DFF" StrokeThickness="5" StrokeDashArray="1.4,100" '
@@ -243,26 +256,28 @@ def build_fallback_xaml(title: str, message: str, eta: str = "", reason: str = "
 
     eta_line = ""
     if eta and eta != "0":
-        eta_line = ('<TextBlock Text="预计 ' + escape_attr(eta) + ' 更新完成" FontSize="15" '
-                    'Foreground="{DynamicResource ColorBrush3}" TextAlignment="Center" '
-                    'HorizontalAlignment="Center" Margin="0,16,0,0"/>')
+        eta_line = ('<TextBlock Text="' + escape_attr(t("fallback.eta", lang, eta=eta))
+                    + '" FontSize="15" Foreground="{DynamicResource ColorBrush3}" '
+                    'TextAlignment="Center" HorizontalAlignment="Center" Margin="0,16,0,0"/>')
     reason_line = ""
     if reason and reason.strip():
-        reason_line = ('<TextBlock Text="原因：' + escape_attr(reason) + '" FontSize="12" '
-                       'Foreground="{DynamicResource ColorBrush2}" TextAlignment="Center" TextWrapping="Wrap" '
-                       'MaxWidth="440" HorizontalAlignment="Center" LineHeight="22" Margin="0,8,0,0"/>')
+        reason_line = ('<TextBlock Text="' + escape_attr(t("fallback.reason", lang, reason=reason))
+                       + '" FontSize="12" Foreground="{DynamicResource ColorBrush2}" '
+                       'TextAlignment="Center" TextWrapping="Wrap" MaxWidth="440" '
+                       'HorizontalAlignment="Center" LineHeight="22" Margin="0,8,0,0"/>')
 
     return ("<StackPanel>"
             '<local:MyCard Title="" Margin="0,0,0,12">'
             '<StackPanel Margin="30,40,30,32">'
             + spinner +
-            '<TextBlock Text="服务器正在更新" FontSize="20" FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" '
+            '<TextBlock Text="' + escape_attr(title) + '" FontSize="20" FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" '
             'TextAlignment="Center" HorizontalAlignment="Center" Margin="0,20,0,0"/>'
-            '<TextBlock Text="' + status_text + '" FontSize="15" Foreground="{DynamicResource ColorBrush3}" '
+            '<TextBlock Text="' + escape_attr(t("fallback.status", lang)) + '" FontSize="15" Foreground="{DynamicResource ColorBrush3}" '
             'TextAlignment="Center" TextWrapping="Wrap" MaxWidth="440" HorizontalAlignment="Center" LineHeight="26" Margin="0,18,0,0"/>'
-            + reason_line + eta_line + REFRESH_BUTTON +
+            + reason_line + eta_line + refresh_button(lang) +
             '<local:MyHint Theme="Yellow" Margin="0,18,0,0" Text="' + escape_attr(message) + '" />'
-            '<local:MyHint Theme="Blue" Margin="0,10,0,0" Text="如果一直看到这个页面，请去 GitHub 提 Issue。" />'
+            '<local:MyHint Theme="Blue" Margin="0,10,0,0" Text="'
+            + escape_attr(t("fallback.issue", lang)) + '" />'
             "</StackPanel>"
             "</local:MyCard>"
             "</StackPanel>")

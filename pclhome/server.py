@@ -30,6 +30,7 @@ from . import admin as admin_module
 from . import log
 from .config import ROOT, STATIC_DIR, TEMPLATES_DIR, Config, load_config
 from .generate import generate
+from .i18n import t
 from .render import build_home_data, render_homepage
 from .store import Stats, Store
 from .weather import WeatherService
@@ -38,6 +39,20 @@ from . import calc
 from . import profiles
 from . import settings
 from .xaml import build_fallback_xaml
+
+
+def _bot_xaml(ip: str) -> str:
+    """来源守卫拦下时给访客看的页（按这个 IP 的语言）。"""
+    lang = profiles.lang_for(ip)
+    return build_fallback_xaml(t("fallback.denied_title", lang),
+                               t("fallback.bot_msg", lang), lang=lang)
+
+
+def _updating_xaml(ip: str, eta: str = "", reason: str = "") -> str:
+    lang = profiles.lang_for(ip)
+    return build_fallback_xaml(t("fallback.updating_title", lang),
+                               t("fallback.updating_msg", lang),
+                               eta, reason, lang=lang, maintenance=True)
 
 # 需要"仅 PCL 客户端与真实浏览器可访问"的动态数据端点
 DATA_ENDPOINTS = {"/Custom.xaml", "/"}
@@ -153,8 +168,8 @@ class HomepageService:
         语言按访客 IP 从个性设置里取（``profiles.lang_for``），没记录就是简中。
         取语言这一步是纯内存查表，不会让主页变慢。
         """
-        data = build_home_data(self.config, self.store, self.weather, ip, origin)
         lang = profiles.lang_for(ip)
+        data = build_home_data(self.config, self.store, self.weather, ip, origin, lang)
         text = render_homepage(self.static_template("Custom.xaml"), data, self.config,
                                origin, lang)
         return text, data
@@ -164,13 +179,13 @@ class HomepageService:
     def guard_block(self, ip: str) -> str | None:
         """返回拦截页 XAML；放行则返回 None。"""
         if self.store.is_blocked(ip):
-            return build_fallback_xaml("访问被拒绝", "你的 IP 已被管理员禁止访问本主页。")
+            lang = profiles.lang_for(ip)
+            return build_fallback_xaml(t("fallback.banned_title", lang),
+                                       t("fallback.banned_msg", lang), lang=lang)
 
         maint = self.store.maintenance()
         if maint["on"] and ip not in maint["whitelist"]:
-            return build_fallback_xaml("服务器正在更新",
-                                       "服务器正在更新中，请稍后刷新重试。",
-                                       maint["eta"], maint["reason"])
+            return _updating_xaml(ip, maint["eta"], maint["reason"])
         return None
 
 
@@ -253,8 +268,7 @@ class Handler(BaseHTTPRequestHandler):
             self._route()
         except Exception:
             log.error("[Server] 请求处理异常：\n" + traceback.format_exc())
-            self._send(Response.xaml(build_fallback_xaml(
-                "服务器正在更新", "服务器正在更新中，请稍后刷新重试。")))
+            self._send(Response.xaml(_updating_xaml(self._log_ip)))
         finally:
             self._log_request(started)
 
@@ -288,8 +302,7 @@ class Handler(BaseHTTPRequestHandler):
             if service.config.guard_clients and not is_trusted_client(ua, referer):
                 self._force_warn = True
                 self._note = "来源守卫拦截（AI 接口）：UA=" + (ua[:60] or "（空）")
-                self._send(Response.xaml(build_fallback_xaml(
-                    "访问被拒绝", "检测到异常访问（爬虫或扫描器）。如需使用本主页，请在 PCL2 启动器中打开。")))
+                self._send(Response.xaml(_bot_xaml(self._log_ip)))
                 return
             response = ai.handle(service, path, parsed.query, self._log_ip, self._origin())
             if response is None:
@@ -303,8 +316,7 @@ class Handler(BaseHTTPRequestHandler):
             if service.config.guard_clients and not is_trusted_client(ua, referer):
                 self._force_warn = True
                 self._note = "来源守卫拦截（计算器）：UA=" + (ua[:60] or "（空）")
-                self._send(Response.xaml(build_fallback_xaml(
-                    "访问被拒绝", "检测到异常访问（爬虫或扫描器）。如需使用本主页，请在 PCL2 启动器中打开。")))
+                self._send(Response.xaml(_bot_xaml(self._log_ip)))
                 return
             response = calc.handle(service, path, parsed.query, self._log_ip, self._origin())
             if response is None:
@@ -318,8 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             if service.config.guard_clients and not is_trusted_client(ua, referer):
                 self._force_warn = True
                 self._note = "来源守卫拦截（个性设置）：UA=" + (ua[:60] or "（空）")
-                self._send(Response.xaml(build_fallback_xaml(
-                    "访问被拒绝", "检测到异常访问（爬虫或扫描器）。如需使用本主页，请在 PCL2 启动器中打开。")))
+                self._send(Response.xaml(_bot_xaml(self._log_ip)))
                 return
             response = settings.handle(service, path, parsed.query, self._log_ip, self._origin())
             if response is None:
@@ -340,8 +351,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._force_warn = True
                 self._note = ("来源守卫拦截：UA=" + (ua[:60] or "（空）")
                               + ("  Referer=" + referer[:40] if referer else ""))
-                self._send(Response.xaml(build_fallback_xaml(
-                    "访问被拒绝", "检测到异常访问（爬虫或扫描器）。如需使用本主页，请在 PCL2 启动器中打开。")))
+                self._send(Response.xaml(_bot_xaml(self._log_ip)))
                 return
 
         if path in VERSION_PATHS:
@@ -368,7 +378,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 log.error("[Server] 主页组装失败：\n" + traceback.format_exc())
                 self._note = "组装失败，已返回兜底页"
-                self._send(Response.xaml(build_fallback_xaml("服务器正在更新", "服务器正在更新中，请稍后刷新重试。")))
+                self._send(Response.xaml(_updating_xaml(ip)))
                 return
             self._note = data.summary()
             log.debug("[Server] UA=" + (ua[:80] or "（空）") + " origin=" + origin)

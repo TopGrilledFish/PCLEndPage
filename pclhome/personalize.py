@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 from .data.text import GREETING_SUBS
+from .i18n import DEFAULT_LANG, t_list
 
 BEIJING = timezone(timedelta(hours=8))
 _WEEKDAYS = ("日", "一", "二", "三", "四", "五", "六")
@@ -96,9 +97,17 @@ def get_beijing_date(now: datetime | None = None) -> BeijingDate:
 
 # ============ 每日内容 ============
 
-def pick_greeting_sub(ip: str, date_str: str, period: str) -> str:
-    pool = GREETING_SUBS.get(period) or GREETING_SUBS["morning"]
-    return pool[deterministic_index(ip, date_str, "greeting_" + period, len(pool))]
+def pick_greeting_sub(ip: str, date_str: str, period: str,
+                      lang: str = DEFAULT_LANG) -> str:
+    """问候语副标题。各语言同一位置的句子互相呼应（见 i18n 的 greeting.sub.*）。
+
+    下标按**中文那份的长度**算（``deterministic_index`` 是上游 JS 的复刻，
+    改长度会换算法），取译文时再取模兜住长度不一致的情况。
+    """
+    base = GREETING_SUBS.get(period) or GREETING_SUBS["morning"]
+    pool = t_list("greeting.sub." + period, lang) or base
+    index = deterministic_index(ip, date_str, "greeting_" + period, len(base))
+    return pool[index % len(pool)]
 
 
 def format_quote(template: str, ctx: BeijingDate) -> str:

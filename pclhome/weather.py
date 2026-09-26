@@ -20,26 +20,21 @@
 from __future__ import annotations
 
 import random
+import re
 import threading
 import time
 from urllib.parse import urlencode
 
 from .config import Config
 from .geo import is_unlocatable, locate
+from .i18n import DEFAULT_LANG, has, t, t_list
 from .log import debug, out, warn
 from .net import fetch_json_ex
 from .xaml import escape_attr
 
-_TIPS_HOT = ["注意防暑，别中暑了", "天太热，记得多补水", "高温下挖矿，记得带水桶", "大热天适合在家吹风扇"]
-_TIPS_COLD = ["注意保暖，别冻坏了", "天冷，多穿点再出门", "低温下带好食物和火把", "天寒地冻，适合在家烤火"]
-_TIPS_THUNDER = ["雷雨天别站高处，小心被雷劈", "雷雨天气，适合在家研究红石", "打雷了，快进屋躲躲", "雷雨交加，别带金属装备"]
-_TIPS_STORM = ["雨太大了，在家整理仓库吧", "暴雨天别出门，小心被冲走", "下大雨，适合在家做附魔", "大雨倾盆，在家烤火喝茶"]
-_TIPS_SNOW = ["下雪了，适合堆雪人", "雪天适合在家烤面包", "雪天出门记得带火把", "银装素裹，适合出门看雪景", "雪地走路小心滑倒"]
-_TIPS_RAIN = ["雨天适合在家建房子", "雨天适合整理箱子", "雨天适合研究红石", "毛毛雨，适合去钓鱼", "雨天撑伞去跑图也不错", "细雨绵绵，适合在家种田"]
-_TIPS_FOG = ["雾大，别跑太远", "雾天适合在家研究药水", "大雾弥漫看不清路，注意安全", "雾天出门记得带指南针"]
-_TIPS_CLEAR = ["适合出门挖矿", "适合探索新洞穴", "适合下矿寻宝", "适合扩建你的基地", "适合去钓鱼种田", "适合出门跑图探险",
-               "适合挑战末影龙", "适合开荒新区域", "适合修一座红石机关", "适合去林地府邸探险", "适合驯一匹新马",
-               "适合造一艘船去远航", "适合带上藏宝图去寻宝", "适合去打一次凋灵试试"]
+# 提示语各语种放在 i18n 表里（``weather.tips.<类别>``），zh-hans 是母版。
+# 以前这儿写死了一组中文字面量，切到英文时提示语还是中文——现在没有了。
+_TIP_KINDS = ("hot", "cold", "thunder", "storm", "snow", "rain", "fog", "clear")
 
 
 def classify_weather(text: str | None) -> str | None:
@@ -52,36 +47,85 @@ def classify_weather(text: str | None) -> str | None:
     return None
 
 
-def _pick_tip(temp: int, desc: str) -> str:
+def _pick_tip(temp: int, desc: str, lang: str) -> str:
+    """按气温与天气挑一句应景建议。接口给的中文描述永远用来判断类别，
+    只有**显示**的那句话跟着语言走。"""
     if temp >= 30:
-        return random.choice(_TIPS_HOT)
-    if temp <= 0:
-        return random.choice(_TIPS_COLD)
-    if "雷" in desc or "雹" in desc:
-        return random.choice(_TIPS_THUNDER)
-    if any(ch in desc for ch in "大暴强"):
-        return random.choice(_TIPS_STORM)
-    if "雪" in desc or "凇" in desc:
-        return random.choice(_TIPS_SNOW)
-    if "雨" in desc:
-        return random.choice(_TIPS_RAIN)
-    if "雾" in desc or "霾" in desc:
-        return random.choice(_TIPS_FOG)
-    return random.choice(_TIPS_CLEAR)
+        kind = "hot"
+    elif temp <= 0:
+        kind = "cold"
+    elif "雷" in desc or "雹" in desc:
+        kind = "thunder"
+    elif any(ch in desc for ch in "大暴强"):
+        kind = "storm"
+    elif "雪" in desc or "凇" in desc:
+        kind = "snow"
+    elif "雨" in desc:
+        kind = "rain"
+    elif "雾" in desc or "霾" in desc:
+        kind = "fog"
+    else:
+        kind = "clear"
+    pool = t_list("weather.tips." + kind, lang)
+    return random.choice(pool) if pool else ""
 
 
-def build_weather_xaml(location: str, temp, desc: str, wind: str, humidity) -> str:
+def weather_desc(desc: str, lang: str) -> str:
+    """接口给的中文天气词按语言显示。
+
+    接口的天气描述是个长尾（「局部多云」「雷阵雨伴有冰雹」…），逐条收录收不全。
+    所以退一步：认不出原词就归到大类（晴/多云/雨/雪/雷/雾）说个笼统的，
+    英文页面上宁可说「Cloudy」也不要蹦出一句「局部多云」。
+    """
+    text = str(desc or "")
+    key = "weather.desc." + text
+    if has(key, lang):
+        return t(key, lang)
+    kind = classify_weather(text)
+    if kind and has("weather.kind." + kind, lang):
+        return t("weather.kind." + kind, lang)
+    return text
+
+
+# 风向：接口给的是「东南风」这种中文，显示前按语言换。
+# 两字的先判，否则「东南风」会被「东」抢先匹配成东风。
+_WIND_DIRS = (("东南", "se"), ("西北", "nw"), ("东北", "ne"), ("西南", "sw"),
+              ("东", "e"), ("南", "s"), ("西", "w"), ("北", "n"))
+_WIND_LEVEL_RE = re.compile(r"\d+(?:\s*-\s*\d+)?")
+
+
+def weather_wind(direction: str, power: str, lang: str) -> str:
+    """风力那一段，如「东南风 3级」/「SE wind force 3」。
+
+    认不出来的写法（「无持续风向」之类）原样留着，宁可显示中文也不显示空。
+    """
+    text = str(direction or "").strip()
+    code = next((code for prefix, code in _WIND_DIRS if text.startswith(prefix)), None)
+    if code:
+        text = t("weather.wind_dir." + code, lang)
+    match = _WIND_LEVEL_RE.search(str(power or ""))
+    if match:
+        level = match.group(0).replace(" ", "")
+        text = (text + " " + t("weather.wind_level", lang, level=level)).strip()
+    elif str(power or "").strip():
+        text = (text + " " + str(power).strip()).strip()
+    return text
+
+
+def build_weather_xaml(location: str, temp, desc: str, wind: str, humidity,
+                       lang: str = DEFAULT_LANG) -> str:
     """天气卡片：温度为主，天气/位置次之，分隔线，风力与湿度，一句应景建议。"""
     detail = escape_attr(wind or "")
     if humidity not in (None, ""):
-        detail += (" · " if detail else "") + "湿度 " + str(humidity) + "%"
-    tip = _pick_tip(int(temp), str(desc))
+        detail += (" · " if detail else "") + t("weather.humidity", lang, value=humidity)
+    tip = _pick_tip(int(temp), str(desc), lang)
+    shown = weather_desc(desc, lang)
 
     return ('<Border CornerRadius="10" Padding="16,16" Margin="0,0,0,0" Background="{DynamicResource ColorBrush7}">'
             "<StackPanel>"
             '<StackPanel Orientation="Horizontal" HorizontalAlignment="Center">'
             '<TextBlock Text="' + str(temp) + '°" FontSize="36" FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" />'
-            '<TextBlock Text="' + escape_attr(desc) + '" FontSize="15" VerticalAlignment="Bottom" '
+            '<TextBlock Text="' + escape_attr(shown) + '" FontSize="15" VerticalAlignment="Bottom" '
             'Foreground="{DynamicResource ColorBrush3}" Margin="8,0,0,8" />'
             "</StackPanel>"
             '<TextBlock Text="' + escape_attr(location) + '" FontSize="11" HorizontalAlignment="Center" '
@@ -100,10 +144,9 @@ def build_weather_xaml(location: str, temp, desc: str, wind: str, humidity) -> s
             "</Border>")
 
 
-def build_weather_unavailable(reason: str = "") -> str:
-    text = "天气获取失败，请稍后刷新重试。"
-    if reason:
-        text = "天气获取失败（" + reason + "）。"
+def build_weather_unavailable(reason: str = "", lang: str = DEFAULT_LANG) -> str:
+    text = (t("weather.unavailable_reason", lang, reason=reason) if reason
+            else t("weather.unavailable", lang))
     return '<local:MyHint Theme="Yellow" Margin="0,0,0,0" Text="' + escape_attr(text) + '" />'
 
 
@@ -115,24 +158,27 @@ class WeatherService:
         self._cache: dict[str, tuple[float, dict]] = {}
         self._lock = threading.Lock()
 
-    def get(self, ip: str) -> dict:
+    def get(self, ip: str, lang: str = DEFAULT_LANG) -> dict:
         """返回 ``{"body": XAML, "kind": 天气类别, "source": 简述}``；永不抛异常。"""
         if not self.config.enable_weather:
-            return {"body": build_weather_unavailable("已关闭天气"), "kind": None, "source": "关闭"}
+            return {"body": build_weather_unavailable(t("weather.reason.off", lang), lang),
+                    "kind": None, "source": "关闭"}
 
         candidates, cache_key, who = self._targets(ip)
 
         now = time.time()
+        # 缓存的是渲染好的 XAML，所以缓存键必须带上语言：同一个城市、
+        # 一个简中访客和一个英文访客看到的不是同一块卡片。
         with self._lock:
-            hit = self._cache.get(cache_key)
+            hit = self._cache.get(cache_key + "|" + lang)
         if hit and now - hit[0] < self.config.weather_cache_seconds:
-            debug("[Weather] 命中缓存（" + cache_key + "）")
+            debug("[Weather] 命中缓存（" + cache_key + "|" + lang + "）")
             return hit[1]
 
-        result = self._fetch(candidates, who)
+        result = self._fetch(candidates, who, lang)
         if result["kind"] is not None:
             with self._lock:
-                self._cache[cache_key] = (now, result)
+                self._cache[cache_key + "|" + lang] = (now, result)
         return result
 
     def _targets(self, ip: str) -> tuple[list[dict], str, str]:
@@ -165,7 +211,7 @@ class WeatherService:
             reason = "归属地查不到"
         return [{}], "__server__", "服务器本机（" + reason + "）"
 
-    def _fetch(self, candidates: list[dict], who: str) -> dict:
+    def _fetch(self, candidates: list[dict], who: str, lang: str = DEFAULT_LANG) -> dict:
         """按候选参数依次查；返回第一个成功的结果。"""
         started = time.perf_counter()
         data, status = None, None
@@ -183,20 +229,20 @@ class WeatherService:
             if status == 404:
                 warn("[Weather] 接口定位不到（" + who + "），耗时 " + str(round(elapsed)) + "ms。"
                      "服务器若在境外，可设 weather_city 固定一个城市，或设 enable_geo: false")
-                return {"body": build_weather_unavailable("接口定位不到该城市"),
+                return {"body": build_weather_unavailable(t("weather.reason.not_found", lang), lang),
                         "kind": None, "source": "定位失败"}
             warn("[Weather] 取天气失败（" + who + "，" + str(round(elapsed)) + "ms，"
                  + ("HTTP " + str(status) if status else "无响应") + "）")
-            return {"body": build_weather_unavailable(), "kind": None, "source": "失败"}
+            return {"body": build_weather_unavailable(lang=lang), "kind": None, "source": "失败"}
 
         # 位置只取"市 · 区县"：省份对同名城市没帮助（北京/上海等直辖市省市同名），
         # 拼上反而又长又重复（"北京市 北京"）。
-        name = str(data.get("city") or who or "当前位置")
+        name = str(data.get("city") or t("weather.here", lang))
         district = str(data.get("district") or "")
         location = name + (" · " + district if district and district != name else "")
 
-        wind = (str(data.get("wind_direction") or "") + " " + str(data.get("wind_power") or "")).strip()
-        desc = str(data.get("weather") or "未知")
+        wind = weather_wind(data.get("wind_direction"), data.get("wind_power"), lang)
+        desc = str(data.get("weather") or "")
         # 国内城市返回整数，境外会带小数（14.8°），统一取整看着更整齐
         try:
             temperature = round(float(data["temperature"]))
@@ -206,7 +252,7 @@ class WeatherService:
         out("[Weather] " + location + " " + str(temperature) + "° " + desc
             + "（" + who + "，" + str(round(elapsed)) + "ms）")
         return {
-            "body": build_weather_xaml(location, temperature, desc, wind, data.get("humidity")),
+            "body": build_weather_xaml(location, temperature, desc, wind, data.get("humidity"), lang),
             "kind": classify_weather(desc),
             "source": location,
         }

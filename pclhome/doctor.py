@@ -105,7 +105,7 @@ class Report:
 # ============ 本地检查 ============
 
 def check_data(report: Report) -> None:
-    print("\n[1/8] 数据完整性")
+    print("\n[1/9] 数据完整性")
     for name, (value, expected) in EXPECTED_COUNTS.items():
         if len(value) == expected:
             report.good(name + " 共 " + str(expected) + " 条")
@@ -113,8 +113,82 @@ def check_data(report: Report) -> None:
             report.bad(name + " 应为 " + str(expected) + " 条，实际 " + str(len(value)) + " 条")
 
 
+# 中文汉字 + 中文标点 + 全角字符。后两类是刻意一起扫的：模板里烘死的
+# 「，」「！」这种全角标点，在英文页面上同样刺眼，但只扫汉字是抓不到的。
+CJK_RE = re.compile(r"[一-鿿㐀-䶿　-〿＀-￯]")
+
+
+def check_i18n(report: Report) -> None:
+    """三种语言的词条。
+
+    要紧的一条是「英文里不许漏出中文」——``t()`` 缺键会悄悄回退到简中，
+    页面上就会出现一句中文，很难发现。所以这条按**必须覆盖**来判。
+    """
+    print("\n[2/9] 多语言词条")
+    from . import i18n
+    i18n.reload_tables()
+
+    zh = i18n.keys_of("zh-hans")
+    hant = i18n.keys_of("zh-hant")
+    en = i18n.keys_of("en")
+
+    missing_hant = sorted(k for k in zh if k not in hant)
+    if missing_hant:
+        report.bad("繁中缺 " + str(len(missing_hant)) + " 个键：" + "、".join(missing_hant[:5]))
+    else:
+        report.good("繁中覆盖全部 " + str(len(zh)) + " 个键")
+
+    # 英文字面里还可能残留中文（漏翻），所以除了键要对齐，值也要扫一遍
+    untranslated = []
+    for key in sorted(zh):
+        if key.startswith("_"):
+            continue
+        value = i18n.table("en").get(key)
+        if not isinstance(value, str):
+            continue
+        # calc.separator_hint 是唯一允许出现全角标点的：它本身就在说明
+        # 「逗号中文英文都可以」，不写出那个「，」就说不清。
+        if CJK_RE.search(value) and key != "calc.separator_hint":
+            untranslated.append(key)
+    if untranslated:
+        report.bad("英文里还有中文（" + str(len(untranslated)) + " 条）："
+                   + "、".join(untranslated[:5]))
+    else:
+        report.good("英文词条里没有残留中文")
+
+    missing_en = sorted(k for k in zh if k not in en)
+    if missing_en:
+        report.bad("英文缺 " + str(len(missing_en)) + " 个键（这些会回退成中文）："
+                   + "、".join(missing_en[:5]))
+    else:
+        report.good("英文覆盖全部 " + str(len(zh)) + " 个键（没有会回退成中文的）")
+
+    # 天气描述是接口给的中文，长尾收不全，所以退一步走大类兜底。
+    # 这里挑几个一定认得出的描述，确认英文下不会漏出中文。
+    from .weather import weather_desc
+    leaks = [d for d in ("晴", "局部多云", "雷阵雨伴有冰雹", "小雨", "冻雨", "霾")
+             if CJK_RE.search(weather_desc(d, "en"))]
+    if leaks:
+        report.bad("天气描述在英文下漏出中文：" + "、".join(leaks))
+    else:
+        report.good("天气描述在英文下都有对应说法（长尾走大类兜底）")
+
+    # 天气提示与问候语是"一组里随机挑一条"，各语言条数得一样，
+    # 否则同一个人同一天在不同语言下会跳到不相干的第几条
+    for key in sorted(k for k in zh if k.startswith(("weather.tips.", "greeting.sub."))):
+        lengths = {}
+        for lang in i18n.LANGS:
+            value = i18n.table(lang).get(key)
+            lengths[lang] = len(value) if isinstance(value, list) else -1
+        if len(set(lengths.values())) != 1:
+            report.bad(key + " 各语言条数不一致：" + str(lengths))
+            break
+    else:
+        report.good("天气提示与问候语各语言条数一致")
+
+
 def check_hash(report: Report) -> None:
-    print("\n[2/8] 哈希算法与上游一致性（决定「同一人当天内容固定」）")
+    print("\n[3/9] 哈希算法与上游一致性（决定「同一人当天内容固定」）")
     mismatches = []
     for raw, expected in HASH_VECTORS:
         got = hash_code(raw)
@@ -127,7 +201,7 @@ def check_hash(report: Report) -> None:
 
 
 def check_lunar(report: Report) -> None:
-    print("\n[3/8] 农历换算与上游一致性")
+    print("\n[4/9] 农历换算与上游一致性")
     mismatches = []
     for raw, expected in LUNAR_VECTORS:
         year, month, day = (int(x) for x in raw.split("-"))
@@ -141,7 +215,7 @@ def check_lunar(report: Report) -> None:
 
 
 def check_config(report: Report, config: Config) -> None:
-    print("\n[4/8] 配置检查")
+    print("\n[5/9] 配置检查")
     if config.admin_token == "admin":
         if config.host in ("127.0.0.1", "localhost", "::1"):
             report.warning("后台令牌仍是默认值 admin（本机自用可忽略）")
@@ -179,7 +253,7 @@ def check_config(report: Report, config: Config) -> None:
 
 def check_geo(report: Report) -> None:
     """访客 IP → 城市 这一步的纯逻辑（不联网，联网部分只在真跑起来时才用）。"""
-    print("\n[5/8] 访客 IP 归属地（天气按 IP 定位用）")
+    print("\n[6/9] 访客 IP 归属地（天气按 IP 定位用）")
 
     # 这些地址查归属地要么没意义、要么会白等一次超时，必须直接判为"不用查"
     unlocatable = ["127.0.0.1", "0.0.0.0", "192.168.1.10", "10.0.0.1", "172.16.0.1",
@@ -207,7 +281,7 @@ def check_geo(report: Report) -> None:
 
 
 def check_templates(report: Report, config: Config) -> None:
-    print("\n[6/8] 模板与生成物")
+    print("\n[7/9] 模板与生成物")
     for name in ("Custom.xaml.tpl",):
         path = TEMPLATES_DIR / name
         if path.exists():
@@ -240,18 +314,88 @@ def check_templates(report: Report, config: Config) -> None:
             report.good(name + " 占位符齐全（" + str(len(tokens)) + " 个）")
 
 
-def _fake_render(config: Config):
+def _fake_render(config: Config, lang: str = "zh-hans"):
     """用假 IP 走一遍完整渲染，不联网。"""
     config = dataclasses.replace(config, enable_weather=False)
     store = Store()
     weather = WeatherService(config)
-    home = build_home_data(config, store, weather, "203.0.113.7", "http://localhost")
-    homepage = render_homepage((ROOT / "Custom.xaml").read_text(encoding="utf-8"), home, config, "http://localhost")
-    return homepage
+    home = build_home_data(config, store, weather, "203.0.113.7", "http://localhost", lang)
+    return render_homepage((ROOT / "Custom.xaml").read_text(encoding="utf-8"), home,
+                           config, "http://localhost", lang)
+
+
+# 扫"页面上还有没有中文"时要先摘掉的三类东西：
+#   * XAML 注释——那些是写给开发者看的，不进界面
+#   * EventType / EventData——PCL 的内部事件名（「打开帮助」这类），本来就得是中文
+#   * 每日一言那一段——用户明确要求不翻
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+_EVENT_RE = re.compile(r'Event(?:Type|Data)="[^"]*"')
+_QUOTE_RE = re.compile(r'<TextBlock[^>]*MaxWidth="540"[^>]*/>', re.S)
+
+
+def visible_text(xaml: str) -> str:
+    """页面里访客真的能看到的文字（去掉注释、事件名和每日一言）。"""
+    text = _COMMENT_RE.sub("", xaml)
+    text = _QUOTE_RE.sub("", text)
+    return _EVENT_RE.sub("", text)
+
+
+def _cjk_hits(xaml: str) -> list:
+    """页面里残留的中文片段，便于定位。
+
+    ``calc.separator_hint`` 那句在英文页面里本来就要写出「，」来说明分隔符，
+    所以先把这句原文摘掉再扫。
+    """
+    text = visible_text(xaml).replace(calc.separator_hint("en"), "")
+    return [match.group(0).strip()[:60]
+            for match in re.finditer(r'[^"<>\n]*' + CJK_RE.pattern + r'[^"<>\n]*', text)]
+
+
+def _check_localised_pages(report: Report, config: Config) -> None:
+    """三种语言各渲染一遍，确认英文页面上不漏中文。
+
+    这是整套多语言里最容易悄悄坏掉的一环：``t()`` 缺键会回退成简中，
+    页面上就冒出一句中文，得盯着看才发现。
+    """
+    from . import i18n
+
+    for lang in i18n.LANGS:
+        try:
+            _fake_render(config, lang)
+        except Exception as exc:
+            report.bad("渲染（" + lang + "）抛异常：" + repr(exc))
+            return
+
+    try:
+        problems = []
+        for label, body in _english_pages(config):
+            hits = _cjk_hits(body)
+            if hits:
+                problems.append(label + "（" + hits[0] + "）")
+        if problems:
+            report.bad("英文页面里还有中文：" + "；".join(problems[:6]))
+        else:
+            report.good("英文主页 / 计算器 / AI 页面都没有残留中文（每日一言除外）")
+    except Exception as exc:
+        report.bad("英文页面扫描失败：" + repr(exc))
+
+
+def _english_pages(config: Config) -> list:
+    """所有应当全英文的页面，``[(名字, XAML)]``。"""
+    ai_config = dataclasses.replace(config, enable_ai=True, ai_api_key="sk-doctor")
+    pages = [("主页", _fake_render(config, "en")),
+             ("计算器列表", calc.build_landing("http://localhost", "en")),
+             ("AI 页", ai.build_page(ai_config, "203.0.113.7", "http://localhost", "en")),
+             ("私人密钥页", ai.build_own_page(ai_config, "203.0.113.7", "http://localhost", "en"))]
+    for item in calc.CALCS:
+        for raw in ("", "1 2"):
+            pages.append(("计算器 " + item["id"] + "/" + (raw or "空"),
+                          calc.build_calc_page(item, raw, "http://localhost", "en")))
+    return pages
 
 
 def check_rendered(report: Report, config: Config) -> None:
-    print("\n[7/8] 渲染结果（假 IP 走一遍完整替换）")
+    print("\n[8/9] 渲染结果（假 IP 走一遍完整替换）")
     try:
         homepage = _fake_render(config)
     except Exception as exc:
@@ -306,13 +450,13 @@ def check_rendered(report: Report, config: Config) -> None:
 
     # 计算器：列表页 + 每个计算器页都要是良构 XML（空输入和带输入各来一遍）
     try:
-        landing = calc.build_landing("http://localhost")
+        landing = calc.build_landing("http://localhost", "zh-hans")
         ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root ' + _XAML_ROOT_NS
                       + ">" + landing + "</root>")
         broken = []
         for item in calc.CALCS:
             for raw in ("", "1 2"):
-                body = calc.build_calc_page(item, raw, "http://localhost")
+                body = calc.build_calc_page(item, raw, "http://localhost", "zh-hans")
                 try:
                     ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root '
                                   + _XAML_ROOT_NS + ">" + body + "</root>")
@@ -335,8 +479,8 @@ def check_rendered(report: Report, config: Config) -> None:
         # 每个计算器页都要有：一句统一的输入提示 + 一个接了输入框的计算按钮
         bad = []
         for item in calc.CALCS:
-            body = calc.build_calc_page(item, "", "http://localhost")
-            if calc.SEPARATOR_HINT not in body:
+            body = calc.build_calc_page(item, "", "http://localhost", "zh-hans")
+            if calc.separator_hint("zh-hans") not in body:
                 bad.append(item["id"] + "（提示文字）")
             elif 'x:Name="calcinput"' not in body or "ElementName=calcinput" not in body:
                 bad.append(item["id"] + "（输入框没接上按钮）")
@@ -369,7 +513,7 @@ def check_rendered(report: Report, config: Config) -> None:
     wrong = []
     for cid, raw, expect in known:
         try:
-            rows = calc.CALC_BY_ID[cid]["run"](raw)
+            rows = calc.CALC_BY_ID[cid]["run"](raw, "zh-hans")
         except Exception as exc:
             wrong.append(cid + "(" + raw + ") 抛异常 " + repr(exc))
             continue
@@ -428,9 +572,11 @@ def check_rendered(report: Report, config: Config) -> None:
     else:
         report.warning("主页里找不到 {user} 占位符")
 
+    _check_localised_pages(report, config)
+
 
 def check_static(report: Report, config: Config) -> None:
-    print("\n[8/8] 静态资源")
+    print("\n[9/9] 静态资源")
 
     from .sites import local_icon, site_slug
     if not config.sites:
@@ -516,6 +662,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report = Report()
     check_data(report)
+    check_i18n(report)
     check_hash(report)
     check_lunar(report)
     check_config(report, config)

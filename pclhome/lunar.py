@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from .data.calendar import FESTIVALS, LUNAR_FESTIVALS, LUNAR_INFO
+from .i18n import DEFAULT_LANG, has, t
 from .xaml import escape_attr
 
 # 农历数据表的基准日：Date.UTC(1900, 1, 30) 在 JS 里会被规范化成 1900-03-02
@@ -117,24 +118,46 @@ def solar_to_lunar(target: date) -> tuple[int, int, int, bool]:
     return year, month, offset + 1, is_leap
 
 
-def get_festival(today: date, extra: list | None = None) -> dict | None:
+def festival_name(key: str, fallback: str, lang: str) -> str:
+    """内置节日的名字/祝词按语言取；后台自定义的节日没有词条，原样用配置里的。"""
+    return t(key, lang) if has(key, lang) else fallback
+
+
+def _localized(item: dict, prefix: str, lang: str) -> dict:
+    return {"month": item.get("month"), "day": item.get("day"),
+            "name": festival_name(prefix + ".name", str(item.get("name") or ""), lang),
+            "msg": festival_name(prefix + ".msg", str(item.get("msg") or ""), lang)}
+
+
+def get_festival(today: date, extra: list | None = None,
+                 lang: str = DEFAULT_LANG) -> dict | None:
     """命中今天的节日：先查公历，再查农历。``extra`` 为后台自定义公历节日。"""
-    solar_table = list(FESTIVALS) + list(extra or [])
-    for item in solar_table:
+    for item in FESTIVALS:
         if int(item["month"]) == today.month and int(item["day"]) == today.day:
-            return item
+            return _localized(item, "festival.solar." + str(int(item["month"]))
+                              + "-" + str(int(item["day"])), lang)
+    # 后台自定义的节日是站长自己填的文案，没有词条，原样显示
+    for item in (extra or []):
+        if int(item["month"]) == today.month and int(item["day"]) == today.day:
+            return {"month": today.month, "day": today.day,
+                    "name": str(item.get("name") or ""), "msg": str(item.get("msg") or "")}
+
     _, lunar_month, lunar_day, _ = solar_to_lunar(today)
     for item in LUNAR_FESTIVALS:
         if item["lm"] == lunar_month and item["ld"] == lunar_day:
-            return {"month": today.month, "day": today.day, "name": item["name"], "msg": item["msg"]}
+            localized = _localized(item, "festival.lunar." + str(item["lm"])
+                                   + "-" + str(item["ld"]), lang)
+            localized["month"], localized["day"] = today.month, today.day
+            return localized
     return None
 
 
-def build_festival_banner(festival: dict | None) -> str:
+def build_festival_banner(festival: dict | None, lang: str = DEFAULT_LANG) -> str:
     """节日横幅（红色提示条）。"""
     if not festival:
         return ""
-    text = escape_attr("今天是 " + festival["name"] + "！" + festival["msg"])
+    text = escape_attr(t("lunar.festival_today", lang,
+                         name=festival.get("name", ""), msg=festival.get("msg", "")))
     return '<local:MyHint Theme="Red" Margin="0,0,0,12" Text="' + text + '" />'
 
 
@@ -150,7 +173,13 @@ def _days_until(month: int, day: int, today: date) -> int:
     return 366
 
 
-def build_countdown_xaml(today: date, custom: dict | None = None, extra: list | None = None) -> str:
+def _countdown_line(name: str, diff: int, lang: str) -> str:
+    return (t("lunar.countdown_today", lang, name=name) if diff == 0
+            else t("lunar.countdown_left", lang, name=name, days=diff))
+
+
+def build_countdown_xaml(today: date, custom: dict | None = None, extra: list | None = None,
+                         lang: str = DEFAULT_LANG) -> str:
     """右上角胶囊：节日/纪念日倒计时。
 
     ``custom`` 为后台自定义倒计时（优先），形如 ``{"name": "生日", "date": "2026-10-01"}``。
@@ -160,27 +189,32 @@ def build_countdown_xaml(today: date, custom: dict | None = None, extra: list | 
         if parsed:
             # 自定义倒计时认年份：今年的目标日已过则顺延到明年
             target = parsed if parsed >= today else _shift_year(parsed, parsed.year + 1)
-            diff = (target - today).days
-            line = ("今天就是 " + str(custom["name"]) + "！" if diff == 0
-                    else str(custom["name"]) + " · 还有 " + str(diff) + " 天")
-            return _countdown_pill(line)
+            return _countdown_pill(_countdown_line(str(custom["name"]),
+                                                   (target - today).days, lang))
 
-    events = [{"name": f["name"], "month": int(f["month"]), "day": int(f["day"])}
-              for f in list(FESTIVALS) + list(extra or [])]
+    events = [{"name": festival_name("festival.solar." + str(int(f["month"])) + "-"
+                                     + str(int(f["day"])) + ".name", str(f["name"]), lang),
+               "month": int(f["month"]), "day": int(f["day"])}
+              for f in FESTIVALS]
+    # 后台自定义的节日/纪念日是站长自己填的文案，不翻
+    events += [{"name": str(f.get("name") or ""), "month": int(f["month"]), "day": int(f["day"])}
+               for f in (extra or [])]
 
     # 农历节日要换算成公历，取今年与明年两年，避免跨年漏掉
     for year in (today.year, today.year + 1):
         for item in LUNAR_FESTIVALS:
             solar = lunar_to_solar(year, item["lm"], item["ld"])
             if today.year <= solar.year <= today.year + 1:
-                events.append({"name": item["name"], "month": solar.month, "day": solar.day})
+                events.append({
+                    "name": festival_name("festival.lunar." + str(item["lm"]) + "-"
+                                          + str(item["ld"]) + ".name", str(item["name"]), lang),
+                    "month": solar.month, "day": solar.day})
 
     if not events:
         return ""
     best = min(events, key=lambda e: _days_until(e["month"], e["day"], today))
     diff = _days_until(best["month"], best["day"], today)
-    line = "今天就是 " + best["name"] + "！" if diff == 0 else best["name"] + " · 还有 " + str(diff) + " 天"
-    return _countdown_pill(line)
+    return _countdown_pill(_countdown_line(best["name"], diff, lang))
 
 
 def _countdown_pill(line: str) -> str:

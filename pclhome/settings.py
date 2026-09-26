@@ -169,7 +169,7 @@ def build_settings_page(base_url: str, ip: str, query: str) -> str:
         'HorizontalAlignment="Center" />'
         + note(t("settings.desc", lang), "0,10,0,0")
         + "".join(body)
-        + nav_row(base)
+        + nav_row(base, lang=lang)
         + "</StackPanel></local:MyCard>")
 
 
