@@ -346,8 +346,8 @@ def check_rendered(report: Report, config: Config) -> None:
         report.good("计算器公式抽查通过（" + str(len(known)) + " 个标准答案）")
 
     # 主页那排按钮：AI 入口和计算器入口都必须带上绝对地址
-    # 三个基础按钮 + 计算器，AI 开着再多一个，所以是 4 / 5
-    for flag, expect in ((False, 4), (True, 5)):
+    # 两个基础按钮 + 计算器，AI 开着再多一个，所以是 3 / 4
+    for flag, expect in ((False, 3), (True, 4)):
         buttons = build_action_buttons(dataclasses.replace(config, enable_ai=flag))
         count = buttons.count("<local:MyIconTextButton")
         if count != expect:
