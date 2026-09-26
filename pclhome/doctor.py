@@ -60,6 +60,28 @@ LUNAR_VECTORS = [
     ("2033-01-01", (2032, 12, 1)),   # 闰月年附近
 ]
 
+# 节日倒计时的基准：（今天，最近的节日，还有几天）。节日那天的公历日期是查权威
+# 日历得到的，**不是**这份代码自己的输出——农历节日逐年差半个月，拿"明年的月日"
+# 套到今年算就会少算十来天（2026-09-26 该是国庆节 5 天，套错了会报重阳节 12 天），
+# 所以这几个日子专门钉住那条路径。
+COUNTDOWN_VECTORS = [
+    ("2026-09-25", "中秋节", 0),      # 农历八月十五
+    ("2026-09-26", "国庆节", 5),      # 下一个是 10-01 国庆节
+    ("2026-10-01", "国庆节", 0),
+    ("2026-01-02", "腊八节", 24),     # 腊八在 2026-01-26（农历 2025 年腊月初八）
+    ("2026-04-05", "清明节", 0),      # 2026 年清明是 4 月 5 日
+    ("2027-02-04", "除夕", 1),        # 除夕 2027-02-05，次日 2027-02-06 春节
+                                      # （农历 2026 年的腊月落在公历 2027 年，跨年那条路）
+]
+
+# 节日横幅单独钉几个：公历、农历、节气、以及"月末"写法的除夕
+BANNER_VECTORS = [
+    ("2026-10-01", "国庆节"),
+    ("2026-04-05", "清明节"),
+    ("2026-09-25", "中秋节"),
+    ("2027-02-05", "除夕"),
+]
+
 # 数据规模（上游 README 里公开承诺的数量）
 EXPECTED_COUNTS = {
     "QUOTES": (text.QUOTES, 68),
@@ -213,6 +235,56 @@ def check_lunar(report: Report) -> None:
         report.bad("农历换算不一致：" + "；".join(mismatches[:3]))
     else:
         report.good("农历换算与上游一致（" + str(len(LUNAR_VECTORS)) + " 个基准日期）")
+
+    # 节日表（上游那份 + 我们补的那份）：每条都得算得出公历日期、三种语言都有词条。
+    # 补了节日忘了配翻译，或者月日写错，都会在这儿冒出来。
+    from . import i18n
+    from . import lunar
+    broken = []
+    for item, kind in ([(f, "solar") for f in lunar.FESTIVALS]
+                       + [(f, "lunar") for f in lunar.LUNAR_FESTIVALS]):
+        key = lunar.festival_key(item, kind)
+        for suffix in (".name", ".msg"):
+            lack = [lang for lang in i18n.LANGS if not i18n.has(key + suffix, lang)]
+            if lack:
+                broken.append(key + suffix + " 缺 " + "/".join(lack))
+        if not lunar.festival_dates(item, date.today()):
+            broken.append(str(item.get("name")) + " 算不出公历日期")
+    if broken:
+        report.bad("节日表有问题：" + "；".join(broken[:4]))
+    else:
+        report.good("内置节日 " + str(len(lunar.FESTIVALS) + len(lunar.LUNAR_FESTIVALS))
+                    + " 条都能算出日期，三种语言词条齐全")
+
+    wrong = []
+    for raw, name, days in COUNTDOWN_VECTORS:
+        got = _countdown_of(date.fromisoformat(raw))
+        if got != (name, days):
+            wrong.append(raw + " 期望 " + name + " " + str(days) + " 天，实际 "
+                         + (got[0] + " " + str(got[1]) + " 天" if got else "没有内容"))
+    for raw, name in BANNER_VECTORS:
+        hit = lunar.get_festival(date.fromisoformat(raw), None, "zh-hans")
+        if not hit or hit.get("name") != name:
+            wrong.append(raw + " 横幅期望 " + name + "，实际 "
+                         + str((hit or {}).get("name") or "没有"))
+    if wrong:
+        report.bad("节日日期对不上：" + "；".join(wrong[:3]))
+    else:
+        report.good("节日倒计时与横幅日期正确（" + str(len(COUNTDOWN_VECTORS)) + " + "
+                    + str(len(BANNER_VECTORS)) + " 个基准日期）")
+
+
+def _countdown_of(today: date):
+    """倒计时胶囊里那句 "还有几天"，取不出来返回 None。"""
+    from . import lunar
+    body = lunar.build_countdown_xaml(today, None, None, "zh-hans")
+    hit = re.search(r'Text="([^"]*)"', body)
+    if not hit:
+        return None
+    found = re.search(r"([0-9]+) 天", hit.group(1))
+    if found:
+        return re.sub(r" · 还有 [0-9]+ 天", "", hit.group(1)), int(found.group(1))
+    return re.sub(r"^今天就是 |！$", "", hit.group(1)), 0
 
 
 def check_config(report: Report, config: Config) -> None:
