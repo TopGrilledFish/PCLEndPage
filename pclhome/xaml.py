@@ -147,28 +147,6 @@ def help_button(text: str, logo: str, url: str, height: int = 38, column=None,
             + '" EventType="打开帮助" EventData="' + url_attr(url) + '" />')
 
 
-def help_button_multi(text: str, logo: str, url_prefix: str, fields: list,
-                      height: int = 38, margin: str = "", logo_scale: str = "0.8") -> str:
-    """走「打开帮助」的按钮，EventData 拿好几个输入框的值拼成 ``?q=a,b,c``。
-
-    一个 ``{Binding}`` 只能带一个控件的值，要凑几个框就得上 ``MultiBinding``。
-    它在 XAML 里没有属性写法，只能写成属性元素，所以这个按钮不能自闭合。
-    ``StringFormat`` 开头那个 ``{}`` 是 XAML 的转义前缀，不写的话 WPF 会把
-    ``{0}`` 当成标记扩展解析。绑定值的编号从 ``{1}`` 起，``{0}`` 留给前缀。
-    """
-    fmt = "{}" + url_prefix + "?q=" + ",".join(
-        "{" + str(index + 1) + "}" for index in range(len(fields)))
-    binds = "".join('<Binding Path="Text" ElementName="' + name + '" />' for name in fields)
-    attrs = ' Margin="' + margin + '"' if margin else ""
-    return ('<local:MyIconTextButton' + attrs + ' Height="' + str(height) + '" Text="'
-            + escape_attr(text) + '" LogoScale="' + logo_scale + '" Logo="' + logo
-            + '" EventType="打开帮助">'
-            "<local:MyIconTextButton.EventData>"
-            '<MultiBinding StringFormat="' + escape_url_attr(fmt) + '">'
-            + binds + "</MultiBinding>"
-            "</local:MyIconTextButton.EventData></local:MyIconTextButton>")
-
-
 def grid2(left: str, right: str, margin: str = "0,8,0,0") -> str:
     """左右等宽两栏，各自放一个已经带好 Grid.Column 的按钮。"""
     return ('<Grid Margin="' + margin + '"><Grid.ColumnDefinitions>'

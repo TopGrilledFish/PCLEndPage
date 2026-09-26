@@ -331,19 +331,18 @@ def check_rendered(report: Report, config: Config) -> None:
         else:
             report.good("计算器列表 " + str(len(calc.CALCS)) + " 个入口齐全")
 
-        # 伤害计算是一个参数一个输入框，靠 MultiBinding 把各框拼成一个 ?q=；
-        # 绑定少了或者名字对不上，那个「计算」按钮就点不动。
-        page = calc.build_calc_page(calc.CALC_BY_ID["damage"], "", "http://localhost")
-        boxes = [name for name, _label, _hint in calc.DAMAGE_FIELDS]
-        lost = [name for name in boxes if 'x:Name="' + name + '"' not in page]
-        if "MultiBinding" not in page or lost:
-            report.bad("伤害计算的多输入框没拼起来"
-                       + ("，缺：" + "、".join(lost) if lost else "（没有 MultiBinding）"))
-        elif page.count("<Binding ") != len(boxes):
-            report.bad("伤害计算的绑定数量对不上：应有 " + str(len(boxes)) + " 个，实际 "
-                       + str(page.count("<Binding ")))
+        # 每个计算器页都要有：一句统一的输入提示 + 一个接了输入框的计算按钮
+        bad = []
+        for item in calc.CALCS:
+            body = calc.build_calc_page(item, "", "http://localhost")
+            if calc.SEPARATOR_HINT not in body:
+                bad.append(item["id"] + "（提示文字）")
+            elif 'x:Name="calcinput"' not in body or "ElementName=calcinput" not in body:
+                bad.append(item["id"] + "（输入框没接上按钮）")
+        if bad:
+            report.bad("计算器页面不对： " + "、".join(bad))
         else:
-            report.good("伤害计算 " + str(len(boxes)) + " 个输入框已接上计算按钮")
+            report.good("计算器 " + str(len(calc.CALCS)) + " 个页面都有输入提示和计算按钮")
 
         # 没有本地镜像就会退回 Wiki 远程地址（Wiki 按 UA 拦，多半拉不到），
         # 再不行才是 PCL 内置占位图。两种情况都算"这行没图标"。

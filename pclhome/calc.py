@@ -7,12 +7,19 @@ Wiki 上列了 27 个，但大部分在这儿做不了——旗帜、信标颜�
 一个输入框就能算完的这些，其余的没搬。近战伤害算搬过来了：武器不内置成一张表，
 攻击力直接让使用者填物品栏里那个数。
 
-**输入框的个数**分两种。多数计算器一个框就够，多值输入约定用逗号分隔，
-格式写在框的提示文字里。参数多的（目前只有伤害计算）改成 **一个参数一个框**，
-靠 ``MultiBinding`` 把各框的值拼成一个 ``?q=a,b,c``——单个 ``{Binding}``
-只能绑一个控件，写法见 :func:`pclhome.xaml.help_button_multi`。
-多框拼出来的串里，没填的格子是空串，所以伤害计算用 :func:`_damage_fields`
-按**位置**拆参数，不能像 :func:`_floats` 那样把空串丢掉。
+**每个计算器只有一个输入框，这是被 PCL 逼的**：事件参数只能绑一个控件——
+
+    EventData="{Binding Path=Text,ElementName=X,StringFormat='...?q={0}'}"
+
+想把几个框的值拼进一个 ``EventData``，WPF 的正路是 ``MultiBinding``，而它只有
+属性元素写法；PCL 的 ``EventType``/``EventData`` 不是真正的 XAML 成员（由 PCL
+自己预处理），一写成属性元素就报：
+
+    加载帮助 XAML 文件失败："无法设置未知成员"PCL.MyIconTextButton.EventData"。"
+
+试过了，走不通，别再试。所以多值输入统一约定用逗号分隔，该填什么按什么顺序
+写在输入框上面的正文里，框里的提示只说分隔符（:data:`SEPARATOR_HINT`）。
+伤害计算参数多，用 :func:`_damage_fields` 按**位置**拆，没填的格子留空即可。
 
 **提交后回到本页**：计算按钮指向的就是当前这个页面的 .json，只是多带一个 ``?q=``，
 所以算完就地出结果，不会在 PCL 的页面栈上多压一层。
@@ -28,8 +35,8 @@ from urllib.parse import parse_qs, unquote
 from .config import ICONS_DIR, PACK_FALLBACK_IMAGE
 from .log import warn
 from .xaml import (ICON_BACK, ICON_CALC, ICON_HOME, attr, bind_to, escape_attr,
-                   grid2, heading, help_button, help_button_multi, indent_block,
-                   input_row, nav_row, note, render_template, url_attr)
+                   grid2, heading, help_button, indent_block, input_row, nav_row,
+                   note, render_template, url_attr)
 
 
 # ============ 输入 / 输出 ============
@@ -291,18 +298,8 @@ def _calc_seed(raw: str):
     ]
 
 
-# 伤害计算的输入框，顺序就是拼进 ?q= 的顺序。每个参数一个框，
-# 省得把六七个数字挤在一行里按位置背——那个格式只有写的人记得住。
-DAMAGE_FIELDS = [
-    ("dmg_attack", "攻击力", "空手1 木剑4 石剑5 铁剑6 钻石剑7 下界合金剑8"),
-    ("dmg_sharp", "锋利", "0-5，没有就空着"),
-    ("dmg_smite", "亡灵杀手", "0-5，只对亡灵生物有用"),
-    ("dmg_bane", "节肢杀手", "0-5，只对节肢生物有用"),
-    ("dmg_strength", "力量", "药水效果等级，没有就空着"),
-    ("dmg_weakness", "虚弱", "药水效果等级，没有就空着"),
-    ("dmg_crit", "暴击", "填 1 是暴击，空着或 0 都不是"),
-    ("dmg_charge", "充能 %", "0-100，空着按 100"),
-]
+# 伤害计算的参数，顺序就是 ?q= 里的顺序，页面上也照这个顺序写给人看
+DAMAGE_PARAMS = ("攻击力", "锋利", "亡灵杀手", "节肢杀手", "力量", "虚弱", "暴击", "充能%")
 
 
 def _calc_damage(raw: str):
@@ -321,7 +318,7 @@ def _calc_damage(raw: str):
     """
     if not (raw or "").strip(" ,，;；\t"):
         raise ValueError("至少要填攻击力，比如 8。")
-    nums = _damage_fields(raw, len(DAMAGE_FIELDS))
+    nums = _damage_fields(raw, len(DAMAGE_PARAMS))
 
     def filled(index: int, default: float = 0.0) -> float:
         """第 index 格里填的数；那格空着就用 default。"""
@@ -399,7 +396,10 @@ CALCS = [
     {"id": "damage", "name": "伤害计算",
      "info": "此计算器是一个通用近战伤害计算器，可以指定游戏内已知的武器或自定义武器进行伤害计算。",
      "icon": _wiki_icon("Strength_JE3_BE2.png"),
-     "fields": DAMAGE_FIELDS, "run": _calc_damage},
+     "hint": "按顺序填 " + "、".join(DAMAGE_PARAMS)
+             + "，不想填的留空，比如 8,5,,,2,,1。攻击力：空手 1、木剑 4、石剑 5、"
+               "铁剑 6、钻石剑 7、下界合金剑 8",
+     "run": _calc_damage},
     {"id": "nether", "name": "主世界与下界坐标互换",
      "info": "该计算器可以在主世界与下界间转换相对应的坐标。",
      "icon": _wiki_icon("Netherrack_JE6_BE2.png"),
@@ -450,6 +450,9 @@ CALC_BY_ID = {item["id"]: item for item in CALCS}
 
 # ============ 页面 ============
 
+# 输入框里的提示统一成这一句：只说分隔符，不说该填什么（那个写在框上面的正文里）
+SEPARATOR_HINT = "仅支持逗号作分割（英文中文都可以）"
+
 # 和首页"功能网站"那排列表项同一个样式（见 sites.ITEM_TEMPLATE），
 # 差别只在点击走的是「打开帮助」——翻开计算器自己的页面，不是开浏览器。
 CALC_ITEM_TEMPLATE = ('<local:MyListItem Margin="-5,0,-5,4" Type="Clickable" '
@@ -486,34 +489,6 @@ def _calc_logo(base: str, item: dict) -> str:
     if mirror.is_file() and mirror.stat().st_size > 0:
         return base + "/images/icons/" + mirror.name
     return str(item.get("icon") or PACK_FALLBACK_IMAGE)
-
-
-def _field_row(name: str, label: str, hint: str, margin: str) -> str:
-    """一行参数：左边标签，右边一个输入框。"""
-    return ('<Grid Margin="' + margin + '"><Grid.ColumnDefinitions>'
-            '<ColumnDefinition Width="82" /><ColumnDefinition Width="1*" />'
-            "</Grid.ColumnDefinitions>"
-            '<TextBlock Grid.Column="0" Text="' + escape_attr(label) + '" FontSize="12" '
-            'VerticalAlignment="Center" Foreground="{DynamicResource ColorBrush2}" />'
-            '<Border Grid.Column="1" Height="34" Background="{DynamicResource ColorBrush7}" '
-            'CornerRadius="5">'
-            '<local:MyTextBox x:Name="' + name + '" Height="34" Margin="10,0" HintText="'
-            + attr(hint) + '" Foreground="{DynamicResource ColorBrush2}" '
-            'VerticalAlignment="Center" /></Border></Grid>')
-
-
-def _field_form(base: str, item: dict) -> str:
-    """一个参数一个输入框，最后一个按钮把它们拼成 ``?q=a,b,c``。
-
-    参数多的计算器（现在只有伤害计算）用这个，别把六七个数字挤进一行
-    让人按位置背。
-    """
-    fields = item["fields"]
-    rows = [_field_row(name, label, hint, "0,14,0,8" if index == 0 else "0,0,0,8")
-            for index, (name, label, hint) in enumerate(fields)]
-    rows.append(help_button_multi("计算", ICON_CALC, base + "/calc_" + item["id"] + ".json",
-                                  [name for name, _label, _hint in fields], 44, "0,6,0,0"))
-    return "".join(rows)
 
 
 def _calc_items(base: str) -> str:
@@ -576,16 +551,6 @@ def build_calc_page(item: dict, raw: str, base_url: str) -> str:
     else:
         result = ''
 
-    if item.get("fields"):
-        controls = _field_form(base, item)
-    else:
-        controls = (input_row("calcinput", item["hint"], 40, "0,14,0,0")
-                    + note("要填多个数就用逗号隔开，别用空格——PCL 是把输入框里的字原样拼进"
-                           "网址的，中间夹空格这次请求就发不出去。")
-                    + help_button("计算", ICON_CALC,
-                                  bind_to("calcinput", base, "/calc_" + item["id"] + ".json"),
-                                  44, margin="0,10,0,0"))
-
     return (
         '<local:MyCard Title="' + escape_attr(item["name"]) + '" CanSwap="False">'
         '<StackPanel Margin="25,40,23,20">'
@@ -593,8 +558,12 @@ def build_calc_page(item: dict, raw: str, base_url: str) -> str:
         '<TextBlock Text="' + escape_attr(item["name"]) + '" FontSize="24" FontWeight="Bold" '
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
         + note(item["info"], "0,10,0,0")
-
-        + controls
+        # 该填什么、按什么顺序，写成正文；输入框里的提示统一只说分隔符
+        + note(item["hint"], "0,12,0,0")
+        + input_row("calcinput", SEPARATOR_HINT, 40, "0,8,0,0")
+        + help_button("计算", ICON_CALC,
+                      bind_to("calcinput", base, "/calc_" + item["id"] + ".json"),
+                      44, margin="0,10,0,0")
 
         + result
 
