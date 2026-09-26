@@ -124,16 +124,17 @@ def _color_buttons(base: str, lang: str, record) -> str:
         rows.append('<TextBlock Text="' + attr(t(key, lang)) + '" FontSize="12" Margin="0,10,0,0" '
                     'Foreground="{DynamicResource ColorBrush2}" />')
         rows.append(_swatch_row(base, lang, role, chosen[role]))
-    # 预览：用的就是这四个角色色，所见即所得
+    # 预览：背景用色块色，两行同一句话分别用"文字浓度"和它淡两档的颜色，
+    # 一眼就能比出两个旋钮各自管什么
+    sample = attr(t("settings.color_preview_text", lang))
     rows.append('<Border Background="{DynamicResource ColorBrush7}" CornerRadius="8" '
                 'Padding="14,12" Margin="0,14,0,0"><StackPanel>'
                 '<TextBlock Text="' + attr(t("settings.color_preview", lang)) + '" FontSize="13" '
                 'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" />'
-                '<TextBlock Text="' + attr(t("settings.color_preview_dim", lang)) + '" FontSize="11" '
-                'Margin="0,4,0,0" Foreground="{DynamicResource ColorBrush3}" />'
-                '<TextBlock Text="' + attr(t("settings.color_preview_note", lang)) + '" FontSize="11" '
-                'Margin="0,4,0,0" TextWrapping="Wrap" '
-                'Foreground="{DynamicResource ColorBrush2}" />'
+                '<TextBlock Text="' + sample + '" FontSize="12" Margin="0,6,0,0" '
+                'TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush1}" />'
+                '<TextBlock Text="' + sample + '" FontSize="12" Margin="0,6,0,0" '
+                'TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush3}" />'
                 "</StackPanel></Border>")
     return "".join(rows)
 
