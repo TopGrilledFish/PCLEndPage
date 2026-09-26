@@ -354,43 +354,55 @@ def _wiki_icon(name: str) -> str:
 
 
 # icon 取自 Wiki 计算器页各工具自己那个图标，和 id 一一对应。
+# info 是各工具自己 Wiki 页开头那句原话（链接和模板剥掉，只留正文）。
 CALCS = [
-    {"id": "damage", "name": "伤害计算", "info": "近战一刀打出多少伤害，按 Java 版公式算。攻击力填物品栏里那个数。",
+    {"id": "damage", "name": "伤害计算",
+     "info": "此计算器是一个通用近战伤害计算器，可以指定游戏内已知的武器或自定义武器进行伤害计算。",
      "icon": _wiki_icon("Strength_JE3_BE2.png"),
      "hint": "至少填攻击力（空手 1、钻石剑 7、下界合金剑 8）；后面可以依次跟 锋利,"
              "亡灵杀手,节肢杀手,力量,虚弱,暴击0或1,充能%",
      "run": _calc_damage},
     {"id": "nether", "name": "主世界与下界坐标互换",
-     "info": "主世界和下界之间的坐标换算，走传送门用得上。",
+     "info": "该计算器可以在主世界与下界间转换相对应的坐标。",
      "icon": _wiki_icon("Netherrack_JE6_BE2.png"),
      "hint": "填 X,Z，比如 800,-1600；也可以填 X,Y,Z", "run": _calc_nether},
-    {"id": "chunk", "name": "区块坐标", "info": "坐标落在哪个区块、哪个区域文件里。",
+    {"id": "chunk", "name": "区块坐标",
+     "info": "该计算器可以在方块坐标和区块坐标间互相转换。",
      "icon": _wiki_icon("Chunk.png"),
      "hint": "填 X,Z，比如 100,-200", "run": _calc_chunk},
-    {"id": "distance", "name": "两点距离", "info": "两个坐标之间隔了多远。",
+    {"id": "distance", "name": "两点距离",
+     "info": "该工具可以计算两点间的距离。",
      "icon": _wiki_icon("Map.png"),
      "hint": "填 6 个数 X1,Y1,Z1,X2,Y2,Z2，或 4 个数 X1,Z1,X2,Z2",
      "run": _calc_distance},
-    {"id": "tick", "name": "刻换算", "info": "刻换成秒、分钟、游戏日。红石线路算延时用得上。",
+    {"id": "tick", "name": "刻换算",
+     "info": "该计算器可以在游戏刻、红石刻与现实时间间转换。",
      "icon": _wiki_icon("Clock_JE2_BE2.png"),
      "hint": "填一个刻数，比如 1200", "run": _calc_tick},
-    {"id": "exp", "name": "升级经验", "info": "升到某个等级一共要多少经验。",
+    # 需求经验那页没有开场白，就一个行内计算器，这句是照 Wiki 的口气补的
+    {"id": "exp", "name": "升级经验",
+     "info": "该计算器可以计算由某一级升到另一级所需的经验值。",
      "icon": _wiki_icon("Experience_Orb_Value_17-36.png"),
      "hint": "填一个等级，比如 30", "run": _calc_exp},
-    {"id": "armor", "name": "伤害减免", "info": "这身装备挨一下会掉多少血。",
+    {"id": "armor", "name": "伤害减免",
+     "info": "该工具可以计算不同盔甲、魔咒、抗性提升状态效果对不同伤害的减免。",
      "icon": _wiki_icon("Iron_Chestplate_%28item%29_JE2_BE2.png"),
      "hint": "填 伤害,护甲，比如 20,20；还能再跟 韧性,保护等级",
      "run": _calc_armor},
-    {"id": "stack", "name": "物品堆叠", "info": "一堆东西等于几组、几个潜影盒、几箱。",
+    {"id": "stack", "name": "物品堆叠",
+     "info": "该工具可以计算一定数量的物品是多少组、以及可以填满多少个容器。",
      "icon": _wiki_icon("Bundle_JE3_BE2.png"),
      "hint": "填物品总数，比如 10000", "run": _calc_stack},
-    {"id": "color", "name": "颜色值", "info": "十六进制和十进制颜色值互转，写命令时用。",
+    {"id": "color", "name": "颜色值",
+     "info": "该计算器可计算颜色值的十进制表示，其在许多游戏内部保存颜色的地方使用。",
      "icon": _wiki_icon("Baroque_%28texture%29_JE1_BE1.png"),
      "hint": "填 #FF8800 或 16746496", "run": _calc_color},
-    {"id": "uuid", "name": "玩家 UUID", "info": "离线模式下玩家名对应的 UUID。",
+    {"id": "uuid", "name": "玩家 UUID",
+     "info": "此计算器用于获取指定 Java 版玩家的 UUID。",
      "icon": _wiki_icon("Steve_JE5.png"),
      "hint": "填玩家名，比如 Notch", "run": _calc_uuid},
-    {"id": "seed", "name": "字符种子转数字", "info": "把一段文字换成种子数字，和游戏里的算法一致。",
+    {"id": "seed", "name": "字符种子转数字",
+     "info": "该计算器用以计算输入文本字符串时游戏实际使用的数字种子。",
      "icon": _wiki_icon("Wheat_Seeds_JE1_BE1.png"),
      "hint": "填一段文字，比如 hello", "run": _calc_seed},
 ]
@@ -460,7 +472,7 @@ def build_landing(base_url: str) -> str:
 
         '<TextBlock Text="Minecraft 计算器" FontSize="24" FontWeight="Bold" '
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
-        + note("以下是本主页上提供的互动式工具与计算器列表。", "0,10,0,0")
+        + note("以下是本主页提供的MC计算器列表", "0,10,0,0")
         + note("照中文 Minecraft Wiki 的计算器页做的，搬了纯数值的那些。"
                "旗帜、地图、附魔预览之类的要么要整套数据表、要么得画图，这儿做不了，就没搬。",
                "0,6,0,0")
