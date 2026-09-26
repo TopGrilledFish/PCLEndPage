@@ -18,8 +18,8 @@ PCL 的事件参数是这么拼出来的::
 
 **两种密钥**
 
-1. 站长内置密钥（``config.ai_api_key``）：每 IP 每天 ``config.ai_daily_limit`` 次，
-   额度记在 SQLite 里，按**北京时间**跨天重置。
+1. 站长内置密钥（``config.ai_api_key``）：每 IP 每 ``config.ai_rate_window``
+   （hour / day）``config.ai_rate_limit`` 次，额度记在 SQLite 里，按**北京时间**划格子。
 2. 用户自带密钥：粘一次存下来，该 IP 不再受限。密钥**只存在内存**里，
    进程一重启就没了——不落盘，免得替别人保管密钥。日志里一律打码。
 
@@ -97,7 +97,11 @@ def normalize_log_url(url: str) -> str:
 # ============ 配额（SQLite，按北京时间跨天）============
 
 class Quota:
-    """每个 IP 每天用了几次站长密钥。"""
+    """每个 IP 在**当前这一格**（一小时或一天）用了几次站长密钥。
+
+    额度桶就是"现在落在一小时里的哪一格 / 哪一天"，按北京时间算。窗口换掉
+    （hour ↔ day）只是换个拼桶字符串的格式，表结构不用动。
+    """
 
     def __init__(self, path: Path | None = None):
         self.path = path or STATS_DB
@@ -108,21 +112,27 @@ class Quota:
         conn = sqlite3.connect(self.path, timeout=5)
         conn.execute("PRAGMA journal_mode=WAL")
         if not self._ready:
+            # 老结构把桶叫 day（只按天）。计数只有"当前这一格的余额"这点意义，
+            # 换成小时桶之后按天的旧计数没法用，直接丢表重来最省事。
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(ai_usage)")}
+            if columns and "bucket" not in columns:
+                print("[AI] ai_usage 是旧的按天结构，重建为按额度窗口计数")
+                conn.execute("DROP TABLE ai_usage")
             conn.execute("CREATE TABLE IF NOT EXISTS ai_usage ("
-                         "ip TEXT NOT NULL, day TEXT NOT NULL, "
+                         "ip TEXT NOT NULL, bucket TEXT NOT NULL, "
                          "used INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL, "
-                         "PRIMARY KEY (ip, day))")
+                         "PRIMARY KEY (ip, bucket))")
             conn.commit()
             self._ready = True
         return conn
 
-    def used(self, ip: str, day: str) -> int:
+    def used(self, ip: str, bucket: str) -> int:
         try:
             with self._lock:
                 conn = self._connect()
                 try:
-                    row = conn.execute("SELECT used FROM ai_usage WHERE ip=? AND day=?",
-                                       (ip, day)).fetchone()
+                    row = conn.execute("SELECT used FROM ai_usage WHERE ip=? AND bucket=?",
+                                       (ip, bucket)).fetchone()
                     return int(row[0]) if row else 0
                 finally:
                     conn.close()
@@ -130,24 +140,24 @@ class Quota:
             warn("[AI] 读额度失败：" + str(exc))
             return 0
 
-    def consume(self, ip: str, day: str, limit: int) -> bool:
+    def consume(self, ip: str, bucket: str, limit: int) -> bool:
         """够额度就 +1 返回 True，不够返回 False。整段在事务里，不会超发。"""
         try:
             with self._lock:
                 conn = self._connect()
                 try:
                     conn.execute("BEGIN IMMEDIATE")
-                    row = conn.execute("SELECT used FROM ai_usage WHERE ip=? AND day=?",
-                                       (ip, day)).fetchone()
+                    row = conn.execute("SELECT used FROM ai_usage WHERE ip=? AND bucket=?",
+                                       (ip, bucket)).fetchone()
                     used = int(row[0]) if row else 0
                     if used >= limit:
                         conn.rollback()
                         return False
                     now = int(time.time())
                     conn.execute(
-                        "INSERT INTO ai_usage (ip, day, used, ts) VALUES (?, ?, 1, ?) "
-                        "ON CONFLICT(ip, day) DO UPDATE SET used = used + 1, ts = ?",
-                        (ip, day, now, now))
+                        "INSERT INTO ai_usage (ip, bucket, used, ts) VALUES (?, ?, 1, ?) "
+                        "ON CONFLICT(ip, bucket) DO UPDATE SET used = used + 1, ts = ?",
+                        (ip, bucket, now, now))
                     conn.commit()
                     return True
                 finally:
@@ -156,15 +166,15 @@ class Quota:
             warn("[AI] 扣额度失败：" + str(exc))
             return False
 
-    def rows_for(self, day: str) -> list[dict]:
-        """某天的用量明细，给后台看。"""
+    def rows_for(self, bucket: str) -> list[dict]:
+        """当前这一格的用量明细，给后台看。"""
         try:
             with self._lock:
                 conn = self._connect()
                 try:
                     rows = conn.execute(
-                        "SELECT ip, used, ts FROM ai_usage WHERE day=? "
-                        "ORDER BY used DESC, ts DESC", (day,)).fetchall()
+                        "SELECT ip, used, ts FROM ai_usage WHERE bucket=? "
+                        "ORDER BY used DESC, ts DESC", (bucket,)).fetchall()
                     return [{"ip": r[0], "used": int(r[1]), "ts": int(r[2])} for r in rows]
                 finally:
                     conn.close()
@@ -172,12 +182,12 @@ class Quota:
             warn("[AI] 读用量明细失败：" + str(exc))
             return []
 
-    def reset(self, day: str | None = None, ip: str | None = None) -> int:
-        """删用量记录：带 day 只删那天的，带 ip 只删那个 IP 的。返回删掉的行数。"""
+    def reset(self, bucket: str | None = None, ip: str | None = None) -> int:
+        """删用量记录：带 bucket 只删那一格的，带 ip 只删那个 IP 的。返回删掉的行数。"""
         clauses, params = [], []
-        if day:
-            clauses.append("day=?")
-            params.append(day)
+        if bucket:
+            clauses.append("bucket=?")
+            params.append(bucket)
         if ip:
             clauses.append("ip=?")
             params.append(ip)
@@ -195,14 +205,14 @@ class Quota:
             warn("[AI] 重置用量失败：" + str(exc))
             return 0
 
-    def refund(self, ip: str, day: str) -> None:
+    def refund(self, ip: str, bucket: str) -> None:
         """调用失败时把次数还回去（见 config.ai_refund_on_failure）。"""
         try:
             with self._lock:
                 conn = self._connect()
                 try:
                     conn.execute("UPDATE ai_usage SET used = used - 1 "
-                                 "WHERE ip=? AND day=? AND used > 0", (ip, day))
+                                 "WHERE ip=? AND bucket=? AND used > 0", (ip, bucket))
                     conn.commit()
                 finally:
                     conn.close()
@@ -213,9 +223,14 @@ class Quota:
 QUOTA = Quota()
 
 
+def beijing_bucket(window: str, ts: float | None = None) -> str:
+    """当前额度桶的键。``window`` 取 hour / day，都按北京时间算。"""
+    moment = datetime.fromtimestamp(ts if ts is not None else time.time(), BEIJING)
+    return moment.strftime("%Y-%m-%dT%H") if window == "hour" else moment.strftime("%Y-%m-%d")
+
+
 def beijing_day(ts: float | None = None) -> str:
-    return datetime.fromtimestamp(ts if ts is not None else time.time(),
-                                  BEIJING).strftime("%Y-%m-%d")
+    return beijing_bucket("day", ts)
 
 
 # ============ 用户自带密钥（只在内存）============
@@ -601,11 +616,13 @@ def submit(config: Config, ip: str, raw_input: str, use_own: bool,
             return False, t("ai.err.no_site_key", lang)
 
     # 私人密钥不占额度；用公用密钥才扣
+    window = config.ai_window()
     remaining = None
     if not use_own and ip not in (config.ai_free_ips or []):
-        if not QUOTA.consume(ip, beijing_day(), config.ai_daily_limit):
-            return False, t("ai.err.quota_out", lang, n=config.ai_daily_limit)
-        remaining = max(0, config.ai_daily_limit - QUOTA.used(ip, beijing_day()))
+        bucket = beijing_bucket(window)
+        if not QUOTA.consume(ip, bucket, config.ai_rate_limit):
+            return False, t("ai.err.quota_out." + window, lang, n=config.ai_rate_limit)
+        remaining = max(0, config.ai_rate_limit - QUOTA.used(ip, bucket))
 
     out("[AI] " + ip + " 提交分析（" + who + "，" + display + "）")
     _set_job(ip, state="running", text="", query=display, who=who, lang=lang,
@@ -648,7 +665,7 @@ def _fail(config: Config, ip: str, use_own: bool, message: str,
           lang: str = DEFAULT_LANG) -> None:
     """失败：把额度还回去（可配置），并把原因写给用户看。"""
     if not use_own and config.ai_refund_on_failure and ip not in (config.ai_free_ips or []):
-        QUOTA.refund(ip, beijing_day())
+        QUOTA.refund(ip, beijing_bucket(config.ai_window()))
         message += "\n" + t("ai.refunded", lang)
     warn("[AI] " + ip + " 分析失败：" + message.splitlines()[0][:160])
     _set_job(ip, state="error", text=message, error=message)
@@ -669,10 +686,10 @@ def _status_line(config: Config, ip: str, lang: str = DEFAULT_LANG) -> str:
         return t("ai.status_own", lang, desc=describe_own_key(ip, lang))
     if ip in (config.ai_free_ips or []):
         return t("ai.status_free", lang)
-    left = max(0, config.ai_daily_limit - QUOTA.used(ip, beijing_day()))
+    left = max(0, config.ai_rate_limit - QUOTA.used(ip, beijing_bucket(config.ai_window())))
     if left <= 0:
-        return t("ai.status_out", lang)
-    return t("ai.status_left", lang, left=left)
+        return t("ai.status_out." + config.ai_window(), lang)
+    return t("ai.status_left." + config.ai_window(), lang, left=left)
 
 
 # 页面零件统一从 xaml.py 取（计算器页共用同一套），这里起回短名字。
@@ -761,10 +778,11 @@ def build_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_LANG)
                          46, column=1, margin="5,0,0,0"),
             "0,10,0,0")
 
-        # 次数跟着 ai_daily_limit 走。写死「一次」的话，站长把上限调成 3，
+        # 次数和窗口都跟着配置走。写死「一次」「每天」的话，站长一改配置
         # 这行就开始骗人了。
-        + _note(t("ai.limit_once" if config.ai_daily_limit == 1 else "ai.limit_times",
-                  lang, count=config.ai_daily_limit))
+        + _note(t("ai.limit." + config.ai_window(), lang,
+                  times=t("ai.times_once" if config.ai_rate_limit == 1 else "ai.times_n",
+                          lang, n=config.ai_rate_limit)))
 
         + _divider("0,20,0,12")
 
@@ -858,8 +876,9 @@ def admin_state(config: Config) -> dict:
     """后台「AI 日志分析」那块要显示的东西。"""
     if not config.enable_ai:
         return {"enabled": False}
-    day = beijing_day()
-    rows = QUOTA.rows_for(day)
+    window = config.ai_window()
+    bucket = beijing_bucket(window)
+    rows = QUOTA.rows_for(bucket)
     with _jobs_lock:
         jobs = len(_jobs)
         running = sum(1 for j in _jobs.values() if j.get("state") == "running")
@@ -870,25 +889,27 @@ def admin_state(config: Config) -> dict:
         "model": config.ai_model,
         "base": config.ai_api_base,
         "display_name": config.ai_display_name,
-        "daily_limit": config.ai_daily_limit,
-        "day": day,
-        "today_rows": rows,
-        "today_calls": sum(r["used"] for r in rows),
+        "limit": config.ai_rate_limit,
+        "window": window,
+        "window_text": config.ai_window_text(),
+        "bucket": bucket,
+        "rows": rows,
+        "calls": sum(r["used"] for r in rows),
         "jobs": jobs,
         "running": running,
         "own_keys": keys,
     }
 
 
-def reset(scope: str = "all", ip: str = "") -> dict:
+def reset(scope: str = "all", ip: str = "", window: str = "hour") -> dict:
     """后台重置。scope 取 quota / jobs / keys / all；给了 ip 就只动这个 IP。
 
-    不传 ip 时，额度只清**今天**的（历史留着好看趋势）；传了 ip 就把那个 IP 清干净。
+    不传 ip 时只清**当前这一格**的（历史留着好看趋势）；传了 ip 就把那个 IP 清干净。
     """
     ip = (ip or "").strip() or None
     done = {}
     if scope in ("quota", "all"):
-        done["quota"] = QUOTA.reset(None if ip else beijing_day(), ip)
+        done["quota"] = QUOTA.reset(None if ip else beijing_bucket(window), ip)
     if scope in ("jobs", "all"):
         done["jobs"] = reset_jobs(ip)
     if scope in ("keys", "all"):

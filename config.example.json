@@ -1,17 +1,14 @@
 {
   "_说明": "复制为 config.json 后按需修改；所有项都可以不写，不写就用 pclhome/config.py 里的默认值。环境变量 PCLHOME_* 优先级最高。",
   "_天气说明": "weather_city 留空 = 每个访客按自己 IP 定位城市（会查 whois.pconline.com.cn，结果缓存 geo_cache_hours 小时）；填城市名 = 所有人看同一个城市；enable_geo:false = 完全按服务器 IP 定位。",
-  "_AI说明": "AI 日志分析。ai_api_key 是站长内置密钥，每 IP 每天 ai_daily_limit 次（按北京时间重置）；访客也可以填自己的密钥绕过限制。ai_free_ips 里的 IP 用内置密钥不计数。ai_refund_on_failure=true 时抓日志或调 AI 失败会退还当天次数。",
+  "_AI说明": "AI 日志分析。ai_api_key 是站长内置密钥，每 IP 每个 ai_rate_window（hour / day）限 ai_rate_limit 次（按北京时间划格子）；访客也可以填自己的密钥绕过限制。ai_free_ips 里的 IP 用内置密钥不计数。ai_refund_on_failure=true 时抓日志或调 AI 失败会退还这一次。",
   "_AI模型说明": "用 deepseek-flash（就是 V4 Flash；deepseek-v4-flash 是同一模型的别名，但 /models 接口列的是 deepseek-flash）。别用 deepseek-v4-pro——同一个问题它的思考量是 flash 的三倍多（实测 567 vs 182 token），费用也高三倍。都是推理模型（先思考再作答），所以 ai_max_tokens 不能给小——给小了 token 会全耗在思考上、答案为空。实测一条崩溃日志约需 700 思考 + 500 答案 token，默认 4000 留了余量。",
-
   "base_url": "",
   "site_name": "PCL2 个性化主页",
-
   "host": "127.0.0.1",
   "port": 8787,
   "admin_token": "改成你自己的令牌",
   "trust_proxy_headers": true,
-
   "enable_wallpaper": true,
   "wallpaper_url": "",
   "enable_saying": true,
@@ -20,17 +17,16 @@
   "enable_weather": true,
   "weather_city": "",
   "enable_geo": true,
-
   "http_timeout": 8.0,
   "max_retries": 2,
   "geo_timeout": 4.0,
   "geo_cache_hours": 24,
-
   "enable_ai": false,
   "ai_api_base": "https://api.deepseek.com/v1",
   "ai_api_key": "",
   "ai_model": "deepseek-flash",
-  "ai_daily_limit": 1,
+  "ai_rate_limit": 3,
+  "ai_rate_window": "hour",
   "ai_free_ips": [],
   "ai_max_log_chars": 40000,
   "ai_max_tokens": 4000,
@@ -40,36 +36,86 @@
   "wallpaper_cache_hours": 6,
   "weather_cache_seconds": 3600,
   "saying_cache_hours": 24,
-
   "guard_clients": true,
-
   "_sites说明": "首页「功能网站」卡片，数组顺序就是页面从上到下的顺序。icon 是各站图标地址：构建期会尽力镜像到 static/images/icons/，成功后页面用本地文件，失败则用远程地址。icon_fallback 是直连失败后的备用地址（favicon 代理），CurseForge/Minecraft Wiki/Planet Minecraft/苦力怕论坛 都得靠它。想手动指定图标，把 <域名>.png 放进 static/images/icons/ 即可。",
   "sites": [
-    { "name": "必应搜索", "url": "https://www.bing.com/",
-      "info": "微软的搜索引擎", "icon": "https://www.bing.com/favicon.ico" },
-    { "name": "谷歌搜索", "url": "https://www.google.com/",
-      "info": "搜索引擎，大陆不可用", "icon": "https://www.google.com/favicon.ico" },
-    { "name": "Minecraft Wiki", "url": "https://zh.minecraft.wiki/",
-      "info": "查阅方块、生物与游戏机制", "icon": "https://zh.minecraft.wiki/favicon.ico" },
-    { "name": "MC 百科", "url": "https://www.mcmod.cn/",
-      "info": "最大的 Minecraft 中文 MOD 百科", "icon": "https://www.mcmod.cn/images/favicon.ico" },
-    { "name": "Modrinth", "url": "https://modrinth.com/",
-      "info": "下载模组、整合包与资源包", "icon": "https://modrinth.com/favicon-light-32x32.png" },
-    { "name": "CurseForge", "url": "https://www.curseforge.com/minecraft",
-      "info": "CurseForge 的 Minecraft 专区", "icon": "https://www.curseforge.com/favicon.ico" },
-    { "name": "NameMC", "url": "https://namemc.com/",
-      "info": "查询 Minecraft 皮肤与用户名", "icon": "https://namemc.com/favicon.ico" },
-    { "name": "Planet Minecraft", "url": "https://www.planetminecraft.com/",
-      "info": "老牌作品站，地图皮肤与建筑", "icon": "https://www.planetminecraft.com/favicon.ico" },
-    { "name": "mclo.gs", "url": "https://mclo.gs/",
-      "info": "分享与解析 Minecraft 崩溃日志", "icon": "https://mclo.gs/img/favicon.ico" },
-    { "name": "MineBBS", "url": "https://www.minebbs.com/",
-      "info": "Minecraft 中文资源与交流社区", "icon": "https://www.minebbs.com/data/assets/logo/favicon.webp" },
-    { "name": "苦力怕论坛", "url": "https://www.klpbbs.com/",
-      "info": "国内 MC 论坛，基岩版资源多", "icon": "https://www.klpbbs.com/favicon.ico" },
-    { "name": "mcbbs 纪念版", "url": "https://www.mcbbs.co/",
-      "info": "老 MCBBS 的纪念站", "icon": "https://www.mcbbs.co/favicon.ico" },
-    { "name": "红石中继站", "url": "https://forum.mczwlt.net/",
-      "info": "红石与生电技术社区", "icon": "https://mczwlt.net/favicon.ico" }
+    {
+      "name": "必应搜索",
+      "url": "https://www.bing.com/",
+      "info": "微软的搜索引擎",
+      "icon": "https://www.bing.com/favicon.ico"
+    },
+    {
+      "name": "谷歌搜索",
+      "url": "https://www.google.com/",
+      "info": "搜索引擎，大陆不可用",
+      "icon": "https://www.google.com/favicon.ico"
+    },
+    {
+      "name": "Minecraft Wiki",
+      "url": "https://zh.minecraft.wiki/",
+      "info": "查阅方块、生物与游戏机制",
+      "icon": "https://zh.minecraft.wiki/favicon.ico"
+    },
+    {
+      "name": "MC 百科",
+      "url": "https://www.mcmod.cn/",
+      "info": "最大的 Minecraft 中文 MOD 百科",
+      "icon": "https://www.mcmod.cn/images/favicon.ico"
+    },
+    {
+      "name": "Modrinth",
+      "url": "https://modrinth.com/",
+      "info": "下载模组、整合包与资源包",
+      "icon": "https://modrinth.com/favicon-light-32x32.png"
+    },
+    {
+      "name": "CurseForge",
+      "url": "https://www.curseforge.com/minecraft",
+      "info": "CurseForge 的 Minecraft 专区",
+      "icon": "https://www.curseforge.com/favicon.ico"
+    },
+    {
+      "name": "NameMC",
+      "url": "https://namemc.com/",
+      "info": "查询 Minecraft 皮肤与用户名",
+      "icon": "https://namemc.com/favicon.ico"
+    },
+    {
+      "name": "Planet Minecraft",
+      "url": "https://www.planetminecraft.com/",
+      "info": "老牌作品站，地图皮肤与建筑",
+      "icon": "https://www.planetminecraft.com/favicon.ico"
+    },
+    {
+      "name": "mclo.gs",
+      "url": "https://mclo.gs/",
+      "info": "分享与解析 Minecraft 崩溃日志",
+      "icon": "https://mclo.gs/img/favicon.ico"
+    },
+    {
+      "name": "MineBBS",
+      "url": "https://www.minebbs.com/",
+      "info": "Minecraft 中文资源与交流社区",
+      "icon": "https://www.minebbs.com/data/assets/logo/favicon.webp"
+    },
+    {
+      "name": "苦力怕论坛",
+      "url": "https://www.klpbbs.com/",
+      "info": "国内 MC 论坛，基岩版资源多",
+      "icon": "https://www.klpbbs.com/favicon.ico"
+    },
+    {
+      "name": "mcbbs 纪念版",
+      "url": "https://www.mcbbs.co/",
+      "info": "老 MCBBS 的纪念站",
+      "icon": "https://www.mcbbs.co/favicon.ico"
+    },
+    {
+      "name": "红石中继站",
+      "url": "https://forum.mczwlt.net/",
+      "info": "红石与生电技术社区",
+      "icon": "https://mczwlt.net/favicon.ico"
+    }
   ]
 }

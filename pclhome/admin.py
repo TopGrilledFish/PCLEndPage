@@ -196,7 +196,8 @@ def handle(service, handler, path: str, query: str):
         if scope not in ("quota", "jobs", "keys", "all"):
             return _json({"ok": False, "error": "bad_scope"}, 400)
         return _json({"ok": True, "scope": scope,
-                      "result": ai.reset(scope, str(body.get("ip") or ""))})
+                      "result": ai.reset(scope, str(body.get("ip") or ""),
+                                         config.ai_window())})
 
     if action == "stats":
         return _json({"ok": True, "stats": service.stats.summary()})
@@ -606,17 +607,18 @@ function render() {
   if (!ai.enabled) {
     $('#aiBox').innerHTML = '<div class="hint">未开启（config.json 里 enable_ai 设为 true 才生效）</div>';
   } else {
-    const rows = ai.today_rows || [];
+    const rows = ai.rows || [];
+    const win = ai.window === 'day' ? '天' : '小时';
     $('#aiBox').innerHTML = `
-      <div class="hint">模型 <b>${esc(ai.model)}</b> @ ${esc(ai.base)} · 每个 IP 每天 ${ai.daily_limit} 次</div>
-      <div class="hint">${esc(ai.day)}：${rows.length} 个 IP 用过，共 ${ai.today_calls} 次 ·
+      <div class="hint">模型 <b>${esc(ai.model)}</b> @ ${esc(ai.base)} · 每个 IP 每${win} ${ai.limit} 次</div>
+      <div class="hint">${esc(ai.bucket)}：${rows.length} 个 IP 用过，共 ${ai.calls} 次 ·
         正在分析 ${ai.running} 个 · 留存记录 ${ai.jobs} 条 · 私人密钥 ${ai.own_keys} 个</div>
-      ${rows.length ? `<table><tr><th>IP</th><th>今天用了</th><th></th></tr>
+      ${rows.length ? `<table><tr><th>IP</th><th>这${win}用了</th><th></th></tr>
         ${rows.map(r => `<tr><td>${esc(r.ip)}</td><td>${r.used}</td>
           <td><button class="ghost" data-aireset="${esc(r.ip)}">重置这个 IP</button></td></tr>`).join('')}
-        </table>` : '<div class="hint">今天还没有人用过</div>'}
+        </table>` : `<div class="hint">这${win}还没有人用过</div>`}
       <div class="btns" style="margin-top:12px">
-        <button id="aiResetQuota">重置今日用量</button>
+        <button id="aiResetQuota">重置本${win}用量</button>
         <button class="ghost" id="aiResetJobs">清空分析记录</button>
         <button class="ghost" id="aiResetKeys">清空私人密钥</button>
         <button class="danger" id="aiResetAll">全部重置</button>

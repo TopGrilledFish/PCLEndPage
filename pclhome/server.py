@@ -498,7 +498,7 @@ def _log_boot(config: Config, service: HomepageService, host, port) -> None:
         log.out("[Boot] AI 日志分析=" + config.ai_model + " @ " + config.ai_api_base
                 + "    内置密钥=" + ("已配置 " + ai.mask_key(config.ai_api_key)
                                      if config.ai_api_key else "未配置（只能用访客自带密钥）")
-                + "    每 IP 每天 " + str(config.ai_daily_limit) + " 次")
+                + "    每 IP " + config.ai_window_text() + " " + str(config.ai_rate_limit) + " 次")
     else:
         log.out("[Boot] AI 日志分析=关闭")
 

@@ -246,7 +246,8 @@ def check_config(report: Report, config: Config) -> None:
         report.good("AI 日志分析：关闭")
     elif config.ai_api_key:
         report.good("AI 日志分析：" + config.ai_model + " @ " + config.ai_api_base
-                    + "，内置密钥已配置，每 IP 每天 " + str(config.ai_daily_limit) + " 次")
+                    + "，内置密钥已配置，每 IP " + config.ai_window_text() + " "
+                    + str(config.ai_rate_limit) + " 次")
     else:
         report.warning("AI 日志分析已开启但没有内置密钥，访客只能用自带密钥")
 
