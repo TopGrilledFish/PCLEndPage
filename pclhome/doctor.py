@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 from datetime import date
 
 from . import ai
+from . import calc
 from .config import ROOT, TEMPLATES_DIR, Config, load_config
 from .data import calendar as cal_data
 from .data import play, text
@@ -224,7 +225,8 @@ def check_templates(report: Report, config: Config) -> None:
 
     # 模板里用到的 {{TOKEN}} 必须都能被填上（不允许留 {{...}} 裸奔到 PCL 那边）
     provided = {
-        "Custom.xaml.tpl": {"BASE_URL", "WALLPAPER_URL", "SITE_ITEMS", "ACTION_BUTTONS"},
+        "Custom.xaml.tpl": {"BASE_URL", "WALLPAPER_URL", "SITE_ITEMS", "ACTION_BUTTONS",
+                            "ICON_CALC"},
     }
     for name, tokens_ok in provided.items():
         path = TEMPLATES_DIR / name
@@ -301,6 +303,48 @@ def check_rendered(report: Report, config: Config) -> None:
                         + str(len(own_page)) + " 字节）")
     except Exception as exc:
         report.bad("AI 页面构建失败：" + repr(exc))
+
+    # 计算器：列表页 + 每个计算器页都要是良构 XML（空输入和带输入各来一遍）
+    try:
+        landing = calc.build_landing("http://localhost")
+        ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root ' + _XAML_ROOT_NS
+                      + ">" + landing + "</root>")
+        broken = []
+        for item in calc.CALCS:
+            for raw in ("", "1 2"):
+                body = calc.build_calc_page(item, raw, "http://localhost")
+                try:
+                    ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root '
+                                  + _XAML_ROOT_NS + ">" + body + "</root>")
+                except ET.ParseError as exc:
+                    broken.append(item["id"] + "：" + str(exc))
+                    break
+        if broken:
+            report.bad("计算器页 XML 解析失败：" + "；".join(broken))
+        else:
+            report.good("计算器 " + str(len(calc.CALCS)) + " 个页面 XML 良构")
+    except Exception as exc:
+        report.bad("计算器页构建失败：" + repr(exc))
+
+    # 公式抽查：这几个都有标准答案，改坏了这里会红
+    known = [("exp", "30", "1395"), ("exp", "16", "352"), ("exp", "32", "1628"),
+             ("armor", "20 20 8 0", "8"), ("seed", "hello", "99162322"),
+             ("color", "#FF8800", "16746496"),
+             ("uuid", "Notch", "b50ad385-829d-3141-a216-7e7d7539ba7f"),
+             ("chunk", "100 -200", "6")]
+    wrong = []
+    for cid, raw, expect in known:
+        try:
+            rows = calc.CALC_BY_ID[cid]["run"](raw)
+        except Exception as exc:
+            wrong.append(cid + "(" + raw + ") 抛异常 " + repr(exc))
+            continue
+        if expect not in " ".join(value for _label, value in rows):
+            wrong.append(cid + "(" + raw + ") 里找不到 " + expect)
+    if wrong:
+        report.bad("计算器公式对不上：" + "；".join(wrong))
+    else:
+        report.good("计算器公式抽查通过（" + str(len(known)) + " 个标准答案）")
 
     # 主页那排按钮：AI 入口必须带上绝对地址
     for flag, expect in ((False, 3), (True, 4)):

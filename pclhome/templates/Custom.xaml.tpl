@@ -92,4 +92,15 @@
 {{SITE_ITEMS}}
         </StackPanel>
     </local:MyCard>
+    <!-- 在线工具：不用跳浏览器就能在这儿算完的东西（见 pclhome/calc.py） -->
+    <local:MyCard Title="在线工具" Margin="0,0,0,16" CanSwap="False">
+        <StackPanel Margin="25,40,23,16">
+            <local:MyIconTextButton Height="44" Text="Minecraft 计算器" LogoScale="0.85"
+                ColorType="Highlight" Logo="{{ICON_CALC}}"
+                EventType="打开帮助" EventData="__CALC_ENTRY__" />
+            <TextBlock TextWrapping="Wrap" FontSize="11" LineHeight="18" Margin="0,8,0,0"
+                Foreground="{DynamicResource ColorBrush3}"
+                Text="坐标换算、升级经验、护甲减伤、物品堆叠这些，共 10 个。照着中文 Minecraft Wiki 的计算器页做的。" />
+        </StackPanel>
+    </local:MyCard>
 </StackPanel>

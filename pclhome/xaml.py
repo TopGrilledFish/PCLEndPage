@@ -56,6 +56,13 @@ ICON_REFRESH = ("M753 271 C691 209 606 171 512 171 c-189 0 -341 153 -341 341 s15
 ICON_HOME = "M512 96 L960 480 H832 V928 H640 V672 H384 V928 H192 V480 H64 Z"
 # 左箭头：箭尖在 (160,512)，上下倒钩接回箭杆
 ICON_BACK = "M896 416 H512 V160 L160 512 L512 864 V608 H896 Z"
+# 计算器：机身 + 屏幕和按键。这几块是**故意**套在机身里的——EvenOdd 会把它们挖成洞，
+# 正好是描边效果；别改成互不重叠，那样就变成一个实心方块了。
+ICON_CALC = ("M256 96 H768 A64 64 0 0 1 832 160 V864 A64 64 0 0 1 768 928 H256 "
+             "A64 64 0 0 1 192 864 V160 A64 64 0 0 1 256 96 Z "
+             "M288 192 H736 V400 H288 Z "
+             "M320 512 H448 V640 H320 Z M576 512 H704 V640 H576 Z "
+             "M320 720 H448 V816 H320 Z M576 720 H704 V816 H576 Z")
 
 _ACTION_BUTTONS = (
     ("内存优化", "内存优化", "-", "M128 192h768v192H128z M128 448h768v192H128z M256 224v128 M256 480v128"),
@@ -91,6 +98,98 @@ def build_action_buttons(config) -> str:
                      + '" EventData="' + escape_url_attr(event_data) + '" />')
     return ('<Grid Margin="0,12,0,0"><Grid.ColumnDefinitions>' + columns
             + "</Grid.ColumnDefinitions>" + "".join(cells) + "</Grid>")
+
+
+# ============ 页面零件（AI 页和计算器页共用）============
+
+def attr(value) -> str:
+    """属性值转义；换行写成字符引用，否则 XAML 会把属性值截断在第一个换行。"""
+    return escape_attr(value).replace("\n", "&#xA;").replace("\r", "")
+
+
+def url_attr(value) -> str:
+    """URL 用的属性转义（保留花括号，见 escape_url_attr）。"""
+    return escape_url_attr(value)
+
+
+def bind_to(element: str, base: str, endpoint: str) -> str:
+    """生成 EventData：把某个输入框的原文拼到接口地址后面。
+
+    ``{}`` 是 WPF StringFormat 的转义前缀，``{0}`` 才是绑定值。PCL 把输入框
+    原文原样替换进 URL、不做编码，所以框里只能放不含空白字符的短内容。
+    """
+    return ("{Binding Path=Text,ElementName=" + element + ",StringFormat='{}"
+            + base + endpoint + "?q={0}'}")
+
+
+def input_row(name: str, hint: str, height: int = 38, margin: str = "0,8,0,0") -> str:
+    """一个带底色的输入框。"""
+    return ('<Border Margin="' + margin + '" Height="' + str(height)
+            + '" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+            '<local:MyTextBox x:Name="' + name + '" Height="' + str(height)
+            + '" Margin="10,0" HintText="' + attr(hint) + '" '
+            'Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" /></Border>')
+
+
+def help_button(text: str, logo: str, url: str, height: int = 38, column=None,
+                margin: str = "", color: str = "Highlight") -> str:
+    """走「打开帮助」的按钮——PCL 会去拉 ``url`` 对应的 .json/.xaml 并翻开新页。"""
+    attrs = ""
+    if column is not None:
+        attrs += ' Grid.Column="' + str(column) + '"'
+    if margin:
+        attrs += ' Margin="' + margin + '"'
+    if color:
+        attrs += ' ColorType="' + color + '"'
+    return ('<local:MyIconTextButton' + attrs + ' Height="' + str(height) + '" Text="'
+            + escape_attr(text) + '" LogoScale="0.8" Logo="' + logo
+            + '" EventType="打开帮助" EventData="' + url_attr(url) + '" />')
+
+
+def grid2(left: str, right: str, margin: str = "0,8,0,0") -> str:
+    """左右等宽两栏，各自放一个已经带好 Grid.Column 的按钮。"""
+    return ('<Grid Margin="' + margin + '"><Grid.ColumnDefinitions>'
+            '<ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" />'
+            "</Grid.ColumnDefinitions>" + left + right + "</Grid>")
+
+
+def divider(margin: str = "0,20,0,16") -> str:
+    """中间那道渐隐的横线。"""
+    return ('<Border Height="1" Margin="' + margin + '"><Border.Background>'
+            '<LinearGradientBrush StartPoint="0,0" EndPoint="1,0">'
+            '<GradientStop Color="#00000000" Offset="0" />'
+            '<GradientStop Color="#33808080" Offset="0.5" />'
+            '<GradientStop Color="#00000000" Offset="1" />'
+            "</LinearGradientBrush></Border.Background></Border>")
+
+
+def heading(text: str, margin: str = "0,16,0,0") -> str:
+    return ('<TextBlock Text="' + escape_attr(text) + '" FontSize="13" FontWeight="Bold" '
+            'Foreground="{DynamicResource ColorBrush1}" Margin="' + margin + '" />')
+
+
+def note(text: str, margin: str = "0,8,0,0") -> str:
+    return ('<TextBlock Text="' + attr(text) + '" FontSize="11" TextWrapping="Wrap" '
+            'Margin="' + margin + '" Foreground="{DynamicResource ColorBrush3}" />')
+
+
+def nav_row(base: str, refresh_url: str = "", extra_text: str = "",
+            extra_url: str = "") -> str:
+    """页面底部那排：刷新 / 回到某页 / 返回主页。
+
+    「返回主页」专门治「进得太深、左上角要按好几下」：它直接再翻开一份主页
+    （见 ai.handle 里的 ``home`` 动作），一下就到，不用沿路往回退。
+    """
+    items = []
+    if refresh_url:
+        items.append(("刷新结果", ICON_REFRESH, refresh_url))
+    if extra_url:
+        items.append((extra_text, ICON_BACK, extra_url))
+    items.append(("返回主页", ICON_HOME, base + "/home.json"))
+    cells = [help_button(text, logo, url, 36, margin=("8,0,0,0" if index else ""))
+             for index, (text, logo, url) in enumerate(items)]
+    return ('<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" '
+            'Margin="0,18,0,0">' + "".join(cells) + "</StackPanel>")
 
 
 REFRESH_BUTTON = (

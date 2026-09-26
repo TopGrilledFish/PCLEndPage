@@ -43,7 +43,9 @@ from .config import USER_AGENT, VAR_DIR, Config
 from .log import debug, error, out, warn
 from .store import STATS_DB
 from .xaml import (ICON_AI, ICON_BACK, ICON_HOME, ICON_KEY, ICON_REFRESH,
-                   ICON_SAVE, ICON_TRASH, escape_attr, escape_url_attr)
+                   ICON_SAVE, ICON_TRASH, attr, bind_to, divider, escape_attr,
+                   grid2, heading, help_button, input_row, nav_row, note,
+                   url_attr)
 
 JOBS_FILE = VAR_DIR / "ai_jobs.json"
 
@@ -639,25 +641,11 @@ def _fail(config: Config, ip: str, use_own: bool, message: str) -> None:
 
 # ============ 页面构建 ============
 
-def _attr(value) -> str:
-    """属性值转义；换行写成字符引用，否则 XAML 会把属性值截断在第一个换行。"""
-    return escape_attr(value).replace("\n", "&#xA;").replace("\r", "")
-
-
-def _url_attr(value: str) -> str:
-    """URL 用的属性转义（转发到 xaml.escape_url_attr，保留名字方便阅读）。"""
-    return escape_url_attr(value)
-
-
-def _bind(element: str, base: str, endpoint: str) -> str:
-    """生成 ``EventData``：把某个输入框的原文拼到接口地址后面。
-
-    ``{}`` 是 WPF StringFormat 的转义前缀（告诉它后面的大括号是字面量），
-    ``{0}`` 才是绑定值。PCL 会把输入框原文原样替换进去，不做 URL 编码，
-    所以输入框里只能是链接这种不含空白字符的内容。
-    """
-    fmt = "{}" + base + endpoint + "?q={0}"
-    return "{Binding Path=Text,ElementName=" + element + ",StringFormat='" + fmt + "'}"
+# 页面零件现在住在 xaml.py（计算器页也要用），这里起回原来的短名字，
+# 下面几百行正文就不用跟着改。
+_attr = attr
+_url_attr = url_attr
+_bind = bind_to
 
 
 def _status_line(config: Config, ip: str) -> str:
@@ -673,76 +661,14 @@ def _status_line(config: Config, ip: str) -> str:
     return "公用密钥，今天还能用 " + str(left) + " 次"
 
 
-# ============ 页面零件 ============
-
-def _input_row(name: str, hint: str, height: int = 38, margin: str = "0,8,0,0") -> str:
-    """一个带底色的输入框。"""
-    return ('<Border Margin="' + margin + '" Height="' + str(height)
-            + '" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
-            '<local:MyTextBox x:Name="' + name + '" Height="' + str(height)
-            + '" Margin="10,0" HintText="' + _attr(hint) + '" '
-            'Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" /></Border>')
-
-
-def _help_button(text: str, logo: str, url: str, height: int = 38, column=None,
-                 margin: str = "", color: str = "Highlight") -> str:
-    """走「打开帮助」的按钮——PCL 会去拉 ``url`` 对应的 .json/.xaml 并翻开新页。"""
-    attrs = ""
-    if column is not None:
-        attrs += ' Grid.Column="' + str(column) + '"'
-    if margin:
-        attrs += ' Margin="' + margin + '"'
-    if color:
-        attrs += ' ColorType="' + color + '"'
-    return ('<local:MyIconTextButton' + attrs + ' Height="' + str(height) + '" Text="'
-            + escape_attr(text) + '" LogoScale="0.8" Logo="' + logo
-            + '" EventType="打开帮助" EventData="' + _url_attr(url) + '" />')
-
-
-def _grid2(left: str, right: str, margin: str = "0,8,0,0") -> str:
-    """左右等宽两栏，各自放一个已经带好 Grid.Column 的按钮。"""
-    return ('<Grid Margin="' + margin + '"><Grid.ColumnDefinitions>'
-            '<ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" />'
-            "</Grid.ColumnDefinitions>" + left + right + "</Grid>")
-
-
-def _divider(margin: str = "0,20,0,16") -> str:
-    """中间那道渐隐的横线。"""
-    return ('<Border Height="1" Margin="' + margin + '"><Border.Background>'
-            '<LinearGradientBrush StartPoint="0,0" EndPoint="1,0">'
-            '<GradientStop Color="#00000000" Offset="0" />'
-            '<GradientStop Color="#33808080" Offset="0.5" />'
-            '<GradientStop Color="#00000000" Offset="1" />'
-            "</LinearGradientBrush></Border.Background></Border>")
-
-
-def _heading(text: str, margin: str = "0,16,0,0") -> str:
-    return ('<TextBlock Text="' + escape_attr(text) + '" FontSize="13" FontWeight="Bold" '
-            'Foreground="{DynamicResource ColorBrush1}" Margin="' + margin + '" />')
-
-
-def _note(text: str, margin: str = "0,8,0,0") -> str:
-    return ('<TextBlock Text="' + _attr(text) + '" FontSize="11" TextWrapping="Wrap" '
-            'Margin="' + margin + '" Foreground="{DynamicResource ColorBrush3}" />')
-
-
-def _nav_row(base: str, refresh_url: str = "", extra_text: str = "",
-             extra_url: str = "") -> str:
-    """页面底部那排：刷新结果 / 回到某页 / 返回主页。
-
-    「返回主页」是专门解决「进得太深、左上角要按好几下」的：它直接再翻开一份
-    主页（见 handle 里的 ``home`` 动作），一下就到，不用沿路往回退。
-    """
-    items = []
-    if refresh_url:
-        items.append(("刷新结果", ICON_REFRESH, refresh_url))
-    if extra_url:
-        items.append((extra_text, ICON_BACK, extra_url))
-    items.append(("返回主页", ICON_HOME, base + "/home.json"))
-    cells = [_help_button(text, logo, url, 36, margin=("8,0,0,0" if index else ""))
-             for index, (text, logo, url) in enumerate(items)]
-    return ('<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" '
-            'Margin="0,18,0,0">' + "".join(cells) + "</StackPanel>")
+# 页面零件统一从 xaml.py 取（计算器页共用同一套），这里起回短名字。
+_input_row = input_row
+_help_button = help_button
+_grid2 = grid2
+_divider = divider
+_heading = heading
+_note = note
+_nav_row = nav_row
 
 
 def _result_block(config: Config, job: dict | None) -> str:

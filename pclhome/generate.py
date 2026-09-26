@@ -17,7 +17,7 @@ from .log import out, warn
 from .config import CACHE_DIR, PACK_FALLBACK_IMAGE, ROOT, TEMPLATES_DIR, Config, load_config
 from .net import download, fetch_json
 from .sites import build_site_items, mirror_icons
-from .xaml import build_action_buttons, render_template
+from .xaml import ICON_CALC, build_action_buttons, render_template
 
 
 def load_template(name: str) -> str:
@@ -76,6 +76,7 @@ def build_custom_xaml(config: Config, offline: bool = False) -> str:
         "WALLPAPER_URL": wallpaper,
         "SITE_ITEMS": build_site_items(config),
         "ACTION_BUTTONS": build_action_buttons(config),
+        "ICON_CALC": ICON_CALC,
     })
 
 

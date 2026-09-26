@@ -112,6 +112,8 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str) 
         "LUNAR": data.lunar,
         # 欢迎卡片那排按钮里「AI 分析」入口的绝对地址（构建期不知道对外域名）
         "AI_ENTRY": config.resolved_base_url(origin) + "/ai_page.json",
+        # 「在线工具」卡片里计算器的入口
+        "CALC_ENTRY": config.resolved_base_url(origin) + "/calc.json",
     }
     return replace_placeholders(template, values)
 
