@@ -225,8 +225,7 @@ def check_templates(report: Report, config: Config) -> None:
 
     # 模板里用到的 {{TOKEN}} 必须都能被填上（不允许留 {{...}} 裸奔到 PCL 那边）
     provided = {
-        "Custom.xaml.tpl": {"BASE_URL", "WALLPAPER_URL", "SITE_ITEMS", "ACTION_BUTTONS",
-                            "ICON_CALC"},
+        "Custom.xaml.tpl": {"BASE_URL", "WALLPAPER_URL", "SITE_ITEMS", "ACTION_BUTTONS"},
     }
     for name, tokens_ok in provided.items():
         path = TEMPLATES_DIR / name
@@ -346,15 +345,19 @@ def check_rendered(report: Report, config: Config) -> None:
     else:
         report.good("计算器公式抽查通过（" + str(len(known)) + " 个标准答案）")
 
-    # 主页那排按钮：AI 入口必须带上绝对地址
-    for flag, expect in ((False, 3), (True, 4)):
+    # 主页那排按钮：AI 入口和计算器入口都必须带上绝对地址
+    # 三个基础按钮 + 计算器，AI 开着再多一个，所以是 4 / 5
+    for flag, expect in ((False, 4), (True, 5)):
         buttons = build_action_buttons(dataclasses.replace(config, enable_ai=flag))
         count = buttons.count("<local:MyIconTextButton")
         if count != expect:
             report.bad("功能按钮：" + ("开" if flag else "关") + " AI 时应有 " + str(expect)
                        + " 个，实际 " + str(count))
-        elif flag and "__AI_ENTRY__" not in buttons:
-            report.bad("功能按钮里的 AI 入口没留 __AI_ENTRY__ 占位符")
+            continue
+        missing = [token for token in ("__CALC_ENTRY__", "__AI_ENTRY__" if flag else "")
+                   if token and token not in buttons]
+        if missing:
+            report.bad("功能按钮里缺占位符：" + "、".join(missing))
         else:
             report.good("功能按钮 " + str(count) + " 个（AI " + ("开" if flag else "关") + "）")
     # AI 入口是构建期塞进按钮排的，所以「有没有入口」看的是生成物；

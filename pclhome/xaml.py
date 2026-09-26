@@ -78,12 +78,15 @@ _ACTION_BUTTONS = (
 def build_action_buttons(config) -> str:
     """欢迎卡片底部那排功能按钮，启用 AI 时多一个「AI 分析」入口。
 
-    AI 按钮的 EventData 留成 ``__AI_ENTRY__`` 占位符，由请求期填绝对地址：
-    部署时 BASE_URL 常常没配（按 Host 头推导），构建期并不知道对外地址。
+    AI 按钮和计算器按钮的 EventData 都留成 ``__XXX_ENTRY__`` 占位符，由请求期
+    填绝对地址：部署时 BASE_URL 常常没配（按 Host 头推导），构建期并不知道对外地址。
+
+    计算器不依赖任何开关，一直有；AI 那个只在 enable_ai 时加。
     """
     buttons = list(_ACTION_BUTTONS)
     if getattr(config, "enable_ai", False):
         buttons.append(("AI 分析", "打开帮助", "__AI_ENTRY__", ICON_AI))
+    buttons.append(("计算器", "打开帮助", "__CALC_ENTRY__", ICON_CALC))
 
     count = len(buttons)
     columns = "".join('<ColumnDefinition Width="1*" />' for _ in range(count))
