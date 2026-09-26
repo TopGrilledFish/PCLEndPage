@@ -279,22 +279,147 @@ def _calc_uuid(raw: str):
     ]
 
 
+def _java_hash(text: str) -> int:
+    """Java 的 String.hashCode，按 UTF-16 码元算（代理对要拆成两个）。"""
+    data = text.encode("utf-16-be")
+    h = 0
+    for i in range(0, len(data), 2):
+        h = (31 * h + ((data[i] << 8) | data[i + 1])) & 0xFFFFFFFF
+    return h - 0x100000000 if h >= 0x80000000 else h
+
+
 def _calc_seed(raw: str):
     """文本种子对应的数字。Java 的 String.hashCode。"""
     text = raw or ""
     if not text.strip():
         raise ValueError("填一段文字。")
-    data = text.encode("utf-16-be")              # Java 按 UTF-16 码元算，代理对要拆开
-    h = 0
-    for i in range(0, len(data), 2):
-        h = (31 * h + ((data[i] << 8) | data[i + 1])) & 0xFFFFFFFF
-    if h >= 0x80000000:
-        h -= 0x100000000
+    h = _java_hash(text)
     return [
         ("文字", text.strip()),
         ("种子值", str(h)),
         ("无符号", str(h & 0xFFFFFFFF)),
         ("说明", "和游戏里输入这段文字当种子等价。"),
+    ]
+
+
+# ============ 要塞 ============
+#
+# 要塞是分 8 个环摆的，每环个数 3、6、10、15、21、28、36、9，一共 128 个。
+# 环上的角度和半径完全由种子决定，所以这部分能算准；真正的位置还会从这个点
+# 往外找最近的合法生物群系（半径 112 格），那要一整套生物群系生成器，搬不动。
+
+STRONGHOLD_COUNT = 128
+_JAVA_MULT = 0x5DEECE66D                          # java.util.Random 的常数
+_JAVA_ADD = 0xB
+_JAVA_MASK = (1 << 48) - 1
+
+
+def _round_half_away(value: float) -> int:
+    """C 的 round()：.5 一律往远离 0 的方向进，跟 Python 的银行家舍入不一样。"""
+    return int(math.floor(value + 0.5)) if value >= 0 else int(math.ceil(value - 0.5))
+
+
+class _JavaRandom:
+    """java.util.Random：48 位线性同余，Minecraft 拿它做种子随机数。"""
+
+    def __init__(self, seed: int):
+        self.state = (seed ^ _JAVA_MULT) & _JAVA_MASK
+
+    def _next(self, bits: int) -> int:
+        self.state = (self.state * _JAVA_MULT + _JAVA_ADD) & _JAVA_MASK
+        return self.state >> (48 - bits)
+
+    def next_double(self) -> float:
+        return ((self._next(26) << 27) + self._next(27)) / float(1 << 53)
+
+    def next_long(self) -> int:
+        value = (self._next(32) << 32) + self._next(32)
+        return value - (1 << 64) if value >= (1 << 63) else value
+
+
+def _stronghold_pos(angle: float, dist: float):
+    """环上那个点，落到区块的 (4,4)——楼梯就在那儿。dist 的单位是区块。"""
+    x = _round_half_away(math.cos(angle) * dist) * 16 + 8
+    z = _round_half_away(math.sin(angle) * dist) * 16 + 8
+    return ((x & ~15) + 4, (z & ~15) + 4)
+
+
+def _strongholds(seed: int) -> list:
+    """全部 128 个要塞的大致位置，按生成顺序。
+
+    照 cubiomes 的 initFirstStronghold / nextStronghold 搬的（1.19.3 之后那条路，
+    现在的版本都是）。移植完拿 cubiomes 原函数编成 C 跑过一遍，7 个种子 896 个点
+    逐行一致；环的个数也正好是 3/6/10/15/21/28/36/9。
+    """
+    rnd = _JavaRandom(seed)
+    angle = 2 * math.pi * rnd.next_double()
+    dist = 128.0 + (rnd.next_double() - 0.5) * 80.0
+    out = [_stronghold_pos(angle, dist)]
+
+    ringnum, ringmax, ringidx, index = 0, 3, 0, 0
+    while len(out) < STRONGHOLD_COUNT:
+        rnd.next_long()                     # 1.19.3 起每个要塞都会多抽一个 long
+        ringidx += 1
+        angle += 2 * math.pi / ringmax
+        if ringidx == ringmax:              # 换环：起始角度和环半径都重抽
+            ringnum += 1
+            ringidx = 0
+            ringmax = ringmax + 2 * ringmax // (ringnum + 1)
+            if ringmax > STRONGHOLD_COUNT - index:
+                ringmax = STRONGHOLD_COUNT - index
+            angle += rnd.next_double() * 2 * math.pi
+        dist = 128.0 + 6.0 * ringnum * 32.0 + (rnd.next_double() - 0.5) * 80.0
+        out.append(_stronghold_pos(angle, dist))
+        index += 1
+    return out
+
+
+_COMPASS_8 = ("东", "东南", "南", "西南", "西", "西北", "北", "东北")
+
+
+def _compass(dx: float, dz: float) -> str:
+    """八方位。游戏里 +X 是东、+Z 是南。"""
+    angle = math.atan2(dz, dx) % (2 * math.pi)
+    return _COMPASS_8[int((angle + math.pi / 8) / (math.pi / 4)) % 8]
+
+
+def _seed_value(text: str) -> int:
+    """种子的数值：能当整数直接就用，否则按 Java 的 String.hashCode 折成数字。"""
+    try:
+        return int(text.strip())
+    except ValueError:
+        return _java_hash(text)
+
+
+def _calc_stronghold(raw: str):
+    """离你最近的要塞。填 你的X,你的Z,种子。"""
+    parts = [part.strip() for part in (raw or "").replace("，", ",").split(",")]
+    if len(parts) < 3:
+        raise ValueError("要填三样：你的 X、你的 Z、种子，比如 0,0,12345。")
+    try:
+        x, z = float(parts[0]), float(parts[1])
+    except ValueError:
+        raise ValueError("X 和 Z 得填数字。")
+    if not parts[2]:
+        raise ValueError("种子别空着，数字或者一段文字都行。")
+    seed = _seed_value(parts[2])
+
+    best = None
+    for index, (sx, sz) in enumerate(_strongholds(seed), 1):
+        distance = math.hypot(sx - x, sz - z)
+        if best is None or distance < best[0]:
+            best = (distance, index, sx, sz)
+    distance, index, sx, sz = best
+
+    return [
+        ("你在这里", _f(x) + ", " + _f(z)),
+        ("种子", str(seed)),
+        ("最近的要塞", str(sx) + ", " + str(sz)),
+        ("直线距离", _f(distance) + " 格"),
+        ("方位", _compass(sx - x, sz - z) + "边，全世界第 " + str(index) + " 个"),
+        ("说明", "这是按要塞环的生成公式算的点，真正的位置会从这儿往外挪 112 格以内"
+                 "去找合适的生物群系——要算到那一格得有整套生物群系生成器，这儿没有。"),
+        ("说明", "走到这附近再扔末影之眼，比从家里一路扔过去省事。"),
     ]
 
 
@@ -413,6 +538,12 @@ CALCS = [
      "icon": _wiki_icon("Map.png"),
      "hint": "填 6 个数 X1,Y1,Z1,X2,Y2,Z2，或 4 个数 X1,Z1,X2,Z2",
      "run": _calc_distance},
+    {"id": "stronghold", "name": "要塞位置",
+     "info": "填你自己的坐标和地图种子，算出离你最近的要塞在哪儿。",
+     "icon": _wiki_icon("Eye_of_Ender_JE2_BE2.png"),
+     "hint": "填 你的X,你的Z,种子，比如 0,0,12345；种子填数字或者一段文字都行"
+             "（文字里别带空格，带空格这次请求发不出去）",
+     "run": _calc_stronghold},
     {"id": "tick", "name": "刻换算",
      "info": "该计算器可以在游戏刻、红石刻与现实时间间转换。",
      "icon": _wiki_icon("Clock_JE2_BE2.png"),

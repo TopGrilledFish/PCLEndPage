@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import re
 import sys
 import urllib.error
@@ -357,6 +358,8 @@ def check_rendered(report: Report, config: Config) -> None:
 
     # 公式抽查：这几个都有标准答案，改坏了这里会红
     known = [("damage", "8,5", "11"), ("damage", "8,5,0,0,2,0,1", "26.73"),
+             ("stronghold", "0,0,0", "-204, -1692"),
+             ("stronghold", "-8000,3000,0", "-6284, 4196"),
              ("damage", "8,0,5,0,0,0,0", "20"),
              ("exp", "30", "1395"), ("exp", "16", "352"), ("exp", "32", "1628"),
              ("armor", "20 20 8 0", "8"), ("seed", "hello", "99162322"),
@@ -376,6 +379,21 @@ def check_rendered(report: Report, config: Config) -> None:
         report.bad("计算器公式对不上：" + "；".join(wrong))
     else:
         report.good("计算器公式抽查通过（" + str(len(known)) + " 个标准答案）")
+
+    # 要塞：环的个数是 Wiki 写死的 3/6/10/15/21/28/36/9，一共 128 个。
+    # 随机数流错一步坐标照样像模像样，但环会散，这条能抓住。
+    try:
+        points = calc._strongholds(0)
+        counts = [0] * 8
+        for px, pz in points:
+            ring = int(round((math.hypot(px, pz) / 16.0 - 128) / 192))
+            counts[min(max(ring, 0), 7)] += 1
+        if len(points) != 128 or counts != [3, 6, 10, 15, 21, 28, 36, 9]:
+            report.bad("要塞环不对：一共 " + str(len(points)) + " 个，各环 " + str(counts))
+        else:
+            report.good("要塞 128 个，各环 3/6/10/15/21/28/36/9")
+    except Exception as exc:
+        report.bad("要塞计算失败：" + repr(exc))
 
     # 主页那排按钮：AI 入口和计算器入口都必须带上绝对地址
     # 两个基础按钮 + 计算器，AI 开着再多一个，所以是 3 / 4
