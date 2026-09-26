@@ -282,73 +282,156 @@ ADMIN_PAGE = r"""<!DOCTYPE html>
 <title>主页管理后台</title>
 <style>
   :root{
-    --bg:#0d0f12; --card:#15181d; --card2:#1b1f26; --line:#262c35;
-    --ink:#e8eaed; --ink2:#9aa4b2; --ink3:#5f6b7a;
-    --accent:#58a6ff; --ok:#3fb950; --warn:#e5a13a; --danger:#e5544d;
+    --bg:#0b0d10; --card:#12161b; --card2:#171c23; --line:#232a33;
+    --ink:#eef1f5; --ink2:#98a3b2; --ink3:#5e6a7a;
+    --accent:#4d8dff; --accent-ink:#04101f;
+    --ok:#3fb950; --warn:#dfa02f; --danger:#e5544d;
+    --r:12px; --r2:9px;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
-    font:15px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
-  header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;
-    padding:14px 22px;background:rgba(13,15,18,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
-  header h1{font-size:16px;margin:0;font-weight:600}
+    font:14px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .ic{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+  header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;
+    padding:0 22px;height:58px;background:rgba(11,13,16,.86);
+    backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14.5px}
+  .mark{width:23px;height:23px;border-radius:7px;flex:none;display:grid;place-items:center;
+    background:linear-gradient(135deg,#4d8dff,#7c5cff)}
+  .mark svg{width:13px;height:13px}
   header .sp{flex:1}
-  .wrap{max-width:1080px;margin:0 auto;padding:22px;display:grid;gap:16px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
-  .card > h2{margin:0;padding:14px 18px;font-size:14px;font-weight:600;border-bottom:1px solid var(--line);
-    background:var(--card2);display:flex;align-items:center;gap:10px}
-  .card > h2 small{color:var(--ink3);font-weight:400}
-  .body{padding:18px;display:grid;gap:14px}
-  label{display:block;font-size:12px;color:var(--ink2);margin-bottom:6px}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
+    box-shadow:0 1px 2px rgba(0,0,0,.28)}
+  .card > h2{margin:0;padding:13px 17px;font-size:13.5px;font-weight:600;
+    border-bottom:1px solid var(--line);background:var(--card2);display:flex;align-items:center;gap:9px}
+  .card > h2 small{color:var(--ink3);font-weight:400;font-size:12px}
+  .body{padding:17px;display:grid;gap:15px}
+  label{display:block;font-size:12px;color:var(--ink2);margin-bottom:6px;font-weight:500}
   input[type=text],input[type=password],textarea,select{
-    width:100%;background:#0f1216;border:1px solid var(--line);border-radius:9px;color:var(--ink);
-    padding:9px 11px;font:14px/1.6 inherit;outline:none}
-  input:focus,textarea:focus,select:focus{border-color:var(--accent)}
-  textarea{min-height:96px;resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:13px}
-  .row{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
-  button{background:var(--accent);color:#04121f;border:0;border-radius:9px;padding:9px 16px;
-    font:600 14px/1 inherit;cursor:pointer}
-  button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+    width:100%;background:#0d1015;border:1px solid var(--line);border-radius:var(--r2);color:var(--ink);
+    padding:9px 11px;font:13.5px/1.6 inherit;outline:none;transition:border-color .15s,box-shadow .15s}
+  input:focus,textarea:focus,select:focus{border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(77,141,255,.16)}
+  input::placeholder,textarea::placeholder{color:#4a5563}
+  textarea{min-height:96px;resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+  .row{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+
+  button{background:var(--accent);color:var(--accent-ink);border:0;border-radius:var(--r2);
+    padding:9px 15px;font:600 13.5px/1 inherit;cursor:pointer;transition:filter .15s,background .15s}
+  button:hover{filter:brightness(1.08)}
+  button.ghost{background:#1a2029;color:var(--ink);border:1px solid var(--line)}
+  button.ghost:hover{background:#20272f;filter:none}
   button.danger{background:var(--danger);color:#fff}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  .btns{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  button:disabled{opacity:.45;cursor:not-allowed;filter:none}
+  .btns{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
   .hint{font-size:12px;color:var(--ink3)}
-  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
-  .pill.on{background:rgba(63,185,80,.16);color:var(--ok)}
-  .pill.off{background:rgba(154,164,178,.14);color:var(--ink2)}
+  .hint b{color:var(--ink2)}
+
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    font-size:11px;font-weight:600}
+  .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .pill.on{background:rgba(63,185,80,.14);color:var(--ok)}
+  .pill.off{background:rgba(152,163,178,.12);color:var(--ink2)}
+
   table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
-  th{color:var(--ink3);font-weight:500;font-size:12px}
-  .kpi{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
-  .kpi div{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:14px}
-  .kpi b{display:block;font-size:24px;margin-top:4px}
-  #login{max-width:380px;margin:14vh auto}
-  .toast{position:fixed;right:18px;bottom:18px;background:var(--card2);border:1px solid var(--line);
-    border-left:3px solid var(--accent);border-radius:10px;padding:11px 16px;font-size:13px;opacity:0;
-    transform:translateY(8px);transition:.2s;pointer-events:none}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+  tr:last-child td{border-bottom:0}
+  th{color:var(--ink3);font-weight:500;font-size:11.5px;letter-spacing:.3px}
+  td .ghost{padding:5px 10px;font-size:12px}
+
+  .kpi{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+  .kpi div{background:var(--card2);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px}
+  .kpi span{font-size:12px;color:var(--ink3)}
+  .kpi b{display:block;font-size:26px;font-weight:650;margin-top:5px;letter-spacing:-.5px}
+
+  /* 侧栏导航 + 主区 */
+  .shell{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;
+    max-width:1180px;margin:0 auto;padding:22px}
+  .side{position:sticky;top:80px;align-self:start}
+  .side .cap{font-size:11px;font-weight:600;letter-spacing:.7px;text-transform:uppercase;
+    color:var(--ink3);padding:0 11px 8px}
+  #nav{display:grid;gap:3px}
+  #nav button{display:flex;align-items:center;gap:9px;text-align:left;width:100%;
+    background:transparent;color:var(--ink2);border:0;border-radius:var(--r2);
+    padding:9px 11px;font:500 13.5px/1 inherit;cursor:pointer}
+  #nav button:hover{background:#161b22;color:var(--ink);filter:none}
+  #nav button.on{background:rgba(77,141,255,.13);color:#a9c8ff;font-weight:600}
+  #nav .ic{width:15px;height:15px;flex:none;opacity:.85}
+  .main{display:grid;gap:16px;min-width:0}
+
+  .loginwrap{max-width:400px;margin:13vh auto;padding:0 22px}
+  .loginwrap .body{padding:22px;gap:16px}
+  .logo-big{width:44px;height:44px;border-radius:13px;margin:0 auto;
+    background:linear-gradient(135deg,#4d8dff,#7c5cff);display:grid;place-items:center}
+  .logo-big svg{width:22px;height:22px}
+
+  .toast{position:fixed;right:20px;bottom:20px;z-index:50;background:var(--card2);
+    border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;
+    padding:11px 16px;font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.45);max-width:70vw;
+    opacity:0;transform:translateY(10px);transition:.22s;pointer-events:none}
   .toast.show{opacity:1;transform:none}
   .hidden{display:none!important}
+
+  @media (max-width:820px){
+    .shell{grid-template-columns:1fr;gap:14px;padding:16px}
+    .side{position:static}
+    .side .cap{display:none}
+    #nav{display:flex;overflow-x:auto;gap:7px;padding-bottom:2px;scrollbar-width:none}
+    #nav::-webkit-scrollbar{display:none}
+    #nav button{width:auto;white-space:nowrap;border:1px solid var(--line);background:#12161b}
+    #nav button.on{border-color:transparent}
+    header{padding:0 16px}
+    .brand span{display:none}
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>🎮 主页管理后台</h1>
+  <div class="brand">
+    <span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"
+      stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>
+    <span>主页管理后台</span>
+  </div>
   <span id="status" class="pill off">未登录</span>
   <span class="sp"></span>
-  <a href="/Custom.xaml" target="_blank" style="color:var(--accent);font-size:13px">查看主页</a>
+  <a href="/Custom.xaml" target="_blank" style="font-size:13px">查看主页</a>
   <button class="ghost hidden" id="logout">退出</button>
 </header>
 
-<div id="login" class="card">
-  <h2>登录</h2>
-  <div class="body">
-    <div><label>管理令牌</label><input type="password" id="token" placeholder="config.admin_token"></div>
-    <div class="btns"><button id="doLogin">登录</button>
-      <span class="hint">默认令牌是 admin，部署前请务必修改。</span></div>
+<div id="login" class="loginwrap">
+  <div class="card">
+    <div class="body">
+      <div class="logo-big"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"
+        stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></div>
+      <div style="text-align:center">
+        <div style="font-size:16px;font-weight:600">主页管理后台</div>
+        <div class="hint" style="margin-top:3px">输入管理令牌继续</div>
+      </div>
+      <div><label>管理令牌</label>
+        <input type="password" id="token" placeholder="config.admin_token" autocomplete="current-password"></div>
+      <div class="btns"><button id="doLogin" style="width:100%">登录</button></div>
+    </div>
   </div>
 </div>
 
-<div class="wrap hidden" id="panel"></div>
+<div class="shell hidden" id="panel">
+  <aside class="side">
+    <div class="cap">管理</div>
+    <nav id="nav">
+      <button data-sec="overview" class="on"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>总览</button>
+      <button data-sec="content"><svg class="ic" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>首页内容</button>
+      <button data-sec="access"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.4-2.9 7.9-7 9-4.1-1.1-7-4.6-7-9V6z"/></svg>访客与维护</button>
+      <button data-sec="ai"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3l2.2 6.3L20.5 12l-6.3 2.7L12 21l-2.2-6.3L3.5 12l6.3-2.7z"/></svg>AI 分析</button>
+      <button data-sec="system"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2.2"/><circle cx="15" cy="12" r="2.2"/><circle cx="8" cy="17" r="2.2"/></svg>系统</button>
+    </nav>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -388,6 +471,23 @@ function showPanel() {
   $('#status').className = 'pill on';
 }
 
+// 侧栏分区：卡片按 data-sec 归组，一次只显示一组，省得一屏堆九张卡
+let curSec = 'overview';
+
+function showSec(sec) {
+  curSec = sec;
+  document.querySelectorAll('#main .card').forEach(c => {
+    c.classList.toggle('hidden', c.dataset.sec !== sec);
+  });
+  document.querySelectorAll('#nav button').forEach(b => {
+    b.classList.toggle('on', b.dataset.sec === sec);
+  });
+}
+
+document.querySelectorAll('#nav button').forEach(b => {
+  b.onclick = () => showSec(b.dataset.sec);
+});
+
 async function load() {
   const s = await api('state');
   state.store = s.store || {};
@@ -418,10 +518,48 @@ function render() {
   const cd = jsonOf('custom_countdown', {});
   const fests = jsonOf('custom_festivals', []);
 
-  $('#panel').innerHTML = `
-  <div class="card"><h2>KPI <small>近 7 天</small></h2><div class="body"><div class="kpi" id="kpi"></div></div></div>
+  $('#main').innerHTML = `
+  <div class="card" data-sec="overview"><h2>KPI <small>近 7 天</small></h2><div class="body"><div class="kpi" id="kpi"></div></div></div>
 
-  <div class="card"><h2>维护模式 <small>开启后除白名单外都会看到"服务器正在更新"</small></h2>
+  <div class="card" data-sec="overview"><h2>访问统计 <small>近 7 天</small></h2>
+    <div class="body"><div id="stats"></div></div></div>
+
+  <div class="card" data-sec="content"><h2>公告</h2>
+    <div class="body">
+      <div><label>多公告轮播（每行一条，≥2 条生效，最多 4 条，每条 8 秒）</label>
+        <textarea id="banners" placeholder="第一条公告&#10;第二条公告">${esc(textOf('banners'))}</textarea></div>
+      <div class="row">
+        <div><label>单条公告开关</label>
+          <select id="banner_on"><option value="false">关闭</option><option value="true"${banners.enabled ? ' selected' : ''}>开启</option></select></div>
+        <div><label>单条公告内容（≤40 字淡入，超长跑马灯）</label>
+          <input type="text" id="banner_text" value="${esc(banners.text || '')}"></div>
+      </div>
+      <div class="btns"><button id="saveBanner">保存公告</button>
+        <span class="hint">多公告优先于单条公告</span></div>
+    </div></div>
+
+  <div class="card" data-sec="content"><h2>每日一言 <small>每行一条；支持 {date} {weekday} {year}</small></h2>
+    <div class="body">
+      <div class="hint">这里填了就用你的，一天轮换一条，接口不再调用；留空才走 uapis 接口。</div>
+      <textarea id="quote" placeholder="留空则使用 uapis 接口（接口挂了再用内置的 68 条文案）">${esc(textOf('quote_custom'))}</textarea>
+      <div class="btns"><button id="saveQuote">保存</button>
+        <button class="ghost" id="clearQuote">清空，改用接口</button></div>
+    </div></div>
+
+  <div class="card" data-sec="content"><h2>节日与倒计时</h2>
+    <div class="body">
+      <div class="row">
+        <div><label>自定义倒计时名称</label><input type="text" id="cd_name" value="${esc(cd.name || '')}" placeholder="如：我的生日"></div>
+        <div><label>目标日期</label><input type="text" id="cd_date" value="${esc(cd.date || '')}" placeholder="2026-10-01"></div>
+      </div>
+      <div class="btns"><button id="saveCd">保存倒计时</button><button class="ghost" id="clearCd">清除</button></div>
+      <div><label>自定义公历节日（JSON 数组）</label>
+        <textarea id="fests">${esc(JSON.stringify(fests, null, 2))}</textarea>
+        <div class="hint">格式：[{"month":10,"day":1,"name":"国庆节","msg":"祝祖国繁荣昌盛！"}]</div></div>
+      <div class="btns"><button id="saveFests">保存节日</button></div>
+    </div></div>
+
+  <div class="card" data-sec="access"><h2>维护模式 <small>开启后除白名单外都会看到"服务器正在更新"</small></h2>
     <div class="body">
       <div class="row">
         <div><label>开关</label>
@@ -436,41 +574,7 @@ function render() {
       <div class="btns"><button class="ghost" id="saveWl">保存白名单</button></div>
     </div></div>
 
-  <div class="card"><h2>公告</h2>
-    <div class="body">
-      <div><label>多公告轮播（每行一条，≥2 条生效，最多 4 条，每条 8 秒）</label>
-        <textarea id="banners" placeholder="第一条公告&#10;第二条公告">${esc(textOf('banners'))}</textarea></div>
-      <div class="row">
-        <div><label>单条公告开关</label>
-          <select id="banner_on"><option value="false">关闭</option><option value="true"${banners.enabled ? ' selected' : ''}>开启</option></select></div>
-        <div><label>单条公告内容（≤40 字淡入，超长跑马灯）</label>
-          <input type="text" id="banner_text" value="${esc(banners.text || '')}"></div>
-      </div>
-      <div class="btns"><button id="saveBanner">保存公告</button>
-        <span class="hint">多公告优先于单条公告</span></div>
-    </div></div>
-
-  <div class="card"><h2>每日一言 <small>每行一条；支持 {date} {weekday} {year}</small></h2>
-    <div class="body">
-      <textarea id="quote" placeholder="留空则使用内置的 68 条文案">${esc(textOf('quote_custom'))}</textarea>
-      <div class="btns"><button id="saveQuote">保存</button>
-        <button class="ghost" id="clearQuote">恢复内置文案</button></div>
-    </div></div>
-
-  <div class="card"><h2>节日与倒计时</h2>
-    <div class="body">
-      <div class="row">
-        <div><label>自定义倒计时名称</label><input type="text" id="cd_name" value="${esc(cd.name || '')}" placeholder="如：我的生日"></div>
-        <div><label>目标日期</label><input type="text" id="cd_date" value="${esc(cd.date || '')}" placeholder="2026-10-01"></div>
-      </div>
-      <div class="btns"><button id="saveCd">保存倒计时</button><button class="ghost" id="clearCd">清除</button></div>
-      <div><label>自定义公历节日（JSON 数组）</label>
-        <textarea id="fests">${esc(JSON.stringify(fests, null, 2))}</textarea>
-        <div class="hint">格式：[{"month":10,"day":1,"name":"国庆节","msg":"祝祖国繁荣昌盛！"}]</div></div>
-      <div class="btns"><button id="saveFests">保存节日</button></div>
-    </div></div>
-
-  <div class="card"><h2>封禁列表</h2>
+  <div class="card" data-sec="access"><h2>封禁列表</h2>
     <div class="body">
       <div class="row">
         <div><label>IP</label><input type="text" id="block_ip" placeholder="1.2.3.4"></div>
@@ -480,13 +584,10 @@ function render() {
       <div id="blockTable"></div>
     </div></div>
 
-  <div class="card"><h2>访问统计 <small>近 7 天</small></h2>
-    <div class="body"><div id="stats"></div></div></div>
-
-  <div class="card"><h2>AI 日志分析</h2>
+  <div class="card" data-sec="ai"><h2>AI 日志分析</h2>
     <div class="body"><div id="aiBox"></div></div></div>
 
-  <div class="card"><h2>模板</h2>
+  <div class="card" data-sec="system"><h2>模板</h2>
     <div class="body"><div class="btns">
       <button id="regen">重新生成 XAML</button>
       <button class="ghost" id="preview">预览渲染结果</button>
@@ -523,6 +624,7 @@ function render() {
   }
 
   bind();
+  showSec(curSec);
 }
 
 function bind() {
@@ -545,7 +647,7 @@ function bind() {
       .then(() => toast('公告已保存')).then(load);
   };
   $('#saveQuote').onclick = () => set('quote_custom', $('#quote').value);
-  $('#clearQuote').onclick = () => api('delete', { key: 'quote_custom' }).then(() => toast('已恢复内置文案')).then(load);
+  $('#clearQuote').onclick = () => api('delete', { key: 'quote_custom' }).then(() => toast('已清空，改回接口')).then(load);
   $('#saveCd').onclick = () => set('custom_countdown', { name: $('#cd_name').value, date: $('#cd_date').value });
   $('#clearCd').onclick = () => api('delete', { key: 'custom_countdown' }).then(() => toast('已清除')).then(load);
   $('#saveFests').onclick = () => {
