@@ -723,7 +723,12 @@ def build_page(config: Config, ip: str, base_url: str) -> str:
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
         '<TextBlock TextWrapping="Wrap" FontSize="12" LineHeight="20" Margin="0,10,0,0" '
         'Foreground="{DynamicResource ColorBrush3}" '
-        'Text="粘贴mclo.gs日志 或者点击我上传" />'
+        'Text="粘贴mclo.gs日志 或者" />'
+        # 「点击我上传」得能点。MyTextButton 是 PCL 里唯一没有边框、看着就是
+        # 一行字的按钮（见帮助文件「自定义事件」那节），点一下开 mclo.gs。
+        '<local:MyTextButton Margin="0,4,0,0" HorizontalAlignment="Left" '
+        'Text="点击我上传" ToolTip="打开 mclo.gs 上传日志" '
+        'EventType="打开网页" EventData="https://mclo.gs/" />'
 
         + _input_row("ailoginput", "粘贴日志链接，比如 https://mclo.gs/xxxxxxx", 40, "0,14,0,0")
 
