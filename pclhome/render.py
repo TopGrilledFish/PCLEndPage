@@ -154,7 +154,7 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
     所以不能直接用 ``xaml.help_button``。
     """
     from .i18n import t
-    from .xaml import ICON_HOME, escape_url_attr
+    from .xaml import ICON_HOME, escape_url_attr, help_button
 
     if not version:
         version = t("home.footer_version_unknown", lang)
@@ -163,7 +163,13 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         return ('<TextBlock Text="' + escape_attr(text) + '" FontSize="12" '
                 'Foreground="{DynamicResource ColorBrush2}" Margin="0,0,0,6" />')
 
-    def button(text: str, url: str, margin: str = "") -> str:
+    def link_button(text: str, url: str, margin: str = "") -> str:
+        """开浏览器的按钮——EventType 必须是「打开网页」。
+
+        教程文件里写得很清楚：「打开网页」是拿 EventData 当网址开浏览器，
+        「打开帮助」是让 PCL 去拉那个 .json/.xaml 翻成内页。两者不能混——
+        个性设置那个按钮要是写成「打开网页」，就会傻乎乎地把 .json 丢给浏览器。
+        """
         return ('<local:MyIconTextButton' + (' Margin="' + margin + '"' if margin else "")
                 + ' Height="36" Text="' + escape_attr(text) + '" LogoScale="0.8" Logo="'
                 + ICON_HOME + '" ColorType="Highlight" EventType="打开网页" EventData="'
@@ -177,9 +183,11 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         + line(t("home.footer_repo", lang))
         + line(t("home.footer_version", lang, version=version))
         + '<StackPanel Orientation="Horizontal" Margin="0,10,0,0">'
-        + button(t("home.footer_open_repo", lang),
-                 "https://github.com/TopGrilledFish/PCLEndPage", "0,0,8,0")
-        + button(t("home.footer_settings", lang), base + "/settings_page.json")
+        + link_button(t("home.footer_open_repo", lang),
+                      "https://github.com/TopGrilledFish/PCLEndPage", "0,0,8,0")
+        # 个性设置走「打开帮助」，在 PCL 里翻页，不是开浏览器
+        + help_button(t("home.footer_settings", lang), ICON_HOME,
+                      base + "/settings_page.json", 36, color="")
         + "</StackPanel></StackPanel></local:MyCard>")
 
 
