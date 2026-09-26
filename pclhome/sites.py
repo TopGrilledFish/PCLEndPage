@@ -52,8 +52,30 @@ def local_icon(config: Config, slug: str) -> Path | None:
     return None
 
 
+def _grab(slug: str, url: str, referer: str, timeout: float):
+    """下载单个图标并校验格式。成功返回 ``(文件名, 字节数)``，失败返回 None。"""
+    target = ICONS_DIR / (slug + ".ico")           # 占位名，拿到内容后再定扩展名
+    if not download(url, target, timeout=timeout,
+                    headers={"User-Agent": BROWSER_UA, "Referer": referer}):
+        return None
+    payload = target.read_bytes()
+    kind = _detect(payload)
+    if kind is None:
+        target.unlink(missing_ok=True)
+        return None
+    final = ICONS_DIR / (slug + "." + kind)
+    if final != target:
+        target.replace(final)
+    return final.name, len(payload)
+
+
 def mirror_icons(config: Config, offline: bool = False) -> dict[str, str]:
-    """把各站图标下载到 local。返回 ``{slug: "本地文件名" | "失败原因"}``。"""
+    """把各站图标下载到本地。返回 ``{slug: "本地文件名" | "失败原因"}``。
+
+    每个站按 ``icon`` → ``icon_fallback`` 的顺序试。**两段都得试**：CurseForge
+    防盗链、Minecraft Wiki 被 Cloudflare 按 UA 拦、Planet Minecraft 与苦力怕论坛
+    对直连直接 403/302 空响应，这些只有走 favicon 代理才拿得到。
+    """
     report: dict[str, str] = {}
     for site in config.sites:
         slug = site_slug(site)
@@ -62,30 +84,27 @@ def mirror_icons(config: Config, offline: bool = False) -> dict[str, str]:
             report[slug] = existing.name
             continue
 
-        icon_url = str(site.get("icon") or "")
-        if offline or not icon_url.startswith("http"):
+        candidates = [str(site.get(key) or "") for key in ("icon", "icon_fallback")]
+        candidates = [url for url in candidates if url.startswith("http")]
+        if offline:
             report[slug] = "跳过"
+            continue
+        if not candidates:
+            report[slug] = "跳过（没配图标地址）"
             continue
 
         origin = "{0.scheme}://{0.netloc}/".format(urlsplit(site.get("url", "")))
-        target = ICONS_DIR / (slug + ".ico")       # 占位名，拿到内容后再定扩展名
-        if not download(icon_url, target, timeout=config.http_timeout,
-                        headers={"User-Agent": BROWSER_UA, "Referer": origin}):
+        for index, url in enumerate(candidates):
+            grabbed = _grab(slug, url, origin, config.http_timeout)
+            if grabbed is None:
+                continue
+            name, size = grabbed
+            report[slug] = name
+            out("[Icons] " + slug + " → " + name + "（" + str(size) + " 字节"
+                + ("，走备用代理" if index else "") + "）")
+            break
+        else:
             report[slug] = "下载失败"
-            continue
-
-        payload = target.read_bytes()
-        kind = _detect(payload)
-        if kind is None:
-            target.unlink(missing_ok=True)
-            report[slug] = "格式不被 WPF 支持（WebP/SVG/HTML 等）"
-            continue
-
-        final = ICONS_DIR / (slug + "." + kind)
-        if final != target:
-            target.replace(final)
-        report[slug] = final.name
-        out("[Icons] " + slug + " → " + final.name + "（" + str(len(payload)) + " 字节）")
     return report
 
 
