@@ -8,7 +8,7 @@
     </StackPanel.Resources>
     <!-- __BANNER__ -->
     <!-- CanSwap=False 表示不可折叠；不带 IsSwapped（教程要求它必须搭配 CanSwap=True） -->
-    <local:MyCard Title="欢迎" Margin="0,0,0,16" CanSwap="False">
+    <local:MyCard Title="__T_WELCOME__" Margin="0,0,0,16" CanSwap="False">
         <StackPanel Margin="25,40,23,16">
             <StackPanel.Triggers>
                 <EventTrigger RoutedEvent="StackPanel.Loaded">
@@ -59,11 +59,11 @@
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                             <TextBlock Text="__DATE_MONTH__" FontSize="52" FontWeight="Bold" Foreground="White" />
-                            <TextBlock Text=" 月 " FontSize="15" VerticalAlignment="Bottom" Margin="0,0,4,16" Foreground="#D9FFFFFF" />
+                            <TextBlock Text="__T_MONTH_SUFFIX__" FontSize="15" VerticalAlignment="Bottom" Margin="0,0,4,16" Foreground="#D9FFFFFF" />
                             <TextBlock Text="__DATE_DAY__" FontSize="52" FontWeight="Bold" Foreground="White" />
-                            <TextBlock Text=" 日" FontSize="15" VerticalAlignment="Bottom" Margin="0,0,4,16" Foreground="#D9FFFFFF" />
+                            <TextBlock Text="__T_DAY_SUFFIX__" FontSize="15" VerticalAlignment="Bottom" Margin="0,0,4,16" Foreground="#D9FFFFFF" />
                         </StackPanel>
-                        <TextBlock Text="星期__DATE_WEEKDAY__" HorizontalAlignment="Center" FontSize="13" FontWeight="Bold" Foreground="#FFFFFF" Margin="0,10,0,0" />
+                        <TextBlock Text="__T_WEEKDAY__" HorizontalAlignment="Center" FontSize="13" FontWeight="Bold" Foreground="#FFFFFF" Margin="0,10,0,0" />
                         <!-- 农历（uapis.cn 的 lunartime；接口不可用时退回本地换算，都没有则整行消失） -->
                         <!-- __LUNAR__ -->
                     </StackPanel>
@@ -71,7 +71,7 @@
                     <StackPanel VerticalAlignment="Bottom" Margin="20,0,16,12" HorizontalAlignment="Center">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,4">
                             <Border Width="3" Height="10" CornerRadius="1.5" Background="#FFFFFF" Margin="0,0,8,0" VerticalAlignment="Center" />
-                            <TextBlock Text="每日一言" FontSize="11" FontWeight="Bold" Foreground="#D9FFFFFF" VerticalAlignment="Center" />
+                            <TextBlock Text="__T_QUOTE_LABEL__" FontSize="11" FontWeight="Bold" Foreground="#D9FFFFFF" VerticalAlignment="Center" />
                         </StackPanel>
                         <TextBlock Text="__QUOTE__" FontSize="12" Foreground="#D9FFFFFF" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" MaxWidth="540" LineHeight="22" />
                     </StackPanel>
@@ -83,13 +83,14 @@
                  会多塞一个「AI 分析」入口，所以整排由下面的占位符生成。
                  注意：这里的注释不能写出占位符本身，否则会被替换一遍塞进注释里 -->
 
-{{ACTION_BUTTONS}}
+<!-- __ACTION_BUTTONS__ -->
         </StackPanel>
     </local:MyCard>
     <!-- 功能网站：替代原来的"你的信息"卡片，条目与图标由构建期写入（见 config.DEFAULT_SITES） -->
-    <local:MyCard Title="功能网站" Margin="0,0,0,16" CanSwap="False">
+    <local:MyCard Title="__T_SITES_TITLE__" Margin="0,0,0,16" CanSwap="False">
         <StackPanel Margin="25,40,23,16">
-{{SITE_ITEMS}}
+<!-- __SITE_ITEMS__ -->
         </StackPanel>
     </local:MyCard>
+    <!-- __FOOTER_CARD__ -->
 </StackPanel>

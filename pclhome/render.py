@@ -18,13 +18,14 @@ from dataclasses import dataclass, field
 
 from . import ai
 from .config import Config
+from .i18n import DEFAULT_LANG
 from .lunar import build_countdown_xaml, build_festival_banner, get_festival
 from .lunartime import build_lunar_xaml, get_lunar_text
 from .personalize import BeijingDate, format_quote, get_beijing_date, pick_greeting_sub
 from .saying import get_saying
 from .store import Store
 from .weather import WeatherService
-from .xaml import build_multi_banner, build_single_banner, escape_attr
+from .xaml import build_multi_banner, build_single_banner, escape_attr, indent_block
 
 
 @dataclass
@@ -93,16 +94,31 @@ def build_home_data(config: Config, store: Store, weather: WeatherService,
     )
 
 
-def render_homepage(template: str, data: HomeData, config: Config, origin: str) -> str:
-    """把主页模板渲染成最终 XAML。"""
+def render_homepage(template: str, data: HomeData, config: Config, origin: str,
+                    lang: str = DEFAULT_LANG) -> str:
+    """把主页模板渲染成最终 XAML。
+
+    ``lang`` 是这个访客选的语言。模板里那几处静态文字（卡片标题、"月/日"、
+    "星期"、"每日一言"）都写成了 ``__T_xxx__`` 令牌，在这儿按语言填——
+    以前它们是构建期烘死在 Custom.xaml 里的，那样换不了语言。
+    """
+    from . import version
+    from .i18n import DEFAULT_LANG as _D, t
+    from .sites import build_site_items
+    from .xaml import build_action_buttons
+
     date = data.date
+    base = config.resolved_base_url(origin)
+    short = version.current()
 
     values = {
-        "BASE_URL": config.resolved_base_url(origin),
-        "DATE_MONTH": date.month_text,
+        "BASE_URL": base,
+        "DATE_MONTH": t("date.month." + str(date.today.month), lang),
         "DATE_DAY": date.day_text,
-        "DATE_WEEKDAY": date.weekday,
-        "GREETING": date.greeting,
+        # 星期整串在这儿拼：简中是"星期一"，英文就是"Monday"，没有前缀
+        "T_WEEKDAY": escape_attr(t("date.weekday_prefix", lang)
+                                 + t("date.weekday." + str((date.today.weekday() + 1) % 7), lang)),
+        "GREETING": t("greeting." + (date.period or "morning"), lang),
         "GREETING_SUB": escape_attr(data.greeting_sub),
         "QUOTE": escape_attr(data.quote),
         "FESTIVAL_BANNER": data.festival_banner,
@@ -110,12 +126,61 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str) 
         "WEATHER_BODY": data.weather_body,
         "BANNER": data.banner,
         "LUNAR": data.lunar,
+
+        # 模板里原本烘死的四处静态文字
+        "T_WELCOME": escape_attr(t("home.welcome", lang)),
+        "T_MONTH_SUFFIX": escape_attr(t("date.month_suffix", lang)),
+        "T_DAY_SUFFIX": escape_attr(t("date.day_suffix", lang)),
+        "T_QUOTE_LABEL": escape_attr(t("home.quote_label", lang)),
+        "T_SITES_TITLE": escape_attr(t("home.sites_title", lang)),
+
+        # 这三块以前是构建期写死的，现在按语言现算
+        "ACTION_BUTTONS": build_action_buttons(config, lang),
+        "SITE_ITEMS": indent_block(build_site_items(config, lang, base), 8),
+        "FOOTER_CARD": build_footer_card(config, lang, base, short),
+
         # 欢迎卡片那排按钮里「AI 分析」入口的绝对地址（构建期不知道对外域名）
-        "AI_ENTRY": config.resolved_base_url(origin) + "/ai_page.json",
+        "AI_ENTRY": base + "/ai_page.json",
         # 「在线工具」卡片里计算器的入口
-        "CALC_ENTRY": config.resolved_base_url(origin) + "/calc.json",
+        "CALC_ENTRY": base + "/calc.json",
     }
     return replace_placeholders(template, values)
+
+
+def build_footer_card(config: Config, lang: str, base: str, version: str) -> str:
+    """底标：作者、仓库、当前版本，外加个性设置的入口。
+
+    仓库按钮走的是「打开网页」（开浏览器），不是「打开帮助」（翻 PCL 内页），
+    所以不能直接用 ``xaml.help_button``。
+    """
+    from .i18n import t
+    from .xaml import ICON_HOME, escape_url_attr
+
+    if not version:
+        version = t("home.footer_version_unknown", lang)
+
+    def line(text: str) -> str:
+        return ('<TextBlock Text="' + escape_attr(text) + '" FontSize="12" '
+                'Foreground="{DynamicResource ColorBrush2}" Margin="0,0,0,6" />')
+
+    def button(text: str, url: str, margin: str = "") -> str:
+        return ('<local:MyIconTextButton' + (' Margin="' + margin + '"' if margin else "")
+                + ' Height="36" Text="' + escape_attr(text) + '" LogoScale="0.8" Logo="'
+                + ICON_HOME + '" ColorType="Highlight" EventType="打开网页" EventData="'
+                + escape_url_attr(url) + '" />')
+
+    return (
+        '<local:MyCard Title="' + escape_attr(t("home.footer_title", lang))
+        + '" Margin="0,0,0,16" CanSwap="False">'
+        '<StackPanel Margin="25,40,23,16">'
+        + line(t("home.footer_author", lang))
+        + line(t("home.footer_repo", lang))
+        + line(t("home.footer_version", lang, version=version))
+        + '<StackPanel Orientation="Horizontal" Margin="0,10,0,0">'
+        + button(t("home.footer_open_repo", lang),
+                 "https://github.com/TopGrilledFish/PCLEndPage", "0,0,8,0")
+        + button(t("home.footer_settings", lang), base + "/settings_page.json")
+        + "</StackPanel></StackPanel></local:MyCard>")
 
 
 # ============ 替换 ============

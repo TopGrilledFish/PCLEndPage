@@ -65,37 +65,41 @@ ICON_CALC = ("M256 96 H768 A64 64 0 0 1 832 160 V864 A64 64 0 0 1 768 928 H256 "
              "M320 720 H448 V816 H320 Z M576 720 H704 V816 H576 Z")
 
 _ACTION_BUTTONS = (
-    ("内存优化", "内存优化", "-", "M128 192h768v192H128z M128 448h768v192H128z M256 224v128 M256 480v128"),
-    ("刷新数据", "刷新页面", "-",
+    ("btn.memory", "内存优化", "-", "M128 192h768v192H128z M128 448h768v192H128z M256 224v128 M256 480v128"),
+    ("btn.refresh", "刷新页面", "-",
      "M753 271 C691 209 606 171 512 171 c-189 0 -341 153 -341 341 s152 341 341 341 c159 0 292 -109 330 -256 "
      "h-89 c-35 99 -130 171 -241 171 c-141 0 -256 -115 -256 -256 s115 -256 256 -256 c71 0 134 29 180 76 "
      "L555 469 h299 V171 l-100 100 Z"),
 )
 
 
-def build_action_buttons(config) -> str:
+def build_action_buttons(config, lang: str = "") -> str:
     """欢迎卡片底部那排功能按钮，启用 AI 时多一个「AI 分析」入口。
 
     AI 按钮和计算器按钮的 EventData 都留成 ``__XXX_ENTRY__`` 占位符，由请求期
     填绝对地址：部署时 BASE_URL 常常没配（按 Host 头推导），构建期并不知道对外地址。
 
     计算器不依赖任何开关，一直有；AI 那个只在 enable_ai 时加。
+    文案走 i18n（``btn.*``），所以这排按钮是请求期现算的——以前烘死在构建产物里。
     """
+    from .i18n import DEFAULT_LANG, t
+    lang = lang or DEFAULT_LANG
+
     buttons = list(_ACTION_BUTTONS)
     if getattr(config, "enable_ai", False):
-        buttons.append(("AI 分析", "打开帮助", "__AI_ENTRY__", ICON_AI))
-    buttons.append(("计算器", "打开帮助", "__CALC_ENTRY__", ICON_CALC))
+        buttons.append(("btn.ai", "打开帮助", "__AI_ENTRY__", ICON_AI))
+    buttons.append(("btn.calc", "打开帮助", "__CALC_ENTRY__", ICON_CALC))
 
     count = len(buttons)
     columns = "".join('<ColumnDefinition Width="1*" />' for _ in range(count))
     cells = []
-    for index, (text, event_type, event_data, logo) in enumerate(buttons):
+    for index, (key, event_type, event_data, logo) in enumerate(buttons):
         left = "0" if index == 0 else "4"
         right = "0" if index == count - 1 else "4"
         cells.append('<local:MyIconTextButton Grid.Column="' + str(index) + '" Margin="'
-                     + left + ",0," + right + ',0" Height="48" Text="' + escape_attr(text)
-                     + '" LogoScale="0.9" ColorType="Highlight" Logo="' + logo
-                     + '" EventType="' + escape_attr(event_type)
+                     + left + ",0," + right + ',0" Height="48" Text="'
+                     + escape_attr(t(key, lang)) + '" LogoScale="0.9" ColorType="Highlight" Logo="'
+                     + logo + '" EventType="' + escape_attr(event_type)
                      + '" EventData="' + escape_url_attr(event_data) + '" />')
     return ('<Grid Margin="0,12,0,0"><Grid.ColumnDefinitions>' + columns
             + "</Grid.ColumnDefinitions>" + "".join(cells) + "</Grid>")

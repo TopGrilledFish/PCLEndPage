@@ -118,19 +118,33 @@ def icon_url(config: Config, site: dict) -> str:
     return PACK_FALLBACK_IMAGE
 
 
-def build_site_items(config: Config) -> str:
-    """渲染"功能网站"的列表项（构建期调用）。"""
-    base = config.resolved_base_url() or "__BASE_URL__"
+def build_site_items(config: Config, lang: str = "", base: str = "") -> str:
+    """渲染"功能网站"的列表项。
+
+    以前是构建期调的，现在请求期调：站点名和描述要跟着语言走。``base`` 传空时
+    退回 ``config.resolved_base_url()``（构建期没有对外域名，会留 ``__BASE_URL__``
+    交给请求期替换）。
+    """
+    from .i18n import DEFAULT_LANG, has, t
+
+    lang = lang or DEFAULT_LANG
+    base = base or config.resolved_base_url() or "__BASE_URL__"
     blocks = []
     for site in config.sites:
+        slug = site_slug(site)
         logo = icon_url(config, site)
         if logo.startswith("/"):
-            # 构建期还不知道最终域名，留 __BASE_URL__ 交给请求期替换
             logo = base + logo
+        # 站点名与描述来自 config，属于配置数据；i18n 表里按 slug 给覆盖，
+        # 没给就原样用配置里的（用户自己加的站点不必翻）
+        name = t("site." + slug + ".name", lang) if has("site." + slug + ".name", lang) \
+            else site.get("name", "")
+        info = t("site." + slug + ".info", lang) if has("site." + slug + ".info", lang) \
+            else site.get("info", "")
         blocks.append(render_template(ITEM_TEMPLATE, {
             "LOGO": logo,
-            "TITLE": site.get("name", ""),
-            "INFO": site.get("info", ""),
+            "TITLE": name,
+            "INFO": info,
             "URL": site.get("url", ""),
         }))
     return indent_block("\n".join(blocks), 12)

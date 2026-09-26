@@ -35,6 +35,7 @@ from .store import Stats, Store
 from .weather import WeatherService
 from . import ai
 from . import calc
+from . import profiles
 from .xaml import build_fallback_xaml
 
 # 需要"仅 PCL 客户端与真实浏览器可访问"的动态数据端点
@@ -146,9 +147,15 @@ class HomepageService:
     # ---- 主页 ----
 
     def homepage(self, ip: str, origin: str):
-        """返回 ``(渲染好的 XAML, HomeData)``——后者给日志用。"""
+        """返回 ``(渲染好的 XAML, HomeData)``——后者给日志用。
+
+        语言按访客 IP 从个性设置里取（``profiles.lang_for``），没记录就是简中。
+        取语言这一步是纯内存查表，不会让主页变慢。
+        """
         data = build_home_data(self.config, self.store, self.weather, ip, origin)
-        text = render_homepage(self.static_template("Custom.xaml"), data, self.config, origin)
+        lang = profiles.lang_for(ip)
+        text = render_homepage(self.static_template("Custom.xaml"), data, self.config,
+                               origin, lang)
         return text, data
 
     # ---- 拦截：封禁 / 维护 ----
