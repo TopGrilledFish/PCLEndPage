@@ -24,10 +24,11 @@ import math
 import re
 from urllib.parse import parse_qs, unquote
 
+from .config import ICONS_DIR, PACK_FALLBACK_IMAGE
 from .log import warn
 from .xaml import (ICON_BACK, ICON_CALC, ICON_HOME, attr, bind_to, escape_attr,
-                   grid2, heading, help_button, input_row, nav_row, note,
-                   url_attr)
+                   grid2, heading, help_button, indent_block, input_row, nav_row,
+                   note, render_template, url_attr)
 
 
 # ============ 输入 / 输出 ============
@@ -260,28 +261,48 @@ def _calc_seed(raw: str):
     ]
 
 
+def _wiki_icon(name: str) -> str:
+    """Wiki 上同名 120px 缩略图的地址。
+
+    文件名里的括号得写成 ``%28``/``%29``，不然 Wiki 直接 400。这只是**兜底**
+    地址——Wiki 会按 UA 拦非浏览器请求，正常情况下用的是本地镜像那个文件。
+    """
+    return "https://zh.minecraft.wiki/images/thumb/" + name + "/120px-" + name
+
+
+# icon 取自 Wiki 计算器页各工具自己那个图标，和 id 一一对应。
 CALCS = [
     {"id": "nether", "name": "下界坐标", "info": "主世界和下界之间的坐标换算，走传送门用得上。",
+     "icon": _wiki_icon("Netherrack_JE6_BE2.png"),
      "hint": "填 X,Z，比如 800,-1600；也可以填 X,Y,Z", "run": _calc_nether},
     {"id": "chunk", "name": "区块坐标", "info": "坐标落在哪个区块、哪个区域文件里。",
+     "icon": _wiki_icon("Chunk.png"),
      "hint": "填 X,Z，比如 100,-200", "run": _calc_chunk},
     {"id": "distance", "name": "两点距离", "info": "两个坐标之间隔了多远。",
+     "icon": _wiki_icon("Map.png"),
      "hint": "填 6 个数 X1,Y1,Z1,X2,Y2,Z2，或 4 个数 X1,Z1,X2,Z2",
      "run": _calc_distance},
     {"id": "tick", "name": "刻换算", "info": "刻换成秒、分钟、游戏日。红石线路算延时用得上。",
+     "icon": _wiki_icon("Clock_JE2_BE2.png"),
      "hint": "填一个刻数，比如 1200", "run": _calc_tick},
     {"id": "exp", "name": "升级经验", "info": "升到某个等级一共要多少经验。",
+     "icon": _wiki_icon("Experience_Orb_Value_17-36.png"),
      "hint": "填一个等级，比如 30", "run": _calc_exp},
     {"id": "armor", "name": "护甲减伤", "info": "这身装备挨一下会掉多少血。",
+     "icon": _wiki_icon("Iron_Chestplate_%28item%29_JE2_BE2.png"),
      "hint": "填 伤害,护甲，比如 20,20；还能再跟 韧性,保护等级",
      "run": _calc_armor},
     {"id": "stack", "name": "物品堆叠", "info": "一堆东西等于几组、几个潜影盒、几箱。",
+     "icon": _wiki_icon("Bundle_JE3_BE2.png"),
      "hint": "填物品总数，比如 10000", "run": _calc_stack},
     {"id": "color", "name": "颜色值", "info": "十六进制和十进制颜色值互转，写命令时用。",
+     "icon": _wiki_icon("Baroque_%28texture%29_JE1_BE1.png"),
      "hint": "填 #FF8800 或 16746496", "run": _calc_color},
     {"id": "uuid", "name": "玩家 UUID", "info": "离线模式下玩家名对应的 UUID。",
+     "icon": _wiki_icon("Steve_JE5.png"),
      "hint": "填玩家名，比如 Notch", "run": _calc_uuid},
     {"id": "seed", "name": "种子散列值", "info": "把一段文字换成种子数字，和游戏里的算法一致。",
+     "icon": _wiki_icon("Wheat_Seeds_JE1_BE1.png"),
      "hint": "填一段文字，比如 hello", "run": _calc_seed},
 ]
 
@@ -289,6 +310,14 @@ CALC_BY_ID = {item["id"]: item for item in CALCS}
 
 
 # ============ 页面 ============
+
+# 和首页"功能网站"那排列表项同一个样式（见 sites.ITEM_TEMPLATE），
+# 差别只在点击走的是「打开帮助」——翻开计算器自己的页面，不是开浏览器。
+CALC_ITEM_TEMPLATE = ('<local:MyListItem Margin="-5,0,-5,4" Type="Clickable" '
+                      'Logo="{{LOGO|escape}}" Title="{{TITLE|escape}}" '
+                      'Info="{{INFO|escape}}" EventType="打开帮助" '
+                      'EventData="{{URL|escape}}" />')
+
 
 def _rows_block(rows: list) -> str:
     """结果区：左边标签、右边值的两列表格。"""
@@ -307,43 +336,49 @@ def _rows_block(rows: list) -> str:
             + "".join(cells) + "</Grid>")
 
 
-def _calc_grid(base: str, columns: int = 2) -> str:
-    """计算器入口的两列按钮网格。"""
-    rows = (len(CALCS) + columns - 1) // columns
-    defs = "".join('<ColumnDefinition Width="1*" />' for _ in range(columns))
-    rowdefs = "".join('<RowDefinition Height="Auto" />' for _ in range(rows))
-    cells = []
-    for index, item in enumerate(CALCS):
-        col, row = index % columns, index // columns
-        margin = "0,0,5,9" if col == 0 else "5,0,0,9"
-        cells.append(help_button(item["name"], ICON_CALC,
-                                 base + "/calc_" + item["id"] + ".json",
-                                 42, column=col, margin=margin)
-                     .replace("<local:MyIconTextButton",
-                              '<local:MyIconTextButton Grid.Row="' + str(row) + '"', 1))
-    return ('<Grid><Grid.ColumnDefinitions>' + defs + "</Grid.ColumnDefinitions>"
-            '<Grid.RowDefinitions>' + rowdefs + "</Grid.RowDefinitions>"
-            + "".join(cells) + "</Grid>")
+def _calc_logo(base: str, item: dict) -> str:
+    """列表项图标：本地镜像优先，其次 Wiki 原地址，最后 PCL 内置占位图。
+
+    MyListItem 的 Logo 收的是图片地址或文件路径（不像 MyIconTextButton 能收
+    SVG Path），所以一定得给个真图片；都没有时退回 PCL 自带的 pack:// 图，
+    显示成"无图标"但不会破版。
+    """
+    mirror = ICONS_DIR / ("calc-" + item["id"] + ".png")
+    if mirror.is_file() and mirror.stat().st_size > 0:
+        return base + "/images/icons/" + mirror.name
+    return str(item.get("icon") or PACK_FALLBACK_IMAGE)
+
+
+def _calc_items(base: str) -> str:
+    """计算器入口：一行一个列表项，和首页"功能网站"那排同款。"""
+    blocks = []
+    for item in CALCS:
+        blocks.append(render_template(CALC_ITEM_TEMPLATE, {
+            "LOGO": _calc_logo(base, item),
+            "TITLE": item["name"],
+            "INFO": item["info"],
+            "URL": base + "/calc_" + item["id"] + ".json",
+        }))
+    return indent_block("\n".join(blocks), 12)
 
 
 def build_landing(base_url: str) -> str:
     """计算器首页：列出所有能算的。"""
     base = url_attr(base_url)
-    names = "、".join(item["name"] for item in CALCS)
     return (
         '<local:MyCard Title="计算器" CanSwap="False">'
         '<StackPanel Margin="25,40,23,20">'
 
         '<TextBlock Text="Minecraft 计算器" FontSize="24" FontWeight="Bold" '
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
+        + note("以下是本主页上提供的互动式工具与计算器列表。", "0,10,0,0")
         + note("照中文 Minecraft Wiki 的计算器页做的，搬了纯数值的那些。"
                "伤害、旗帜、地图之类的要么要整套数据表、要么得画图，这儿做不了，就没搬。",
-               "0,10,0,0")
-        + note("一共 " + str(len(CALCS)) + " 个：" + names + "。", "0,6,0,0")
+               "0,6,0,0")
 
         + '<TextBlock Text="选一个" FontSize="13" FontWeight="Bold" Margin="0,18,0,10" '
         'Foreground="{DynamicResource ColorBrush1}" />'
-        + _calc_grid(base)
+        + _calc_items(base)
 
         + nav_row(base)
 

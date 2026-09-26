@@ -322,6 +322,22 @@ def check_rendered(report: Report, config: Config) -> None:
             report.bad("计算器页 XML 解析失败：" + "；".join(broken))
         else:
             report.good("计算器 " + str(len(calc.CALCS)) + " 个页面 XML 良构")
+
+        # 入口是一行一个列表项，每个计算器都得有自己那一行，点进去得是它的 .json
+        missing = [item["id"] for item in calc.CALCS
+                   if "/calc_" + item["id"] + ".json" not in landing]
+        if missing:
+            report.bad("计算器列表里缺入口：" + "、".join(missing))
+        else:
+            report.good("计算器列表 " + str(len(calc.CALCS)) + " 个入口齐全")
+
+        # 图标没有本地镜像就会退回 PCL 内置占位图，那行看着就是"无图标"
+        no_icon = [item["id"] for item in calc.CALCS
+                   if calc._calc_logo("", item).startswith("pack:")]
+        if no_icon:
+            report.warning("计算器列表缺图标（会显示成无图标）：" + "、".join(no_icon))
+        else:
+            report.good("计算器列表图标均已镜像到本地")
     except Exception as exc:
         report.bad("计算器页构建失败：" + repr(exc))
 
