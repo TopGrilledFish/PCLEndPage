@@ -7,12 +7,12 @@ Wiki 上列了 27 个，但大部分在这儿做不了——旗帜、信标颜�
 一个输入框就能算完的这些，其余的没搬。近战伤害算搬过来了：武器不内置成一张表，
 攻击力直接让使用者填物品栏里那个数。
 
-**每个计算器只有一个输入框，这是被 PCL 逼的**：事件参数只能绑一个控件——
-
-    EventData="{Binding Path=Text,ElementName=X,StringFormat='...?q={0}'}"
-
-没有把多个框拼起来的办法。所以多值输入统一约定成用空格或逗号分隔，
-具体格式写在输入框的提示文字里，页面上也会再写一遍。
+**输入框的个数**分两种。多数计算器一个框就够，多值输入约定用逗号分隔，
+格式写在框的提示文字里。参数多的（目前只有伤害计算）改成 **一个参数一个框**，
+靠 ``MultiBinding`` 把各框的值拼成一个 ``?q=a,b,c``——单个 ``{Binding}``
+只能绑一个控件，写法见 :func:`pclhome.xaml.help_button_multi`。
+多框拼出来的串里，没填的格子是空串，所以伤害计算用 :func:`_damage_fields`
+按**位置**拆参数，不能像 :func:`_floats` 那样把空串丢掉。
 
 **提交后回到本页**：计算按钮指向的就是当前这个页面的 .json，只是多带一个 ``?q=``，
 所以算完就地出结果，不会在 PCL 的页面栈上多压一层。
@@ -28,8 +28,8 @@ from urllib.parse import parse_qs, unquote
 from .config import ICONS_DIR, PACK_FALLBACK_IMAGE
 from .log import warn
 from .xaml import (ICON_BACK, ICON_CALC, ICON_HOME, attr, bind_to, escape_attr,
-                   grid2, heading, help_button, indent_block, input_row, nav_row,
-                   note, render_template, url_attr)
+                   grid2, heading, help_button, help_button_multi, indent_block,
+                   input_row, nav_row, note, render_template, url_attr)
 
 
 # ============ 输入 / 输出 ============
@@ -65,6 +65,30 @@ def _need(nums, count, what):
 def _nth(nums, index: int) -> float:
     """第 index 个数；没填就按 0 算——伤害计算后面那几个都是可选的。"""
     return nums[index] if index < len(nums) else 0.0
+
+
+def _damage_fields(raw: str, count: int) -> list:
+    """按逗号**位置**拆伤害计算的参数，空着的那格返回 None。
+
+    伤害计算是每个参数一个输入框，拼出来的 URL 里没填的格子就是空串，
+    所以不能像 :func:`_floats` 那样把空串丢掉——丢一个，后面全部串位。
+    """
+    text = raw or ""
+    for ch in "，;；\t":
+        text = text.replace(ch, ",")
+    parts = [part.strip() for part in text.split(",")]
+    nums = []
+    for part in parts[:count]:
+        if not part:
+            nums.append(None)
+            continue
+        try:
+            nums.append(float(part))
+        except ValueError:
+            raise ValueError("每一格只能填数字，空着就当 0。")
+    while len(nums) < count:
+        nums.append(None)
+    return nums
     return nums
 
 
@@ -267,6 +291,20 @@ def _calc_seed(raw: str):
     ]
 
 
+# 伤害计算的输入框，顺序就是拼进 ?q= 的顺序。每个参数一个框，
+# 省得把六七个数字挤在一行里按位置背——那个格式只有写的人记得住。
+DAMAGE_FIELDS = [
+    ("dmg_attack", "攻击力", "空手1 木剑4 石剑5 铁剑6 钻石剑7 下界合金剑8"),
+    ("dmg_sharp", "锋利", "0-5，没有就空着"),
+    ("dmg_smite", "亡灵杀手", "0-5，只对亡灵生物有用"),
+    ("dmg_bane", "节肢杀手", "0-5，只对节肢生物有用"),
+    ("dmg_strength", "力量", "药水效果等级，没有就空着"),
+    ("dmg_weakness", "虚弱", "药水效果等级，没有就空着"),
+    ("dmg_crit", "暴击", "填 1 是暴击，空着或 0 都不是"),
+    ("dmg_charge", "充能 %", "0-100，空着按 100"),
+]
+
+
 def _calc_damage(raw: str):
     """Java 版近战伤害。
 
@@ -281,21 +319,23 @@ def _calc_damage(raw: str):
     只做 Java 版：基岩版的附魔和力量是另一套加法（每级 +3/-4、附魔 ×1.25），
     加上去这行输入就更没法填了。也不管重锤下落和矛冲锋——那俩要额外的数据。
     """
-    nums = _floats(raw)
-    if nums is None:
-        raise ValueError("只能填数字，多个数用逗号隔开。")
-    if not nums:
-        raise ValueError("至少填个攻击力，比如 8。")
+    if not (raw or "").strip(" ,，;；\t"):
+        raise ValueError("至少要填攻击力，比如 8。")
+    nums = _damage_fields(raw, len(DAMAGE_FIELDS))
 
-    attack = _nth(nums, 0)
-    sharp = int(_nth(nums, 1))
-    smite = int(_nth(nums, 2))
-    bane = int(_nth(nums, 3))
-    strength = int(_nth(nums, 4))
-    weakness = int(_nth(nums, 5))
-    want_crit = _nth(nums, 6) > 0
-    charge = _nth(nums, 7) / 100 if len(nums) > 7 else 1.0
-    charge = min(max(charge, 0.0), 1.0)
+    def filled(index: int, default: float = 0.0) -> float:
+        """第 index 格里填的数；那格空着就用 default。"""
+        value = nums[index]
+        return default if value is None else value
+
+    attack = filled(0)
+    sharp = int(filled(1))
+    smite = int(filled(2))
+    bane = int(filled(3))
+    strength = int(filled(4))
+    weakness = int(filled(5))
+    want_crit = filled(6) > 0
+    charge = min(max(filled(7, 100.0) / 100.0, 0.0), 1.0)
 
     extra = []
     # 原版里锋利和亡灵/节肢杀手不会同时挂在同一件武器上，Wiki 那个计算器
@@ -359,9 +399,7 @@ CALCS = [
     {"id": "damage", "name": "伤害计算",
      "info": "此计算器是一个通用近战伤害计算器，可以指定游戏内已知的武器或自定义武器进行伤害计算。",
      "icon": _wiki_icon("Strength_JE3_BE2.png"),
-     "hint": "至少填攻击力（空手 1、钻石剑 7、下界合金剑 8）；后面可以依次跟 锋利,"
-             "亡灵杀手,节肢杀手,力量,虚弱,暴击0或1,充能%",
-     "run": _calc_damage},
+     "fields": DAMAGE_FIELDS, "run": _calc_damage},
     {"id": "nether", "name": "主世界与下界坐标互换",
      "info": "该计算器可以在主世界与下界间转换相对应的坐标。",
      "icon": _wiki_icon("Netherrack_JE6_BE2.png"),
@@ -450,6 +488,34 @@ def _calc_logo(base: str, item: dict) -> str:
     return str(item.get("icon") or PACK_FALLBACK_IMAGE)
 
 
+def _field_row(name: str, label: str, hint: str, margin: str) -> str:
+    """一行参数：左边标签，右边一个输入框。"""
+    return ('<Grid Margin="' + margin + '"><Grid.ColumnDefinitions>'
+            '<ColumnDefinition Width="82" /><ColumnDefinition Width="1*" />'
+            "</Grid.ColumnDefinitions>"
+            '<TextBlock Grid.Column="0" Text="' + escape_attr(label) + '" FontSize="12" '
+            'VerticalAlignment="Center" Foreground="{DynamicResource ColorBrush2}" />'
+            '<Border Grid.Column="1" Height="34" Background="{DynamicResource ColorBrush7}" '
+            'CornerRadius="5">'
+            '<local:MyTextBox x:Name="' + name + '" Height="34" Margin="10,0" HintText="'
+            + attr(hint) + '" Foreground="{DynamicResource ColorBrush2}" '
+            'VerticalAlignment="Center" /></Border></Grid>')
+
+
+def _field_form(base: str, item: dict) -> str:
+    """一个参数一个输入框，最后一个按钮把它们拼成 ``?q=a,b,c``。
+
+    参数多的计算器（现在只有伤害计算）用这个，别把六七个数字挤进一行
+    让人按位置背。
+    """
+    fields = item["fields"]
+    rows = [_field_row(name, label, hint, "0,14,0,8" if index == 0 else "0,0,0,8")
+            for index, (name, label, hint) in enumerate(fields)]
+    rows.append(help_button_multi("计算", ICON_CALC, base + "/calc_" + item["id"] + ".json",
+                                  [name for name, _label, _hint in fields], 44, "0,6,0,0"))
+    return "".join(rows)
+
+
 def _calc_items(base: str) -> str:
     """计算器入口：一行一个列表项，和首页"功能网站"那排同款。"""
     blocks = []
@@ -510,6 +576,16 @@ def build_calc_page(item: dict, raw: str, base_url: str) -> str:
     else:
         result = ''
 
+    if item.get("fields"):
+        controls = _field_form(base, item)
+    else:
+        controls = (input_row("calcinput", item["hint"], 40, "0,14,0,0")
+                    + note("要填多个数就用逗号隔开，别用空格——PCL 是把输入框里的字原样拼进"
+                           "网址的，中间夹空格这次请求就发不出去。")
+                    + help_button("计算", ICON_CALC,
+                                  bind_to("calcinput", base, "/calc_" + item["id"] + ".json"),
+                                  44, margin="0,10,0,0"))
+
     return (
         '<local:MyCard Title="' + escape_attr(item["name"]) + '" CanSwap="False">'
         '<StackPanel Margin="25,40,23,20">'
@@ -518,12 +594,7 @@ def build_calc_page(item: dict, raw: str, base_url: str) -> str:
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
         + note(item["info"], "0,10,0,0")
 
-        + input_row("calcinput", item["hint"], 40, "0,14,0,0")
-        + note("要填多个数就用逗号隔开，别用空格——PCL 是把输入框里的字原样拼进"
-               "网址的，中间夹空格这次请求就发不出去。")
-        + help_button("计算", ICON_CALC,
-                      bind_to("calcinput", base, "/calc_" + item["id"] + ".json"), 44,
-                      margin="0,10,0,0")
+        + controls
 
         + result
 

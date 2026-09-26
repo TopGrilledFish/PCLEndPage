@@ -331,6 +331,20 @@ def check_rendered(report: Report, config: Config) -> None:
         else:
             report.good("计算器列表 " + str(len(calc.CALCS)) + " 个入口齐全")
 
+        # 伤害计算是一个参数一个输入框，靠 MultiBinding 把各框拼成一个 ?q=；
+        # 绑定少了或者名字对不上，那个「计算」按钮就点不动。
+        page = calc.build_calc_page(calc.CALC_BY_ID["damage"], "", "http://localhost")
+        boxes = [name for name, _label, _hint in calc.DAMAGE_FIELDS]
+        lost = [name for name in boxes if 'x:Name="' + name + '"' not in page]
+        if "MultiBinding" not in page or lost:
+            report.bad("伤害计算的多输入框没拼起来"
+                       + ("，缺：" + "、".join(lost) if lost else "（没有 MultiBinding）"))
+        elif page.count("<Binding ") != len(boxes):
+            report.bad("伤害计算的绑定数量对不上：应有 " + str(len(boxes)) + " 个，实际 "
+                       + str(page.count("<Binding ")))
+        else:
+            report.good("伤害计算 " + str(len(boxes)) + " 个输入框已接上计算按钮")
+
         # 没有本地镜像就会退回 Wiki 远程地址（Wiki 按 UA 拦，多半拉不到），
         # 再不行才是 PCL 内置占位图。两种情况都算"这行没图标"。
         no_icon = [item["id"] for item in calc.CALCS
