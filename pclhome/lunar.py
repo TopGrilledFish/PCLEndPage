@@ -158,6 +158,20 @@ def qingming_day(year: int) -> int:
 # 按节气定的节日：名字 → (公历月, 算第几天的函数)
 _TERM_DAYS = {"qingming": (4, qingming_day)}
 
+# 按"某月第几个星期几"定的节日：名字 → (公历月, 星期几, 第几个)。
+# 星期几用 date.weekday() 的编号：周一 0 …… 周日 6。
+_RULES = {
+    "mothers_day": (5, 6, 2),      # 5 月第 2 个星期日
+    "fathers_day": (6, 6, 3),      # 6 月第 3 个星期日
+    "thanksgiving": (11, 3, 4),    # 11 月第 4 个星期四
+}
+
+
+def nth_weekday(year: int, month: int, weekday: int, nth: int) -> date:
+    """某年某月的第 ``nth`` 个星期几。"""
+    first = date(year, month, 1)
+    return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (nth - 1))
+
 
 def festival_key(item: dict, kind: str) -> str:
     """一条节日的词条键前缀。自己写了 ``key`` 就用它，否则按「月-日」拼。
@@ -193,6 +207,13 @@ def festival_dates(item: dict, today: date) -> list:
             return []
         month, day_of = found
         return [date(y, month, day_of(y)) for y in (today.year, today.year + 1)]
+    rule = item.get("rule")
+    if rule:
+        found = _RULES.get(str(rule))
+        if not found:
+            return []
+        month, weekday, nth = found
+        return [nth_weekday(y, month, weekday, nth) for y in (today.year, today.year + 1)]
     if "month" in item:
         out = []
         for year in (today.year, today.year + 1):
@@ -215,16 +236,14 @@ def festival_dates(item: dict, today: date) -> list:
 
 
 def _solar_hit(item: dict, today: date) -> bool:
-    term = item.get("term")
-    if term:
-        found = _TERM_DAYS.get(str(term))
-        if not found:
-            return False
-        month, day_of = found
-        return today.month == month and today.day == day_of(today.year)
-    if "month" not in item:
+    """今天是不是这条公历节日。农历那几条不走这儿（见 ``_lunar_hit``）。
+
+    "算得出日期"的（节气、按星期算的）直接借 ``festival_dates`` 判，省得三处
+    各写一遍同样的分支；它们不算农历，代价很小。
+    """
+    if "lm" in item:
         return False
-    return int(item["month"]) == today.month and int(item["day"]) == today.day
+    return today in festival_dates(item, today)
 
 
 def _as_int(value):
@@ -275,8 +294,14 @@ def build_festival_banner(festival: dict | None, lang: str = DEFAULT_LANG) -> st
 
 
 def _countdown_line(name: str, diff: int, lang: str) -> str:
-    return (t("lunar.countdown_today", lang, name=name) if diff == 0
-            else t("lunar.countdown_left", lang, name=name, days=diff))
+    """倒计时那句。``diff == 1`` 单拎一句出来——英文 "{days} days" 到那天会变成
+    "1 days to go"，中文那边这句话跟 ``countdown_left`` 一样，只是为了三种语言的
+    键集合保持一致才单列。"""
+    if diff == 0:
+        return t("lunar.countdown_today", lang, name=name)
+    if diff == 1:
+        return t("lunar.countdown_one", lang, name=name)
+    return t("lunar.countdown_left", lang, name=name, days=diff)
 
 
 def build_countdown_xaml(today: date, custom: dict | None = None, extra: list | None = None,
