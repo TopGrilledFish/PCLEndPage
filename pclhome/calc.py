@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, unquote
 
 from .config import ICONS_DIR, PACK_FALLBACK_IMAGE
 from .i18n import DEFAULT_LANG, t
+from . import palette
 from .log import warn
 from .xaml import (ICON_BACK, ICON_CALC, ICON_HOME, attr, bind_to, escape_attr,
                    grid2, heading, help_button, indent_block, input_row, nav_row,
@@ -751,7 +752,8 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
 
     # 列表页单独判，别塞进下面那个正则（/calc.xaml 里没有下划线，匹配不上）
     if path == "/calc.xaml":
-        return _xaml_response(build_landing(base, lang))
+        page = build_landing(base, lang)
+        return _xaml_response(palette.apply(page, profiles.PROFILES.palette_for(ip)))
 
     match = re.match(r"^/calc_([a-z]+)\.xaml$", path)
     if not match:
@@ -761,7 +763,8 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
         return None
 
     params = parse_query(query)
-    return _xaml_response(build_calc_page(item, params.get("q", ""), base, lang))
+    page = build_calc_page(item, params.get("q", ""), base, lang)
+    return _xaml_response(palette.apply(page, profiles.PROFILES.palette_for(ip)))
 
 
 def json_meta(title: str, desc: str) -> str:

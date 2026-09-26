@@ -41,6 +41,8 @@ from urllib.parse import parse_qs, unquote
 
 from .config import USER_AGENT, VAR_DIR, Config
 from .i18n import DEFAULT_LANG, t
+from . import palette
+from . import profiles
 from .log import debug, error, out, warn
 from .store import STATS_DB
 from .xaml import (ICON_AI, ICON_BACK, ICON_HOME, ICON_KEY, ICON_REFRESH,
@@ -999,10 +1001,14 @@ def _xaml_response(body: str):
     return Response.xaml(body)
 
 
+def _styled(body: str, ip: str) -> str:
+    """弹窗也要套上访客选的配色——它和页面一样是我们自己拼的 XAML。"""
+    return palette.apply(body, profiles.PROFILES.palette_for(ip))
+
+
 def handle(service, path: str, query: str, ip: str, origin: str = ""):
     """处理 ``/ai*`` 请求；不是我们的路径就返回 None。"""
-    # 语言查一下就能拿到（纯内存查表），先算出来给下面所有分支用
-    from . import profiles
+    # 语言与配色都是纯内存查表，先算出来给下面所有分支用
     params = parse_query(query)
     lang = profiles.lang_for(ip)
 
@@ -1021,10 +1027,13 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
     home_url = base + "/home.json"
 
     if action == "page":
-        return _xaml_response(build_page(config, ip, base, lang))
+        return _xaml_response(palette.apply(build_page(config, ip, base, lang),
+                                          profiles.PROFILES.palette_for(ip)))
 
     if action == "own_page":
-        return _xaml_response(build_own_page(config, ip, base, lang))
+        return _xaml_response(
+            palette.apply(build_own_page(config, ip, base, lang),
+                          profiles.PROFILES.palette_for(ip)))
 
     if action == "home":
         # 这些页面是一层层叠着开的，想回主页就得按好几下左上角。
@@ -1034,54 +1043,54 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
             return _xaml_response(body)
         except Exception as exc:
             warn("[AI] 返回主页时组装失败：" + repr(exc))
-            return _xaml_response(build_popup(
+            return _xaml_response(_styled(build_popup(
                 t("ai.err.home_failed", lang), t("ai.err.home_failed_msg", lang), "Yellow",
-                back=page_url, home=home_url, lang=lang))
+                back=page_url, home=home_url, lang=lang)))
 
     if action == "savekey":
         if set_own_key(ip, params.get("q", "")):
-            return _xaml_response(build_popup(
+            return _xaml_response(_styled(build_popup(
                 t("ai.popup.key_saved", lang), t("ai.popup.key_saved_msg", lang),
-                back=own_url, home=home_url, lang=lang))
-        return _xaml_response(build_popup(
+                back=own_url, home=home_url, lang=lang)))
+        return _xaml_response(_styled(build_popup(
             t("ai.popup.key_empty", lang), t("ai.popup.key_empty_msg", lang),
-            "Yellow", back=own_url, home=home_url, lang=lang))
+            "Yellow", back=own_url, home=home_url, lang=lang)))
 
     if action in ("base_openai", "base_anthropic"):
         protocol = "openai" if action == "base_openai" else "anthropic"
         if not get_own_key(ip):
-            return _xaml_response(build_popup(
+            return _xaml_response(_styled(build_popup(
                 t("ai.popup.need_key", lang), t("ai.popup.need_key_base", lang),
-                "Yellow", back=own_url, home=home_url, lang=lang))
+                "Yellow", back=own_url, home=home_url, lang=lang)))
         set_own_base(ip, params.get("q", ""), protocol)
-        return _xaml_response(build_popup(
+        return _xaml_response(_styled(build_popup(
             t("ai.popup.base_saved", lang, protocol=protocol_name(protocol, lang)),
             t("ai.popup.now", lang, desc=describe_own_key(ip, lang)),
-            back=own_url, home=home_url, lang=lang))
+            back=own_url, home=home_url, lang=lang)))
 
     if action == "savemodel":
         if not get_own_key(ip):
-            return _xaml_response(build_popup(
+            return _xaml_response(_styled(build_popup(
                 t("ai.popup.need_key", lang), t("ai.popup.need_key_model", lang),
-                "Yellow", back=own_url, home=home_url, lang=lang))
+                "Yellow", back=own_url, home=home_url, lang=lang)))
         set_own_model(ip, params.get("q", ""))
-        return _xaml_response(build_popup(
+        return _xaml_response(_styled(build_popup(
             t("ai.popup.model_saved", lang),
             t("ai.popup.model_saved_msg", lang, desc=describe_own_key(ip, lang)),
-            back=own_url, home=home_url, lang=lang))
+            back=own_url, home=home_url, lang=lang)))
 
     if action == "clearkey":
         had = clear_own_key(ip)
-        return _xaml_response(build_popup(
+        return _xaml_response(_styled(build_popup(
             t("ai.popup.cleared" if had else "ai.popup.nothing", lang),
             t("ai.popup.cleared_msg" if had else "ai.popup.nothing_msg", lang),
-            back=own_url, home=home_url, lang=lang))
+            back=own_url, home=home_url, lang=lang)))
 
     ok, message = submit(config, ip, params.get("q", ""), use_own=(action == "own"), lang=lang)
-    return _xaml_response(build_popup(
+    return _xaml_response(_styled(build_popup(
         t("ai.popup.started" if ok else "ai.popup.not_started", lang), message,
         "Blue" if ok else "Yellow",
-        back=own_url if action == "own" else page_url, home=home_url, lang=lang))
+        back=own_url if action == "own" else page_url, home=home_url, lang=lang)))
 
 
 def parse_query(query: str) -> dict:

@@ -36,6 +36,7 @@ from .store import Stats, Store
 from .weather import WeatherService
 from . import ai
 from . import calc
+from . import palette
 from . import profiles
 from . import settings
 from .xaml import build_fallback_xaml
@@ -172,7 +173,7 @@ class HomepageService:
         data = build_home_data(self.config, self.store, self.weather, ip, origin, lang)
         text = render_homepage(self.static_template("Custom.xaml"), data, self.config,
                                origin, lang)
-        return text, data
+        return palette.apply(text, profiles.PROFILES.palette_for(ip)), data
 
     # ---- 拦截：封禁 / 维护 ----
 

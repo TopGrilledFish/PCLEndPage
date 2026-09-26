@@ -563,6 +563,40 @@ def check_rendered(report: Report, config: Config) -> None:
         else:
             report.good("AI 入口地址已在请求期替换")
 
+    # 卡片配色：配色是"整体换号"实现的（见 palette.py），前提是**我们生成的
+    # XAML 里只出现那四个角色号**。这条守住那个前提——哪天顺手写了个
+    # ColorBrush5，换号就会漏掉它，页面颜色会半生不熟。
+    try:
+        from . import palette as pal
+        from . import settings as settings_module
+        bodies = list(_english_pages(config))
+        bodies.append(("主页", _fake_render(config, "zh-hans")))
+        bodies.append(("设置页", settings_module.build_settings_page(
+            "http://localhost", "203.0.113.7", "")))
+
+        stray = [(label, pal.stray_brushes(body)) for label, body in bodies
+                 if pal.stray_brushes(body)]
+        if stray:
+            report.bad("页面里用了角色号以外的浓度（配色会漏改）："
+                       + "；".join(label + " " + ",".join(nums) for label, nums in stray[:4]))
+        else:
+            report.good("配色角色号干净（" + str(len(bodies)) + " 个页面只用到 "
+                        + "/".join(str(n) for n in sorted(pal.ROLE_BRUSH.values())) + "）")
+
+        # 换号本身：挑一档把四个角色换到四个不同的号，确认换得干净
+        chosen = {"panel": 8, "text": 3, "muted": 5, "dim": 4}
+        allowed = {str(n) for n in chosen.values()}
+        leftover = [(label, sorted(set(pal._BRUSH_RE.findall(pal.apply(body, chosen)))
+                                   - allowed)) for label, body in bodies]
+        bad = [(label, nums) for label, nums in leftover if nums]
+        if bad:
+            report.bad("配色换号没换干净：" + "；".join(
+                label + " 还留着 " + ",".join(nums) for label, nums in bad[:4]))
+        else:
+            report.good("配色换号生效（" + str(len(bodies)) + " 个页面全部换到选定档位）")
+    except Exception as exc:
+        report.bad("配色检查失败：" + repr(exc))
+
     # 关键内容抽查
     if "今日一言" in homepage or "每日一言" in homepage:
         report.good("每日一言区块存在")

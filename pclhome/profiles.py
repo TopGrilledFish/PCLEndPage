@@ -114,13 +114,21 @@ class Profiles:
         record = self.by_ip(ip)
         return normalize_lang((record or {}).get("lang") or DEFAULT_LANG)
 
+    def palette_for(self, ip: str) -> dict:
+        """主页渲染时用：这个 IP 选的配色（四个颜色号）。"""
+        from .palette import brushes
+        return brushes(self.by_ip(ip))
+
     # ---- 写入 ----
 
-    def bind(self, ip: str, name: str = "", lang: str = ""):
+    def bind(self, ip: str, name: str = "", lang: str = "",
+             panel=None, text=None):
         """记下这个 IP 的设置。返回 (记录, 是否是新建的)。
 
         找记录的次序：这个 IP 已有的 → 同名记录（把新 IP 追加进去）→ 都没有就新建。
+        ``panel`` / ``text`` 是配色档位，传 None 表示这次不动它。
         """
+        from .palette import PANEL_CHOICES, TEXT_CHOICES, normalize
         ip = (ip or "").strip()
         lang = normalize_lang(lang) if lang else ""
         name = (name or "").strip()[:_NAME_MAX]
@@ -149,6 +157,10 @@ class Profiles:
                 record["name"] = name
             if lang:
                 record["lang"] = lang
+            if panel is not None:
+                record["panel"] = normalize(panel, PANEL_CHOICES, 7)
+            if text is not None:
+                record["text"] = normalize(text, TEXT_CHOICES, 1)
             record["updated"] = _now()
 
             removed = self._cleanup()
@@ -194,10 +206,16 @@ def _checksum(payload: str) -> str:
 def encode_code(record: dict) -> str:
     """把一份设置编成个性码。"""
     import base64
+    from .palette import DEFAULTS as PALETTE_DEFAULTS, brushes
     data = {"lang": normalize_lang(record.get("lang") or DEFAULT_LANG)}
     name = (record.get("name") or "").strip()
     if name:
         data["name"] = name
+    # 配色只在不是默认档时才写进码里：默认档的人拿到的码短一点、也好看一点
+    palette = brushes(record)
+    for role in ("panel", "text"):
+        if palette[role] != PALETTE_DEFAULTS[role]:
+            data[role] = palette[role]
     raw = json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     body = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
     return CODE_PREFIX + "-" + body + "-" + _checksum(body)
@@ -206,6 +224,7 @@ def encode_code(record: dict) -> str:
 def decode_code(code: str) -> dict | None:
     """解个性码。格式不对、校验位对不上都返回 None（调用方给"码不对"的提示）。"""
     import base64
+    from .palette import PANEL_CHOICES, TEXT_CHOICES, normalize
     text = (code or "").strip()
     parts = text.split("-")
     if len(parts) != 3 or parts[0] != CODE_PREFIX:
@@ -224,4 +243,8 @@ def decode_code(code: str) -> dict | None:
     name = data.get("name")
     if isinstance(name, str) and name.strip():
         out["name"] = name.strip()[:_NAME_MAX]
+    if "panel" in data:
+        out["panel"] = normalize(data["panel"], PANEL_CHOICES, 7)
+    if "text" in data:
+        out["text"] = normalize(data["text"], TEXT_CHOICES, 1)
     return out

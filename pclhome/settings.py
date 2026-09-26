@@ -18,6 +18,7 @@ import json
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs, unquote
 
+from . import palette
 from . import profiles
 from .i18n import DEFAULT_LANG, LANG_NAMES, LANGS, normalize_lang, t
 from .log import warn
@@ -96,6 +97,47 @@ def _lang_buttons(base: str, lang: str) -> str:
     return '<StackPanel Orientation="Horizontal" Margin="0,8,0,0">' + "".join(cells) + "</StackPanel>"
 
 
+#: 配色可选的档位。数字就是 PCL 主题色的浓度（见 palette.py），
+#: 色块 5~8 由深到浅，文字 1~3 由深到浅。
+_COLOR_CHOICES = {"panel": palette.PANEL_CHOICES, "text": palette.TEXT_CHOICES}
+_COLOR_DEFAULT = {"panel": palette.DEFAULTS["panel"], "text": palette.DEFAULTS["text"]}
+
+
+def _swatch_row(base: str, lang: str, role: str, current: int) -> str:
+    """一行配色按钮：每个档位一个，当前那个用 MyHint 标出来。"""
+    cells = []
+    for level in _COLOR_CHOICES[role]:
+        mark = "✓ " if level == current else ""
+        cells.append(help_button(
+            mark + t("settings.color_level", lang, n=level), ICON_KEY,
+            base + "/settings_page.json?" + role + "=" + str(level),
+            34, margin="0,0,6,0", color="Highlight" if level == current else ""))
+    return ('<StackPanel Orientation="Horizontal" Margin="0,8,0,0">'
+            + "".join(cells) + "</StackPanel>")
+
+
+def _color_buttons(base: str, lang: str, record) -> str:
+    """配色区：上面一行选色块浓度，下面一行选文字浓度，再给个效果预览。"""
+    chosen = palette.brushes(record)
+    rows = []
+    for role, key in (("panel", "settings.color_panel"), ("text", "settings.color_text")):
+        rows.append('<TextBlock Text="' + attr(t(key, lang)) + '" FontSize="12" Margin="0,10,0,0" '
+                    'Foreground="{DynamicResource ColorBrush2}" />')
+        rows.append(_swatch_row(base, lang, role, chosen[role]))
+    # 预览：用的就是这四个角色色，所见即所得
+    rows.append('<Border Background="{DynamicResource ColorBrush7}" CornerRadius="8" '
+                'Padding="14,12" Margin="0,14,0,0"><StackPanel>'
+                '<TextBlock Text="' + attr(t("settings.color_preview", lang)) + '" FontSize="13" '
+                'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" />'
+                '<TextBlock Text="' + attr(t("settings.color_preview_dim", lang)) + '" FontSize="11" '
+                'Margin="0,4,0,0" Foreground="{DynamicResource ColorBrush3}" />'
+                '<TextBlock Text="' + attr(t("settings.color_preview_note", lang)) + '" FontSize="11" '
+                'Margin="0,4,0,0" TextWrapping="Wrap" '
+                'Foreground="{DynamicResource ColorBrush2}" />'
+                "</StackPanel></Border>")
+    return "".join(rows)
+
+
 def build_settings_page(base_url: str, ip: str, query: str) -> str:
     """设置页正文。``query`` 里带着这次要做的动作。"""
     base = escape_url_attr(base_url)
@@ -126,13 +168,28 @@ def build_settings_page(base_url: str, ip: str, query: str) -> str:
         else:
             if data.get("lang"):
                 lang = data["lang"]
-            profiles.PROFILES.bind(ip, name=data.get("name", ""), lang=data.get("lang", ""))
+            profiles.PROFILES.bind(ip, name=data.get("name", ""), lang=data.get("lang", ""),
+                                   panel=data.get("panel"), text=data.get("text"))
             result = t("settings.code_ok", lang, language=LANG_NAMES.get(lang, lang))
 
+    # 配色两档：色块用哪一档、文字用哪一档（见 palette.py 顶部那段说明）
+    for role, key in (("panel", "settings.color_panel"), ("text", "settings.color_text")):
+        if params.get(role) is None:
+            continue
+        wanted = palette.normalize(params[role], _COLOR_CHOICES[role], _COLOR_DEFAULT[role])
+        profiles.PROFILES.bind(ip, **{role: wanted})
+        result = t("settings.color_saved", lang, name=t(key, lang),
+                   level=t("settings.color_level", lang, n=wanted))
+
     record = profiles.PROFILES.by_ip(ip)
-    body = [_state_block(record, ip, lang)]
+    body = [heading(t("settings.state_title", lang), "0,20,0,0"),
+            _state_block(record, ip, lang)]
     if result:
         body.append('<local:MyHint Theme="Blue" Margin="0,12,0,0" Text="' + attr(result) + '" />')
+
+    body.append(heading(t("settings.color_title", lang), "0,20,0,0"))
+    body.append(note(t("settings.color_hint", lang), "0,6,0,0"))
+    body.append(_color_buttons(base, lang, record))
 
     body.append(heading(t("settings.lang_title", lang), "0,20,0,0"))
     body.append(note(t("settings.lang_hint", lang), "0,6,0,0"))
@@ -207,4 +264,4 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
     except Exception as exc:                       # 别让设置页把整站带崩
         warn("[Settings] 页面构建失败：" + repr(exc))
         page = build_settings_page(base, ip, "")
-    return _xaml_response(page)
+    return _xaml_response(palette.apply(page, profiles.PROFILES.palette_for(ip)))
