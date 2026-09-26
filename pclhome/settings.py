@@ -53,7 +53,7 @@ def _bind(element: str, base: str, param: str) -> str:
     跟 ``xaml.bind_to`` 一样，只是那个写死了 ``?q=``；这里两个框要用不同的参数名。
     """
     return ("{Binding Path=Text,ElementName=" + element + ",StringFormat='{}"
-            + base + "/settings_page.xaml?" + param + "={0}'}")
+            + base + "/settings_page.json?" + param + "={0}'}")
 
 
 def _expiry_text(record: dict, lang: str) -> str:
@@ -91,7 +91,7 @@ def _lang_buttons(base: str, lang: str) -> str:
     cells = []
     for code in LANGS:
         label = t("lang." + code, lang)
-        cells.append(help_button(label, ICON_KEY, base + "/settings_page.xaml?lang=" + code,
+        cells.append(help_button(label, ICON_KEY, base + "/settings_page.json?lang=" + code,
                                  38, margin="0,0,6,6", color=""))
     return '<StackPanel Orientation="Horizontal" Margin="0,8,0,0">' + "".join(cells) + "</StackPanel>"
 
@@ -155,7 +155,7 @@ def build_settings_page(base_url: str, ip: str, query: str) -> str:
                     'Foreground="{DynamicResource ColorBrush1}" /></Border>')
     body.append(grid2(
         help_button(t("settings.code_export", lang), ICON_KEY,
-                    base + "/settings_page.xaml?export=1", 38, column=0, margin="0,0,5,0"),
+                    base + "/settings_page.json?export=1", 38, column=0, margin="0,0,5,0"),
         help_button(t("settings.code_import", lang), ICON_KEY,
                     _bind("setcode", base, "code"), 38, column=1, margin="5,0,0,0"),
         "0,8,0,0"))
@@ -189,7 +189,10 @@ def _xaml_response(body: str):
 def handle(service, path: str, query: str, ip: str, origin: str = ""):
     """处理 ``/settings_page.*``；不是我们的路径就返回 None。"""
     if path in _META:
-        lang = profiles.lang_for(ip)
+        # .json 是 PCL 先拉的那一份（页面标题/描述），带 ?lang= 时按新语言出标题，
+        # 不然刚切完语言，页头还是旧语言的，正文却已经是新的了。
+        params = parse_query(query)
+        lang = normalize_lang(params["lang"]) if params.get("lang") else profiles.lang_for(ip)
         title_key, desc_key = _META[path]
         body = json.dumps({"Title": t(title_key, lang), "Description": t(desc_key, lang)},
                           ensure_ascii=False)
