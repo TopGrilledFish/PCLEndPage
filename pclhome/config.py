@@ -73,6 +73,12 @@ PACK_FALLBACK_IMAGE = "pack://application:,,,/images/Blocks/GrassPath.png"
 ICON_PROXY = "https://api.xinac.net/icon/?url={domain}"
 
 DEFAULT_SITES = [
+    {"name": "必应搜索", "url": "https://www.bing.com/",
+     "info": "微软的搜索引擎", "icon": "https://www.bing.com/favicon.ico",
+     "icon_fallback": ICON_PROXY.format(domain="bing.com")},
+    {"name": "谷歌搜索", "url": "https://www.google.com/",
+     "info": "搜索引擎，大陆不可用", "icon": "https://www.google.com/favicon.ico",
+     "icon_fallback": ICON_PROXY.format(domain="google.com")},
     {"name": "Minecraft Wiki", "url": "https://zh.minecraft.wiki/",
      "info": "查阅方块、生物与游戏机制", "icon": "https://zh.minecraft.wiki/favicon.ico", "icon_fallback": ICON_PROXY.format(domain="zh.minecraft.wiki")},
     {"name": "MC 百科", "url": "https://www.mcmod.cn/",
@@ -92,6 +98,14 @@ DEFAULT_SITES = [
      "icon_fallback": ICON_PROXY.format(domain="minebbs.com")},
     {"name": "苦力怕论坛", "url": "https://www.klpbbs.com/",
      "info": "国内 MC 论坛，基岩版资源多", "icon": "https://www.klpbbs.com/favicon.ico", "icon_fallback": ICON_PROXY.format(domain="klpbbs.com")},
+    {"name": "mcbbs 纪念版", "url": "https://www.mcbbs.co/",
+     "info": "老 MCBBS 的纪念站", "icon": "https://www.mcbbs.co/favicon.ico",
+     "icon_fallback": ICON_PROXY.format(domain="mcbbs.co")},
+    # forum.mczwlt.net 挂了 WAFPRO 的 JS 挑战，直连只会拿到一段脚本，favicon 抓不到；
+    # 根域名 mczwlt.net 是同一个站（标题「资源 · 红石中继站」），拿它的。
+    {"name": "红石中继站", "url": "https://forum.mczwlt.net/",
+     "info": "红石与生电技术社区", "icon": "https://mczwlt.net/favicon.ico",
+     "icon_fallback": ICON_PROXY.format(domain="forum.mczwlt.net")},
 ]
 
 ENV_MAP = {

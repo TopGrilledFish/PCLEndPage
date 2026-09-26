@@ -45,6 +45,10 @@
 
   "_sites说明": "首页「功能网站」卡片，数组顺序就是页面从上到下的顺序。icon 是各站图标地址：构建期会尽力镜像到 static/images/icons/，成功后页面用本地文件，失败则用远程地址。icon_fallback 是直连失败后的备用地址（favicon 代理），CurseForge/Minecraft Wiki/Planet Minecraft/苦力怕论坛 都得靠它。想手动指定图标，把 <域名>.png 放进 static/images/icons/ 即可。",
   "sites": [
+    { "name": "必应搜索", "url": "https://www.bing.com/",
+      "info": "微软的搜索引擎", "icon": "https://www.bing.com/favicon.ico" },
+    { "name": "谷歌搜索", "url": "https://www.google.com/",
+      "info": "搜索引擎，大陆不可用", "icon": "https://www.google.com/favicon.ico" },
     { "name": "Minecraft Wiki", "url": "https://zh.minecraft.wiki/",
       "info": "查阅方块、生物与游戏机制", "icon": "https://zh.minecraft.wiki/favicon.ico" },
     { "name": "MC 百科", "url": "https://www.mcmod.cn/",
@@ -62,6 +66,10 @@
     { "name": "MineBBS", "url": "https://www.minebbs.com/",
       "info": "Minecraft 中文资源与交流社区", "icon": "https://www.minebbs.com/data/assets/logo/favicon.webp" },
     { "name": "苦力怕论坛", "url": "https://www.klpbbs.com/",
-      "info": "国内 MC 论坛，基岩版资源多", "icon": "https://www.klpbbs.com/favicon.ico" }
+      "info": "国内 MC 论坛，基岩版资源多", "icon": "https://www.klpbbs.com/favicon.ico" },
+    { "name": "mcbbs 纪念版", "url": "https://www.mcbbs.co/",
+      "info": "老 MCBBS 的纪念站", "icon": "https://www.mcbbs.co/favicon.ico" },
+    { "name": "红石中继站", "url": "https://forum.mczwlt.net/",
+      "info": "红石与生电技术社区", "icon": "https://mczwlt.net/favicon.ico" }
   ]
 }
