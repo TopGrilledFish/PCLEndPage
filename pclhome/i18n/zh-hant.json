@@ -165,10 +165,11 @@
   "settings.name_saved": "玩家名已記成 {name}。",
   "settings.name_empty": "玩家名不能空着。",
   "settings.code_title": "個性碼",
-  "settings.code_hint": "導出個性碼分享給朋友（可以直接複製到剪切板）",
+  "settings.code_hint": "導出個性碼分享給朋友",
   "settings.code_export": "導出個性碼",
   "settings.code_import": "導入",
   "settings.code_box": "粘貼個性碼",
+  "settings.code_copy": "複製到剪切板",
   "settings.code_value": "你的個性碼：",
   "settings.code_ok": "導入成功，現在是{language}。",
   "settings.code_bad": "個性碼不對，檢查有沒有複製全。",
@@ -629,5 +630,5 @@
   "settings.color_level": "濃度 {n}",
   "settings.color_saved": "{name}已改成{level}。",
   "settings.color_preview": "效果預覽",
-  "settings.color_preview_text": "我覺得42號混凝土就應該拌意大利麵"
+  "settings.color_preview_text": "我不敢苟同他的觀點，我個人認爲這個意大利麵就應該拌42號混凝土，因爲這個螺絲釘的長度，它很容易會直接影響到挖掘機的扭矩，你知道吧？你往裡砸的時候，一瞬間它就會產生大量的高能蛋白，俗稱UFO，會嚴重影響經濟的發展，甚至對這個太平洋以及充電器都會造成一定的核污染……"
 }

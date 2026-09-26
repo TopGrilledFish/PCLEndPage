@@ -63,6 +63,11 @@ ICON_CALC = ("M256 96 H768 A64 64 0 0 1 832 160 V864 A64 64 0 0 1 768 928 H256 "
              "M288 192 H736 V400 H288 Z "
              "M320 512 H448 V640 H320 Z M576 512 H704 V640 H576 Z "
              "M320 720 H448 V816 H320 Z M576 720 H704 V816 H576 Z")
+# 复制：前面一张纸挖空成粗描边（外框 + 内框，靠 EvenOdd 挖洞），左上加一条“L”
+# 当后面那张纸露出来的边。边框故意留厚（128 单位）——按 LogoScale 0.8 缩到 30px
+# 时只剩 ~4px，再细就看不见了。L 的两条与前面那张纸只贴边、不重叠。
+ICON_COPY = ("M256 256 H896 V896 H256 Z M384 384 H768 V768 H384 Z "
+             "M128 128 H768 V256 H128 Z M128 256 H256 V768 H128 Z")
 
 _ACTION_BUTTONS = (
     ("btn.memory", "内存优化", "-", "M128 192h768v192H128z M128 448h768v192H128z M256 224v128 M256 480v128"),
@@ -149,6 +154,25 @@ def help_button(text: str, logo: str, url: str, height: int = 38, column=None,
     return ('<local:MyIconTextButton' + attrs + ' Height="' + str(height) + '" Text="'
             + escape_attr(text) + '" LogoScale="0.8" Logo="' + logo
             + '" EventType="打开帮助" EventData="' + url_attr(url) + '" />')
+
+
+def copy_button(text: str, logo: str, data: str, height: int = 38, column=None,
+                margin: str = "", color: str = "Highlight") -> str:
+    """把 ``data`` 塞进剪切板的按钮——PCL 的「复制文本」事件。
+
+    跟 ``help_button`` 长得一样，只是不拉页面、点一下直接复制，所以 ``data``
+    按纯文本转义（``attr``），不是 ``url_attr``。
+    """
+    attrs = ""
+    if column is not None:
+        attrs += ' Grid.Column="' + str(column) + '"'
+    if margin:
+        attrs += ' Margin="' + margin + '"'
+    if color:
+        attrs += ' ColorType="' + color + '"'
+    return ('<local:MyIconTextButton' + attrs + ' Height="' + str(height) + '" Text="'
+            + escape_attr(text) + '" LogoScale="0.8" Logo="' + logo
+            + '" EventType="复制文本" EventData="' + attr(data) + '" />')
 
 
 def grid2(left: str, right: str, margin: str = "0,8,0,0") -> str:

@@ -22,8 +22,9 @@ from . import palette
 from . import profiles
 from .i18n import DEFAULT_LANG, LANG_NAMES, LANGS, normalize_lang, t
 from .log import warn
-from .xaml import (ICON_BACK, ICON_HOME, ICON_KEY, attr, escape_attr, escape_url_attr,
-                   grid2, heading, help_button, input_row, nav_row, note)
+from .xaml import (ICON_BACK, ICON_COPY, ICON_HOME, ICON_KEY, attr, copy_button,
+                   escape_attr, escape_url_attr, grid2, heading, help_button,
+                   input_row, nav_row, note)
 
 _META = {"/settings_page.json": ("settings.title", "settings.desc")}
 _DO = {"/settings_page.xaml"}
@@ -211,6 +212,9 @@ def build_settings_page(base_url: str, ip: str, query: str) -> str:
                     'Padding="12,10" Margin="0,4,0,0"><TextBlock Text="' + attr(code)
                     + '" FontSize="12" TextWrapping="Wrap" '
                     'Foreground="{DynamicResource ColorBrush1}" /></Border>')
+        # 复制走 PCL 自己的「复制文本」事件（教学文件的按钮那节），不用自己造轮子
+        body.append(copy_button(t("settings.code_copy", lang), ICON_COPY, code, 38,
+                                margin="0,8,0,0"))
     body.append(grid2(
         help_button(t("settings.code_export", lang), ICON_KEY,
                     base + "/settings_page.json?export=1", 38, column=0, margin="0,0,5,0"),

@@ -165,10 +165,11 @@
   "settings.name_saved": "Player name saved as {name}.",
   "settings.name_empty": "The player name cannot be empty.",
   "settings.code_title": "Profile code",
-  "settings.code_hint": "Export your profile code to share with friends (you can copy it straight to the clipboard)",
+  "settings.code_hint": "Export your profile code to share with friends",
   "settings.code_export": "Export code",
   "settings.code_import": "Import",
   "settings.code_box": "Paste a profile code",
+  "settings.code_copy": "Copy to clipboard",
   "settings.code_value": "Your profile code:",
   "settings.code_ok": "Imported. The language is now {language}.",
   "settings.code_bad": "That code does not look right — check you copied all of it.",
@@ -644,5 +645,5 @@
   "settings.color_level": "Shade {n}",
   "settings.color_saved": "{name} is now {level}.",
   "settings.color_preview": "Preview",
-  "settings.color_preview_text": "The quick brown fox jumps over the lazy dog"
+  "settings.color_preview_text": "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs."
 }

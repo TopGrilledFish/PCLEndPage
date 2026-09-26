@@ -165,10 +165,11 @@
   "settings.name_saved": "玩家名已记成 {name}。",
   "settings.name_empty": "玩家名不能空着。",
   "settings.code_title": "个性码",
-  "settings.code_hint": "导出个性码分享给朋友（可以直接复制到剪切板）",
+  "settings.code_hint": "导出个性码分享给朋友",
   "settings.code_export": "导出个性码",
   "settings.code_import": "导入",
   "settings.code_box": "粘贴个性码",
+  "settings.code_copy": "复制到剪切板",
   "settings.code_value": "你的个性码：",
   "settings.code_ok": "导入成功，现在是{language}。",
   "settings.code_bad": "个性码不对，检查有没有复制全。",
@@ -629,5 +630,5 @@
   "settings.color_level": "浓度 {n}",
   "settings.color_saved": "{name}已改成{level}。",
   "settings.color_preview": "效果预览",
-  "settings.color_preview_text": "我觉得42号混凝土就应该拌意大利面"
+  "settings.color_preview_text": "我不敢苟同他的观点，我个人认为这个意大利面就应该拌42号混凝土，因为这个螺丝钉的长度，它很容易会直接影响到挖掘机的扭矩，你知道吧？你往里砸的时候，一瞬间它就会产生大量的高能蛋白，俗称UFO，会严重影响经济的发展，甚至对这个太平洋以及充电器都会造成一定的核污染……"
 }

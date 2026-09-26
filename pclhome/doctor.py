@@ -21,6 +21,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import date
+from pathlib import Path
 
 from . import ai
 from . import calc
@@ -395,6 +396,35 @@ def _english_pages(config: Config) -> list:
     return pages
 
 
+def _settings_pages() -> list:
+    """设置页的几种形态，``[(名字, XAML)]``——空着、导出（多一个复制按钮）、三种语言。
+
+    **用临时 store**：带动作的查询会真的写记录（``?export=1`` 要有一份记录才出得来），
+    不能让体检往 ``var/profiles.json`` 里塞测试数据，所以把模块里那份单例临时换成
+    临时文件上的一份，跑完换回来。``settings`` 里是 ``profiles.PROFILES`` 这样取的，
+    换掉模块属性它就跟着换。
+    """
+    import tempfile
+    from . import profiles as profiles_module
+    from . import settings as settings_module
+
+    ip = "203.0.113.7"
+    pages = []
+    with tempfile.TemporaryDirectory() as tmp:
+        real = profiles_module.PROFILES
+        profiles_module.PROFILES = profiles_module.Profiles(Path(tmp) / "profiles.json")
+        try:
+            for lang in ("zh-hans", "en", "zh-hant"):
+                profiles_module.PROFILES.bind(ip, name="Doctor", lang=lang)
+                for suffix, query in (("", ""), ("/导出", "export=1")):
+                    pages.append(("设置页/" + lang + suffix,
+                                  settings_module.build_settings_page(
+                                      "http://localhost", ip, query)))
+        finally:
+            profiles_module.PROFILES = real
+    return pages
+
+
 def check_rendered(report: Report, config: Config) -> None:
     print("\n[8/9] 渲染结果（假 IP 走一遍完整替换）")
     try:
@@ -501,6 +531,28 @@ def check_rendered(report: Report, config: Config) -> None:
     except Exception as exc:
         report.bad("计算器页构建失败：" + repr(exc))
 
+    # 设置页：空着 / 导出 / 三种语言都得是良构 XML。导出那一段（里面是"复制到
+    # 剪切板"那个按钮）平时渲染不到，只有 ?export=1 才出得来，所以单拎出来验。
+    try:
+        pages = _settings_pages()
+        broken = []
+        for label, body in pages:
+            try:
+                ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root ' + _XAML_ROOT_NS
+                              + ">" + body + "</root>")
+            except ET.ParseError as exc:
+                broken.append(label + "：" + str(exc))
+        if broken:
+            report.bad("设置页 XML 解析失败：" + "；".join(broken[:3]))
+        elif not any('EventType="复制文本"' in body for _, body in pages):
+            report.bad("设置页导出后没有复制按钮（复制文本事件没了）")
+        elif not any("PCLP1-" in body for _, body in pages):
+            report.bad("设置页导出后没看到个性码")
+        else:
+            report.good("设置页 " + str(len(pages)) + " 种形态 XML 良构，导出带复制按钮")
+    except Exception as exc:
+        report.bad("设置页构建失败：" + repr(exc))
+
     # 公式抽查：这几个都有标准答案，改坏了这里会红
     known = [("damage", "8,5", "11"), ("damage", "8,5,0,0,2,0,1", "26.73"),
              ("stronghold", "0,0,0", "-204, -1692"),
@@ -568,11 +620,9 @@ def check_rendered(report: Report, config: Config) -> None:
     # ColorBrush5，换号就会漏掉它，页面颜色会半生不熟。
     try:
         from . import palette as pal
-        from . import settings as settings_module
         bodies = list(_english_pages(config))
         bodies.append(("主页", _fake_render(config, "zh-hans")))
-        bodies.append(("设置页", settings_module.build_settings_page(
-            "http://localhost", "203.0.113.7", "")))
+        bodies.extend(_settings_pages())
 
         stray = [(label, pal.stray_brushes(body)) for label, body in bodies
                  if pal.stray_brushes(body)]
