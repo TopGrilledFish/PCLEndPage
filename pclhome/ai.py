@@ -42,8 +42,8 @@ from urllib.parse import parse_qs, unquote
 from .config import USER_AGENT, VAR_DIR, Config
 from .log import debug, error, out, warn
 from .store import STATS_DB
-from .xaml import (ICON_AI, ICON_KEY, ICON_SAVE, ICON_TRASH, escape_attr,
-                   escape_url_attr)
+from .xaml import (ICON_AI, ICON_BACK, ICON_HOME, ICON_KEY, ICON_REFRESH,
+                   ICON_SAVE, ICON_TRASH, escape_attr, escape_url_attr)
 
 JOBS_FILE = VAR_DIR / "ai_jobs.json"
 
@@ -661,16 +661,88 @@ def _bind(element: str, base: str, endpoint: str) -> str:
 
 
 def _status_line(config: Config, ip: str) -> str:
-    """页面上那行「当前用的是什么密钥、还剩几次」。"""
+    """页面上那行「现在用的是哪个密钥、还剩几次」。"""
     own = get_own_key(ip)
     if own:
-        return "当前：私人密钥 · " + describe_own_key(ip)
+        return "现在用私人密钥 · " + describe_own_key(ip)
     if ip in (config.ai_free_ips or []):
-        return "当前：公用密钥（本机免限）"
+        return "现在用公用密钥（这台机器不计数）"
     left = max(0, config.ai_daily_limit - QUOTA.used(ip, beijing_day()))
     if left <= 0:
-        return "当前：公用密钥 · 今天已用完（北京时间 0 点重置）"
-    return "当前：公用密钥 · 今天还剩 " + str(left) + " 次"
+        return "公用密钥今天的次数用完了，北京时间 0 点恢复"
+    return "公用密钥，今天还能用 " + str(left) + " 次"
+
+
+# ============ 页面零件 ============
+
+def _input_row(name: str, hint: str, height: int = 38, margin: str = "0,8,0,0") -> str:
+    """一个带底色的输入框。"""
+    return ('<Border Margin="' + margin + '" Height="' + str(height)
+            + '" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+            '<local:MyTextBox x:Name="' + name + '" Height="' + str(height)
+            + '" Margin="10,0" HintText="' + _attr(hint) + '" '
+            'Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" /></Border>')
+
+
+def _help_button(text: str, logo: str, url: str, height: int = 38, column=None,
+                 margin: str = "", color: str = "Highlight") -> str:
+    """走「打开帮助」的按钮——PCL 会去拉 ``url`` 对应的 .json/.xaml 并翻开新页。"""
+    attrs = ""
+    if column is not None:
+        attrs += ' Grid.Column="' + str(column) + '"'
+    if margin:
+        attrs += ' Margin="' + margin + '"'
+    if color:
+        attrs += ' ColorType="' + color + '"'
+    return ('<local:MyIconTextButton' + attrs + ' Height="' + str(height) + '" Text="'
+            + escape_attr(text) + '" LogoScale="0.8" Logo="' + logo
+            + '" EventType="打开帮助" EventData="' + _url_attr(url) + '" />')
+
+
+def _grid2(left: str, right: str, margin: str = "0,8,0,0") -> str:
+    """左右等宽两栏，各自放一个已经带好 Grid.Column 的按钮。"""
+    return ('<Grid Margin="' + margin + '"><Grid.ColumnDefinitions>'
+            '<ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" />'
+            "</Grid.ColumnDefinitions>" + left + right + "</Grid>")
+
+
+def _divider(margin: str = "0,20,0,16") -> str:
+    """中间那道渐隐的横线。"""
+    return ('<Border Height="1" Margin="' + margin + '"><Border.Background>'
+            '<LinearGradientBrush StartPoint="0,0" EndPoint="1,0">'
+            '<GradientStop Color="#00000000" Offset="0" />'
+            '<GradientStop Color="#33808080" Offset="0.5" />'
+            '<GradientStop Color="#00000000" Offset="1" />'
+            "</LinearGradientBrush></Border.Background></Border>")
+
+
+def _heading(text: str, margin: str = "0,16,0,0") -> str:
+    return ('<TextBlock Text="' + escape_attr(text) + '" FontSize="13" FontWeight="Bold" '
+            'Foreground="{DynamicResource ColorBrush1}" Margin="' + margin + '" />')
+
+
+def _note(text: str, margin: str = "0,8,0,0") -> str:
+    return ('<TextBlock Text="' + _attr(text) + '" FontSize="11" TextWrapping="Wrap" '
+            'Margin="' + margin + '" Foreground="{DynamicResource ColorBrush3}" />')
+
+
+def _nav_row(base: str, refresh_url: str = "", extra_text: str = "",
+             extra_url: str = "") -> str:
+    """页面底部那排：刷新结果 / 回到某页 / 返回主页。
+
+    「返回主页」是专门解决「进得太深、左上角要按好几下」的：它直接再翻开一份
+    主页（见 handle 里的 ``home`` 动作），一下就到，不用沿路往回退。
+    """
+    items = []
+    if refresh_url:
+        items.append(("刷新结果", ICON_REFRESH, refresh_url))
+    if extra_url:
+        items.append((extra_text, ICON_BACK, extra_url))
+    items.append(("返回主页", ICON_HOME, base + "/home.json"))
+    cells = [_help_button(text, logo, url, 36, margin=("8,0,0,0" if index else ""))
+             for index, (text, logo, url) in enumerate(items)]
+    return ('<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" '
+            'Margin="0,18,0,0">' + "".join(cells) + "</StackPanel>")
 
 
 def _result_block(config: Config, job: dict | None) -> str:
@@ -680,8 +752,8 @@ def _result_block(config: Config, job: dict | None) -> str:
     state = job.get("state")
     if state == "running":
         return ('<local:MyHint Theme="Blue" Margin="0,14,0,0" Text="正在分析「'
-                + _attr(str(job.get("query") or "")) + '」…… 稍等十几秒后点下面的'
-                '「刷新结果」查看。" />')
+                + _attr(str(job.get("query") or ""))
+                + '」，大概十几秒。完了点「刷新结果」。" />')
     if state not in ("done", "error"):
         return ""
 
@@ -706,133 +778,123 @@ def _result_block(config: Config, job: dict | None) -> str:
 
 
 def build_page(config: Config, ip: str, base_url: str) -> str:
-    """「AI 智能分析」整页。入口是欢迎卡片那排按钮里的第 4 个。
+    """「AI 日志分析」主页。入口是欢迎卡片那排按钮里的第 4 个。
 
-    独立成页而不是主页上的一张卡：输入框、两步密钥设置、结果都需要位置，
-    挤在主页里既长又乱；而且分析要十几秒，用户在本页反复点「刷新结果」更顺手。
+    这一页只管公用密钥那条线：粘链接、点按钮、看结果。私人密钥的设置和用法
+    都挪到了 :func:`build_own_page`，免得正事被一长串设置项埋掉。
     """
     if not config.enable_ai:
-        return build_popup("AI 智能分析", "站长没有开启 AI 日志分析。", "Yellow")
+        return build_popup("AI 日志分析", "站长没开这个功能。", "Yellow")
+
+    base = _url_attr(base_url)
+    job = get_job(ip)
+
+    return (
+        '<local:MyCard Title="AI 日志分析" CanSwap="False">'
+        '<StackPanel Margin="25,40,23,20">'
+
+        '<TextBlock Text="MC崩溃？AI智能分析" FontSize="24" FontWeight="Bold" '
+        'Foreground="#FF000000" HorizontalAlignment="Center" />'
+        '<TextBlock TextWrapping="Wrap" FontSize="12" LineHeight="20" Margin="0,10,0,0" '
+        'Foreground="{DynamicResource ColorBrush3}" Text="把崩溃日志传到 mclo.gs，链接粘到'
+        '下面就行。日志会发到 AI 接口，里面有隐私的话先删掉再传。" />'
+
+        + _input_row("ailoginput", "粘贴日志链接，比如 https://mclo.gs/xxxxxxx", 40, "0,14,0,0")
+
+        + _grid2(
+            _help_button("公用密钥", ICON_AI, _bind("ailoginput", base, "/ai.json"),
+                         46, column=0, margin="0,0,5,0"),
+            _help_button("私人密钥", ICON_KEY, base + "/ai_own_page.json",
+                         46, column=1, margin="5,0,0,0"),
+            "0,10,0,0")
+
+        + _note("公用密钥是站长的，每天有次数限制。想用自己那份、或者公用的次数用完了，"
+                "点右边的「私人密钥」去填。")
+
+        + _divider("0,20,0,12")
+
+        + '<TextBlock Text="' + _attr(_status_line(config, ip)) + '" FontSize="12" '
+        'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" />'
+
+        + _result_block(config, job)
+
+        + _nav_row(base, refresh_url=base + "/ai_page.json")
+
+        + "</StackPanel>"
+        "</local:MyCard>")
+
+
+def build_own_page(config: Config, ip: str, base_url: str) -> str:
+    """私人密钥页：填自己的密钥、请求地址、模型，然后就在这一页发起分析。"""
+    if not config.enable_ai:
+        return build_popup("AI 日志分析", "站长没开这个功能。", "Yellow")
 
     base = _url_attr(base_url)
     job = get_job(ip)
     own = get_own_key(ip)
 
-    key_hint = ("已保存 " + mask_key(str(own.get("key") or "")) + "，重新填写可覆盖"
-                if own else "sk-...（只存在服务器内存里，重启后要重填）")
     protocol = str((own or {}).get("protocol") or "openai")
     saved_base = str((own or {}).get("base") or "")
     saved_model = str((own or {}).get("model") or "")
+    key_hint = ("已存 " + mask_key(str(own.get("key") or "")) + "，重填会覆盖"
+                if own else "sk- 开头那一串")
     base_hint = (saved_base + "（留空改回官方地址）" if saved_base
-                 else "只填地址。留空 = OpenAI 用 api.openai.com，Anthropic 用 api.anthropic.com")
-    model_hint = (saved_model + "（留空保存可恢复默认）" if saved_model
-                  else "例如 " + PROTOCOLS.get(protocol, ("", ""))[1] + "，留空 = 用默认")
+                 else "只填地址，例如 https://api.deepseek.com/v1")
+    model_hint = (saved_model + "（留空保存恢复默认）" if saved_model
+                  else "例如 " + PROTOCOLS.get(protocol, ("", ""))[1])
 
     return (
-        '<local:MyCard Title="AI 智能分析" CanSwap="False">'
+        '<local:MyCard Title="私人密钥" CanSwap="False">'
         '<StackPanel Margin="25,40,23,20">'
 
-        # 加粗黑色大标题
-        '<TextBlock Text="MC崩溃？AI智能分析" FontSize="24" FontWeight="Bold" '
+        '<TextBlock Text="用自己的密钥分析" FontSize="24" FontWeight="Bold" '
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
         '<TextBlock TextWrapping="Wrap" FontSize="12" LineHeight="20" Margin="0,10,0,0" '
-        'Foreground="{DynamicResource ColorBrush3}" Text="把崩溃日志传到 mclo.gs'
-        '（主页「功能网站」里有），再把链接粘到下面。日志内容会发给 AI 接口，别放隐私信息。" />'
+        'Foreground="{DynamicResource ColorBrush3}" Text="密钥只放在服务器内存里，不写进文件，'
+        '服务重启后要重填；显示和日志里都只留打码后的样子。填过一次就能一直用。" />'
 
-        # 日志输入
-        '<Border Margin="0,14,0,0" Height="40" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
-        '<local:MyTextBox x:Name="ailoginput" Height="40" Margin="10,0" '
-        'HintText="粘贴日志链接，例如 https://mclo.gs/xxxxxxx" '
-        'Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" />'
-        "</Border>"
-        '<Grid Margin="0,10,0,0">'
-        '<Grid.ColumnDefinitions><ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" /></Grid.ColumnDefinitions>'
-        '<local:MyIconTextButton Grid.Column="0" Margin="0,0,5,0" Height="46" Text="公用密钥" '
-        'LogoScale="0.85" Logo="' + ICON_AI + '" ColorType="Highlight" '
-        'EventType="打开帮助" EventData="' + _bind("ailoginput", base, "/ai.json") + '" />'
-        '<local:MyIconTextButton Grid.Column="1" Margin="5,0,0,0" Height="46" Text="私人密钥" '
-        'LogoScale="0.85" Logo="' + ICON_KEY + '" '
-        'EventType="打开帮助" EventData="' + _bind("ailoginput", base, "/ai_own.json") + '" />'
-        "</Grid>"
+        + _heading("日志链接", "0,18,0,0")
+        + _input_row("ailoginput", "粘贴日志链接，比如 https://mclo.gs/xxxxxxx")
 
-        # 私人密钥设置
-        '<Border Height="1" Margin="0,20,0,16">'
-        '<Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,0">'
-        '<GradientStop Color="#00000000" Offset="0" />'
-        '<GradientStop Color="#33808080" Offset="0.5" />'
-        '<GradientStop Color="#00000000" Offset="1" />'
-        "</LinearGradientBrush></Border.Background></Border>"
+        + _heading("API 密钥")
+        + _input_row("aikeyinput", key_hint)
+        + _grid2(
+            _help_button("保存密钥", ICON_SAVE, _bind("aikeyinput", base, "/ai_key.json"),
+                         38, column=0, margin="0,0,5,0"),
+            _help_button("清除设置", ICON_TRASH, base + "/ai_clear.json",
+                         38, column=1, margin="5,0,0,0", color=""))
 
-        '<TextBlock Text="私人密钥设置（用自己的密钥，就不受每天次数限制）" FontSize="13" '
-        'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" Margin="0,0,0,10" />'
+        + _heading("请求地址")
+        + _input_row("aibaseinput", base_hint)
+        + _grid2(
+            _help_button("OpenAI 接口", ICON_SAVE,
+                         _bind("aibaseinput", base, "/ai_base_openai.json"),
+                         38, column=0, margin="0,0,5,0"),
+            _help_button("Anthropic 接口", ICON_SAVE,
+                         _bind("aibaseinput", base, "/ai_base_anthropic.json"),
+                         38, column=1, margin="5,0,0,0"))
+        + _note("这一格只填地址，模型在下面单独填。")
 
-        # 第一步：密钥
-        '<TextBlock Text="第一步：填 API 密钥" FontSize="12" '
-        'Foreground="{DynamicResource ColorBrush3}" Margin="0,0,0,6" />'
-        '<Border Height="38" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
-        '<local:MyTextBox x:Name="aikeyinput" Height="38" Margin="10,0" HintText="'
-        + _attr(key_hint) + '" Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" />'
-        "</Border>"
-        '<Grid Margin="0,8,0,0">'
-        '<Grid.ColumnDefinitions><ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" /></Grid.ColumnDefinitions>'
-        '<local:MyIconTextButton Grid.Column="0" Margin="0,0,5,0" Height="38" Text="保存密钥" '
-        'LogoScale="0.8" Logo="' + ICON_SAVE + '" '
-        'EventType="打开帮助" EventData="' + _bind("aikeyinput", base, "/ai_key.json") + '" />'
-        '<local:MyIconTextButton Grid.Column="1" Margin="5,0,0,0" Height="38" Text="清除设置" '
-        'LogoScale="0.8" Logo="' + ICON_TRASH + '" '
-        'EventType="打开帮助" EventData="' + base + '/ai_clear.json" />'
-        "</Grid>"
+        + _heading("模型名")
+        + _input_row("aimodelinput", model_hint)
+        + _help_button("保存模型", ICON_SAVE, _bind("aimodelinput", base, "/ai_model.json"),
+                       38, margin="0,8,0,0")
+        + _note("留空保存就回到默认：OpenAI 接口用 " + PROTOCOLS["openai"][1]
+                + "，Anthropic 接口用 " + PROTOCOLS["anthropic"][1] + "。")
 
-        # 第二步：请求地址 + 协议
-        '<TextBlock Text="第二步：填 API 请求地址，并选接口类型" FontSize="12" '
-        'Foreground="{DynamicResource ColorBrush3}" Margin="0,14,0,6" />'
-        '<Border Height="38" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
-        '<local:MyTextBox x:Name="aibaseinput" Height="38" Margin="10,0" HintText="'
-        + _attr(base_hint) + '" Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" />'
-        "</Border>"
-        '<Grid Margin="0,8,0,0">'
-        '<Grid.ColumnDefinitions><ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" /></Grid.ColumnDefinitions>'
-        '<local:MyIconTextButton Grid.Column="0" Margin="0,0,5,0" Height="38" Text="OpenAI 接口" '
-        'LogoScale="0.8" Logo="' + ICON_SAVE + '" '
-        'EventType="打开帮助" EventData="' + _bind("aibaseinput", base, "/ai_base_openai.json") + '" />'
-        '<local:MyIconTextButton Grid.Column="1" Margin="5,0,0,0" Height="38" Text="Anthropic 接口" '
-        'LogoScale="0.8" Logo="' + ICON_SAVE + '" '
-        'EventType="打开帮助" EventData="' + _bind("aibaseinput", base, "/ai_base_anthropic.json") + '" />'
-        "</Grid>"
-        '<TextBlock Text="上面这一格只填地址。模型在下面单独填。" FontSize="11" '
-        'TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{DynamicResource ColorBrush3}" />'
+        + _divider("0,22,0,12")
 
-        # 第三步：模型
-        '<TextBlock Text="第三步：填模型名" FontSize="12" '
-        'Foreground="{DynamicResource ColorBrush3}" Margin="0,14,0,6" />'
-        '<Border Height="38" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
-        '<local:MyTextBox x:Name="aimodelinput" Height="38" Margin="10,0" HintText="'
-        + _attr(model_hint) + '" Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" />'
-        "</Border>"
-        '<local:MyIconTextButton Margin="0,8,0,0" Height="38" Text="保存模型" '
-        'LogoScale="0.8" Logo="' + ICON_SAVE + '" '
-        'EventType="打开帮助" EventData="' + _bind("aimodelinput", base, "/ai_model.json") + '" />'
-        '<TextBlock Text="' + _attr("留空保存则恢复默认：OpenAI 接口用 " + PROTOCOLS["openai"][1]
-                                   + "，Anthropic 接口用 " + PROTOCOLS["anthropic"][1] + "。") + '" '
-        'FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0" '
-        'Foreground="{DynamicResource ColorBrush3}" />'
+        + _help_button("开始分析", ICON_AI, _bind("ailoginput", base, "/ai_own.json"), 46)
 
-        # 当前状态
-        '<TextBlock Text="' + _attr(_status_line(config, ip)) + '" FontSize="12" '
-        'FontWeight="Bold" Margin="0,16,0,0" Foreground="{DynamicResource ColorBrush1}" />'
+        + '<TextBlock Text="' + _attr(_status_line(config, ip)) + '" FontSize="12" '
+        'FontWeight="Bold" Margin="0,12,0,0" Foreground="{DynamicResource ColorBrush1}" />'
 
-        + _result_block(config, job) +
+        + _result_block(config, job)
 
-        # 刷新
-        '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">'
-        '<local:MyIconTextButton Height="36" Text="刷新结果" LogoScale="0.8" '
-        'Logo="M753 271 C691 209 606 171 512 171 c-189 0 -341 153 -341 341 s152 341 341 341 '
-        'c159 0 292 -109 330 -256 h-89 c-35 99 -130 171 -241 171 c-141 0 -256 -115 -256 -256 '
-        's115 -256 256 -256 c71 0 134 29 180 76 L555 469 h299 V171 l-100 100 Z" '
-        'ColorType="Highlight" EventType="打开帮助" EventData="' + base + '/ai_page.json" />'
-        "</StackPanel>"
+        + _nav_row(base, refresh_url=base + "/ai_own_page.json",
+                   extra_text="回到分析页", extra_url=base + "/ai_page.json")
 
-        "</StackPanel>"
+        + "</StackPanel>"
         "</local:MyCard>")
 
 
@@ -880,19 +942,30 @@ def reset(scope: str = "all", ip: str = "") -> dict:
     return done
 
 
-def build_popup(title: str, message: str, theme: str = "Blue", back: str = "") -> str:
+def build_popup(title: str, message: str, theme: str = "Blue", back: str = "",
+                home: str = "") -> str:
     """提示弹窗。
 
-    确定按钮重新打开 AI 页面（``打开帮助`` 指向 /ai_page.json）：PCL 会重新下载
-    那对 .json/.xaml，于是页面显示的是最新状态（正在分析 / 结果）。
-    用 ``刷新页面`` 只会把当前这个弹窗自己重画一遍，看不到任何新东西。
+    「继续」按钮重新打开对应页面（``打开帮助``）：PCL 会重新下载那对 .json/.xaml，
+    于是显示的是最新状态（正在分析 / 结果）。用 ``刷新页面`` 只会把当前这个弹窗
+    自己重画一遍，看不到任何新东西。
+
+    再配一个「返回主页」：这些页是一层层叠上去的，点几下就深了，
+    有这个按钮就能一步回去，不用沿路把左上角按穿。
     """
+    cells = []
+    if home:
+        cells.append('<local:MyButton Height="35" Width="110" Text="返回主页" '
+                     'EventType="打开帮助" EventData="' + _url_attr(home) + '" />')
     if back:
-        ok_button = ('<local:MyButton Width="120" Height="35" Text="确定" ColorType="Highlight" '
+        cells.append('<local:MyButton Height="35" Width="110" Text="继续" ColorType="Highlight" '
                      'EventType="打开帮助" EventData="' + _url_attr(back) + '" />')
     else:
-        ok_button = ('<local:MyButton Width="120" Height="35" Text="确定" ColorType="Highlight" '
+        cells.append('<local:MyButton Height="35" Width="110" Text="确定" ColorType="Highlight" '
                      'EventType="刷新主页" EventData="-" />')
+
+    row = "".join(cell if index == 0 else '<StackPanel Margin="8,0,0,0">' + cell + "</StackPanel>"
+                  for index, cell in enumerate(cells))
 
     return (
         '<local:MyCard Title="' + escape_attr(title) + '" CanSwap="False" '
@@ -900,7 +973,7 @@ def build_popup(title: str, message: str, theme: str = "Blue", back: str = "") -
         '<StackPanel Margin="25,40,25,20">'
         '<local:MyHint Theme="' + theme + '" Text="' + _attr(message) + '" />'
         '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,24,0,0">'
-        + ok_button +
+        + row +
         "</StackPanel>"
         "</StackPanel>"
         "</local:MyCard>")
@@ -914,16 +987,19 @@ def popup_json(title: str, desc: str) -> str:
 
 # EventData 指向的 .json（PCL 先读它拿页面标题），以及同名的 .xaml（PCL 接着读它当内容）
 _META = {
-    "/ai_page.json": ("AI 智能分析", "MC崩溃？让 AI 帮你找原因"),
-    "/ai.json": ("AI 智能分析", "用站长的公用密钥分析"),
-    "/ai_own.json": ("AI 智能分析", "用你自己的私人密钥分析"),
+    "/ai_page.json": ("AI 日志分析", "MC崩溃？让 AI 帮你找原因"),
+    "/ai_own_page.json": ("私人密钥", "用自己的密钥分析，不限次数"),
+    "/home.json": ("返回主页", "回到 PCL 主页"),
+    "/ai.json": ("AI 日志分析", "用站长的公用密钥分析"),
+    "/ai_own.json": ("AI 日志分析", "用你自己的私人密钥分析"),
     "/ai_key.json": ("保存私人密钥", "密钥只存在服务器内存里"),
     "/ai_base_openai.json": ("存为 OpenAI 接口", "地址留空则用 api.openai.com"),
     "/ai_base_anthropic.json": ("存为 Anthropic 接口", "地址留空则用 api.anthropic.com"),
     "/ai_model.json": ("保存模型", "模型名，留空则用该协议的默认值"),
     "/ai_clear.json": ("清除私人密钥", "清除后回到公用密钥模式"),
 }
-_DO = {"/ai_page.xaml": "page", "/ai.xaml": "builtin", "/ai_own.xaml": "own",
+_DO = {"/ai_page.xaml": "page", "/ai_own_page.xaml": "own_page", "/home.xaml": "home",
+       "/ai.xaml": "builtin", "/ai_own.xaml": "own",
        "/ai_key.xaml": "savekey", "/ai_base_openai.xaml": "base_openai",
        "/ai_base_anthropic.xaml": "base_anthropic", "/ai_model.xaml": "savemodel",
        "/ai_clear.xaml": "clearkey"}
@@ -956,53 +1032,74 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
     base = config.resolved_base_url(origin)
     params = parse_query(query)
     page_url = base + "/ai_page.json"
+    own_url = base + "/ai_own_page.json"
+    home_url = base + "/home.json"
 
     if action == "page":
         return _xaml_response(build_page(config, ip, base))
 
+    if action == "own_page":
+        return _xaml_response(build_own_page(config, ip, base))
+
+    if action == "home":
+        # 这些页面是一层层叠着开的，想回主页就得按好几下左上角。
+        # 这里直接再给一份主页，点一下就到。
+        try:
+            body, _data = service.homepage(ip, origin)
+            return _xaml_response(body)
+        except Exception as exc:
+            warn("[AI] 返回主页时组装失败：" + repr(exc))
+            return _xaml_response(build_popup(
+                "主页没打开", "这会儿组装不出来，稍后再点一次。", "Yellow",
+                back=page_url, home=home_url))
+
     if action == "savekey":
         if set_own_key(ip, params.get("q", "")):
             return _xaml_response(build_popup(
-                "密钥已保存",
-                "接下来按第二步填好请求地址并选接口类型，就能用「私人密钥」分析了。\n\n"
-                "密钥只存在服务器内存里，服务重启后需要重新填。", back=page_url))
+                "密钥存好了",
+                "再把下面的请求地址和模型填上，就能点「开始分析」了。\n\n"
+                "密钥只在服务器内存里，服务重启后得重填。",
+                back=own_url, home=home_url))
         return _xaml_response(build_popup(
-            "没保存成功", "密钥输入框是空的。请填 API 密钥（DeepSeek 的是 sk- 开头）。",
-            "Yellow", back=page_url))
+            "还没填密钥", "输入框是空的。把 sk- 开头那串粘进去再点一次。",
+            "Yellow", back=own_url, home=home_url))
 
     if action in ("base_openai", "base_anthropic"):
         protocol = "openai" if action == "base_openai" else "anthropic"
         if not get_own_key(ip):
             return _xaml_response(build_popup(
-                "还没有密钥", "请先做第一步：填好 API 密钥并点「保存密钥」。",
-                "Yellow", back=page_url))
+                "先填密钥", "得先把上面的 API 密钥保存了，才能选接口。",
+                "Yellow", back=own_url, home=home_url))
         set_own_base(ip, params.get("q", ""), protocol)
         return _xaml_response(build_popup(
-            "已存为 " + PROTOCOLS[protocol][0] + " 接口",
-            "当前设置：" + describe_own_key(ip) + "\n\n"
-            "现在就能用「私人密钥」分析了。", back=page_url))
+            "记下了：" + PROTOCOLS[protocol][0] + " 接口",
+            "现在的设置是 " + describe_own_key(ip) + "。",
+            back=own_url, home=home_url))
 
     if action == "savemodel":
         if not get_own_key(ip):
             return _xaml_response(build_popup(
-                "还没有密钥", "请先做第一步：填好 API 密钥并点「保存密钥」。",
-                "Yellow", back=page_url))
+                "先填密钥", "得先把上面的 API 密钥保存了，才能存模型。",
+                "Yellow", back=own_url, home=home_url))
         set_own_model(ip, params.get("q", ""))
         return _xaml_response(build_popup(
-            "模型已保存",
-            "当前设置：" + describe_own_key(ip) + "\n\n"
-            "输入框留空再点一次就会恢复成该协议的默认模型。", back=page_url))
+            "模型换好了",
+            "现在的设置是 " + describe_own_key(ip) + "。\n\n"
+            "留空再存一次就回到该协议的默认模型。",
+            back=own_url, home=home_url))
 
     if action == "clearkey":
         had = clear_own_key(ip)
         return _xaml_response(build_popup(
-            "已清除" if had else "本来就没设",
-            "已切回公用密钥模式。" if had else "这个 IP 名下没有保存过私人密钥。",
-            back=page_url))
+            "清掉了" if had else "本来就没填过",
+            "已经回到公用密钥。" if had else "这个 IP 名下没存过私人密钥。",
+            back=own_url, home=home_url))
 
     ok, message = submit(config, ip, params.get("q", ""), use_own=(action == "own"))
-    return _xaml_response(build_popup("已提交" if ok else "没法分析", message,
-                                      "Blue" if ok else "Yellow", back=page_url))
+    return _xaml_response(build_popup(
+        "开始分析了" if ok else "没能开始", message,
+        "Blue" if ok else "Yellow",
+        back=own_url if action == "own" else page_url, home=home_url))
 
 
 def parse_query(query: str) -> dict:

@@ -278,19 +278,27 @@ def check_rendered(report: Report, config: Config) -> None:
         except ET.ParseError as exc:
             report.bad(label + " XML 解析失败：" + str(exc))
 
-    # AI 页面开着的时候也必须是良构 XML。不联网：build_page 只读当前状态。
+    # AI 那两个页面开着的时候也必须是良构 XML。不联网：只读当前状态。
     try:
         ai_config = dataclasses.replace(config, enable_ai=True, ai_api_key="sk-doctor")
         page = ai.build_page(ai_config, "203.0.113.7", "http://localhost")
-        ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root ' + _XAML_ROOT_NS
-                      + ">" + page + "</root>")
-        missing = [name for name in ("ailoginput", "aikeyinput", "aibaseinput",
-                                     "公用密钥", "私人密钥", "MC崩溃？AI智能分析")
-                   if name not in page]
-        if missing:
-            report.bad("AI 页面缺少：" + ", ".join(missing))
+        own_page = ai.build_own_page(ai_config, "203.0.113.7", "http://localhost")
+        for body in (page, own_page):
+            ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root ' + _XAML_ROOT_NS
+                          + ">" + body + "</root>")
+        problems = []
+        for name in ("ailoginput", "公用密钥", "私人密钥", "MC崩溃？AI智能分析", "/home.json"):
+            if name not in page:
+                problems.append("分析页缺 " + name)
+        for name in ("ailoginput", "aikeyinput", "aibaseinput", "aimodelinput",
+                     "开始分析", "/home.json"):
+            if name not in own_page:
+                problems.append("私人密钥页缺 " + name)
+        if problems:
+            report.bad("；".join(problems))
         else:
-            report.good("AI 智能分析页面 XML 良构（" + str(len(page)) + " 字节）")
+            report.good("AI 两个页面 XML 良构（" + str(len(page)) + " + "
+                        + str(len(own_page)) + " 字节）")
     except Exception as exc:
         report.bad("AI 页面构建失败：" + repr(exc))
 
