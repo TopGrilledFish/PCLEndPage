@@ -722,8 +722,8 @@ def build_page(config: Config, ip: str, base_url: str) -> str:
         '<TextBlock Text="MC崩溃？AI智能分析" FontSize="24" FontWeight="Bold" '
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
         '<TextBlock TextWrapping="Wrap" FontSize="12" LineHeight="20" Margin="0,10,0,0" '
-        'Foreground="{DynamicResource ColorBrush3}" Text="把崩溃日志传到 mclo.gs，链接粘到'
-        '下面就行。日志会发到 AI 接口，里面有隐私的话先删掉再传。" />'
+        'Foreground="{DynamicResource ColorBrush3}" '
+        'Text="粘贴mclo.gs日志 或者点击我上传" />'
 
         + _input_row("ailoginput", "粘贴日志链接，比如 https://mclo.gs/xxxxxxx", 40, "0,14,0,0")
 
@@ -734,8 +734,12 @@ def build_page(config: Config, ip: str, base_url: str) -> str:
                          46, column=1, margin="5,0,0,0"),
             "0,10,0,0")
 
-        + _note("公用密钥是站长的，每天有次数限制。想用自己那份、或者公用的次数用完了，"
-                "点右边的「私人密钥」去填。")
+        # 次数跟着 ai_daily_limit 走。写死「一次」的话，站长把上限调成 3，
+        # 这行就开始骗人了。
+        + _note("公用密钥每天仅可使用"
+                + ("一次" if config.ai_daily_limit == 1
+                   else " " + str(config.ai_daily_limit) + " 次")
+                + "，如需更多可使用私人密钥")
 
         + _divider("0,20,0,12")
 
