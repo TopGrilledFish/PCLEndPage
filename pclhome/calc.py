@@ -419,7 +419,6 @@ def _calc_stronghold(raw: str):
         ("方位", _compass(sx - x, sz - z) + "边，全世界第 " + str(index) + " 个"),
         ("说明", "这是按要塞环的生成公式算的点，真正的位置会从这儿往外挪 112 格以内"
                  "去找合适的生物群系——要算到那一格得有整套生物群系生成器，这儿没有。"),
-        ("说明", "走到这附近再扔末影之眼，比从家里一路扔过去省事。"),
     ]
 
 
@@ -499,10 +498,10 @@ def _calc_damage(raw: str):
         rows.append(("充能", _f(charge * 100) + "%"))
     rows.append(("暴击", "有，×1.5" if crit else "没有"))
     rows.append(("最终伤害", _f(final) + " 点（" + _f(final / 2) + " 颗心）"))
-    for text in extra:
-        rows.append(("说明", text))
-    rows.append(("说明", "这是打到身上的伤害；对方有护甲、保护附魔或抗性提升的话，"
-                         "再用「伤害减免」过一遍。"))
+    # 说明只占一行，前面的提醒都并进来，别在结果底下摞一串「说明」
+    extra.append("这是打到身上的伤害；对方有护甲、保护附魔或抗性提升的话，"
+                 "再用「伤害减免」过一遍。")
+    rows.append(("说明", "".join(extra)))
     return rows
 
 
