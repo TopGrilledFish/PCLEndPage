@@ -24,12 +24,19 @@ VERSION_FILE = VAR_DIR / "version.json"
 
 REPO = "TopGrilledFish/PCLEndPage"
 API = "https://api.github.com/repos/" + REPO + "/commits/main"
-TTL = 3600.0                       # 缓存多久算新鲜
-TIMEOUT = 6.0
+# 每次刷新主页都要现问一次 GitHub，但**不能真的每个请求都问**：匿名调 GitHub API
+# 每小时只有 60 次配额，PCL 刷新几次就见底了，之后拿到的全是 403，版本号反而变空。
+# 折中：缓存超过 FRESH 秒就同步去问（超时 TIMEOUT 秒，问不到就用旧值），
+# 碰到限流/网络错误就退避 BACKOFF 秒不再问。人手刷新主页的间隔远大于 FRESH，
+# 所以体感就是"每次刷新都是新的"。
+FRESH = 30.0
+TIMEOUT = 3.0
+BACKOFF = 600.0                    # 失败后退避多久
 UNKNOWN = ""
 
 _lock = threading.Lock()
 _refreshing = False
+_last_failure = 0.0
 
 
 def _read_cache() -> dict:
@@ -91,10 +98,27 @@ def _kick_refresh() -> None:
 
 
 def current() -> str:
-    """当前版本号（短哈希）。可能是旧值，也可能是空串（显示成"未知"）。"""
+    """当前版本号（短哈希）。拿不到就是空串，调用方显示成"未知"。
+
+    缓存过期就**当场**问一次（有超时，问不到退回旧值），所以刷新主页拿到的
+    基本是最新的提交；只有刚失败过（退避期内）才直接吃缓存。
+    """
+    global _last_failure
     cached = _read_cache()
     short = str(cached.get("version") or "").strip()
     age = time.time() - float(cached.get("ts") or 0)
-    if not short or age > TTL:
-        _kick_refresh()
+    if age <= FRESH:
+        return short
+    with _lock:
+        if time.time() - _last_failure < BACKOFF:
+            return short                      # 刚失败过，先用旧的
+    fresh = _fetch()
+    if fresh:
+        _write_cache({"version": fresh, "ts": time.time()})
+        with _lock:
+            _last_failure = 0.0
+        return fresh
+    with _lock:
+        _last_failure = time.time()
+    warn("[Version] 这次没问 GitHub 最新提交，先用上一次的：" + (short or "（还没有）"))
     return short

@@ -1,6 +1,5 @@
 {
   "_说明": "Keys must match zh-hans.json exactly; anything missing falls back to Simplified Chinese with a warning.",
-
   "home.welcome": "Welcome",
   "home.sites_title": "Useful Sites",
   "home.quote_label": "Quote of the Day",
@@ -11,7 +10,6 @@
   "home.footer_version": "Version: {version}",
   "home.footer_version_unknown": "unknown",
   "home.footer_settings": "Preferences",
-
   "date.month_suffix": " ",
   "date.day_suffix": "",
   "date.weekday_prefix": "",
@@ -34,14 +32,12 @@
   "date.weekday.4": "Thursday",
   "date.weekday.5": "Friday",
   "date.weekday.6": "Saturday",
-
   "greeting.dawn": "Still up",
   "greeting.morning": "Good morning",
   "greeting.noon": "Good afternoon",
   "greeting.afternoon": "Good afternoon",
   "greeting.evening": "Good evening",
   "greeting.night": "Late night",
-
   "btn.memory": "Free memory",
   "btn.refresh": "Refresh data",
   "btn.ai": "AI analysis",
@@ -52,18 +48,70 @@
   "btn.refresh_result": "Refresh result",
   "btn.continue": "Continue",
   "btn.settings": "Preferences",
-
   "weather.humidity": "Humidity {value}%",
   "weather.unavailable": "Could not fetch the weather. Refresh in a moment.",
   "weather.unavailable_reason": "Could not fetch the weather ({reason}).",
-  "weather.tips.hot": ["Stay out of the sun and drink water", "Too hot out — keep hydrated", "Bring a water bucket if you go mining", "A great day to stay in with a fan"],
-  "weather.tips.cold": ["Bundle up, don't freeze", "Cold out — wear an extra layer", "Bring food and torches in the cold", "Freezing weather: perfect for a fire indoors"],
-  "weather.tips.thunder": ["Don't stand on high ground in a thunderstorm", "Thunder outside, redstone inside", "Thunder — get indoors", "Lightning about, leave the metal armour off"],
-  "weather.tips.storm": ["Pouring out — sort your chests", "Don't go out in this downpour", "Heavy rain: a good time to enchant", "Raining hard — tea by the fire"],
-  "weather.tips.snow": ["Snowing — build a snow golem", "Snow day: bake some bread", "Bring torches if you head out in the snow", "A white world outside — go see it", "Watch your step on the ice"],
-  "weather.tips.rain": ["Rainy day — build a house", "Rainy day — tidy the chests", "Rainy day — tinker with redstone", "Light drizzle: good fishing weather", "Grab an umbrella and go mapping", "Soft rain — a fine day to farm"],
-  "weather.tips.fog": ["Foggy — don't wander far", "Foggy day: stay in and brew potions", "Thick fog, watch your step", "Bring a compass if you go out in the fog"],
-  "weather.tips.clear": ["Good day to go mining", "Good day to explore a new cave", "Good day to dig for treasure", "Good day to expand your base", "Good day for fishing and farming", "Good day for a long trek", "Good day to take on the Ender Dragon", "Good day to settle new land", "Good day to build a redstone contraption", "Good day to raid a woodland mansion", "Good day to tame a new horse", "Good day to sail somewhere far", "Good day to follow a treasure map", "Good day to try the Wither"],
+  "weather.tips.hot": [
+    "Stay out of the sun and drink water",
+    "Too hot out — keep hydrated",
+    "Bring a water bucket if you go mining",
+    "A great day to stay in with a fan"
+  ],
+  "weather.tips.cold": [
+    "Bundle up, don't freeze",
+    "Cold out — wear an extra layer",
+    "Bring food and torches in the cold",
+    "Freezing weather: perfect for a fire indoors"
+  ],
+  "weather.tips.thunder": [
+    "Don't stand on high ground in a thunderstorm",
+    "Thunder outside, redstone inside",
+    "Thunder — get indoors",
+    "Lightning about, leave the metal armour off"
+  ],
+  "weather.tips.storm": [
+    "Pouring out — sort your chests",
+    "Don't go out in this downpour",
+    "Heavy rain: a good time to enchant",
+    "Raining hard — tea by the fire"
+  ],
+  "weather.tips.snow": [
+    "Snowing — build a snow golem",
+    "Snow day: bake some bread",
+    "Bring torches if you head out in the snow",
+    "A white world outside — go see it",
+    "Watch your step on the ice"
+  ],
+  "weather.tips.rain": [
+    "Rainy day — build a house",
+    "Rainy day — tidy the chests",
+    "Rainy day — tinker with redstone",
+    "Light drizzle: good fishing weather",
+    "Grab an umbrella and go mapping",
+    "Soft rain — a fine day to farm"
+  ],
+  "weather.tips.fog": [
+    "Foggy — don't wander far",
+    "Foggy day: stay in and brew potions",
+    "Thick fog, watch your step",
+    "Bring a compass if you go out in the fog"
+  ],
+  "weather.tips.clear": [
+    "Good day to go mining",
+    "Good day to explore a new cave",
+    "Good day to dig for treasure",
+    "Good day to expand your base",
+    "Good day for fishing and farming",
+    "Good day for a long trek",
+    "Good day to take on the Ender Dragon",
+    "Good day to settle new land",
+    "Good day to build a redstone contraption",
+    "Good day to raid a woodland mansion",
+    "Good day to tame a new horse",
+    "Good day to sail somewhere far",
+    "Good day to follow a treasure map",
+    "Good day to try the Wither"
+  ],
   "weather.desc.晴": "Clear",
   "weather.desc.多云": "Partly cloudy",
   "weather.desc.阴": "Overcast",
@@ -82,7 +130,6 @@
   "weather.desc.浮尘": "Floating dust",
   "weather.desc.扬沙": "Blowing sand",
   "weather.desc.沙尘暴": "Sandstorm",
-
   "lunar.prefix": "Lunar",
   "lunar.leap": "Leap ",
   "lunar.month.1": "1st month",
@@ -111,18 +158,16 @@
   "lunar.day.units.7": "7",
   "lunar.day.units.8": "8",
   "lunar.day.units.9": "9",
-
   "lunar.festival_today": "Today is {name}! {msg}",
   "lunar.countdown_today": "Today is {name}!",
   "lunar.countdown_left": "{name} · {days} days to go",
-
   "settings.title": "Preferences",
   "settings.desc": "Changes here are remembered against your IP and applied the next time you open the homepage.",
   "settings.state_title": "Current state",
   "settings.state_ip": "Your IP: {ip}",
   "settings.state_name": "Player name: {name}",
   "settings.state_name_unset": "Player name: not set",
-  "settings.state_lang": "Language: {lang}",
+  "settings.state_lang": "Language: {language}",
   "settings.state_seen": "Kept until {date} ({days} days without a visit and it is cleared)",
   "settings.state_none": "No record for you yet — change a setting and one is created.",
   "settings.lang_title": "Language",
@@ -139,11 +184,10 @@
   "settings.code_import": "Import",
   "settings.code_box": "Paste a profile code",
   "settings.code_value": "Your profile code:",
-  "settings.code_ok": "Imported. The language is now {lang}.",
+  "settings.code_ok": "Imported. The language is now {language}.",
   "settings.code_bad": "That code does not look right — check you copied all of it.",
-  "settings.lang_changed": "Language switched to {lang}.",
+  "settings.lang_changed": "Language switched to {language}.",
   "settings.expired": "Your old record had expired and was cleared; this is a fresh one.",
-
   "lang.zh-hans": "Simplified Chinese",
   "lang.zh-hant": "Traditional Chinese",
   "lang.en": "English"

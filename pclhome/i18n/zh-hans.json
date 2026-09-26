@@ -1,6 +1,5 @@
 {
   "_说明": "简体中文是母版：其它语言缺键都会回退到这里。改文案改这份，然后重跑 tools/make_zh_hant.py 生成繁中。",
-
   "home.welcome": "欢迎",
   "home.sites_title": "功能网站",
   "home.quote_label": "每日一言",
@@ -11,7 +10,6 @@
   "home.footer_version": "当前版本：{version}",
   "home.footer_version_unknown": "未知",
   "home.footer_settings": "个性设置",
-
   "date.month_suffix": " 月 ",
   "date.day_suffix": " 日",
   "date.weekday_prefix": "星期",
@@ -34,14 +32,12 @@
   "date.weekday.4": "四",
   "date.weekday.5": "五",
   "date.weekday.6": "六",
-
   "greeting.dawn": "凌晨好",
   "greeting.morning": "早上好",
   "greeting.noon": "中午好",
   "greeting.afternoon": "下午好",
   "greeting.evening": "晚上好",
   "greeting.night": "夜深了",
-
   "btn.memory": "内存优化",
   "btn.refresh": "刷新数据",
   "btn.ai": "AI 分析",
@@ -52,18 +48,70 @@
   "btn.refresh_result": "刷新结果",
   "btn.continue": "继续",
   "btn.settings": "个性设置",
-
   "weather.humidity": "湿度 {value}%",
   "weather.unavailable": "天气获取失败，请稍后刷新重试。",
   "weather.unavailable_reason": "天气获取失败（{reason}）。",
-  "weather.tips.hot": ["注意防暑，别中暑了", "天太热，记得多补水", "高温下挖矿，记得带水桶", "大热天适合在家吹风扇"],
-  "weather.tips.cold": ["注意保暖，别冻坏了", "天冷，多穿点再出门", "低温下带好食物和火把", "天寒地冻，适合在家烤火"],
-  "weather.tips.thunder": ["雷雨天别站高处，小心被雷劈", "雷雨天气，适合在家研究红石", "打雷了，快进屋躲躲", "雷雨交加，别带金属装备"],
-  "weather.tips.storm": ["雨太大了，在家整理仓库吧", "暴雨天别出门，小心被冲走", "下大雨，适合在家做附魔", "大雨倾盆，在家烤火喝茶"],
-  "weather.tips.snow": ["下雪了，适合堆雪人", "雪天适合在家烤面包", "雪天出门记得带火把", "银装素裹，适合出门看雪景", "雪地走路小心滑倒"],
-  "weather.tips.rain": ["雨天适合在家建房子", "雨天适合整理箱子", "雨天适合研究红石", "毛毛雨，适合去钓鱼", "雨天撑伞去跑图也不错", "细雨绵绵，适合在家种田"],
-  "weather.tips.fog": ["雾大，别跑太远", "雾天适合在家研究药水", "大雾弥漫看不清路，注意安全", "雾天出门记得带指南针"],
-  "weather.tips.clear": ["适合出门挖矿", "适合探索新洞穴", "适合下矿寻宝", "适合扩建你的基地", "适合去钓鱼种田", "适合出门跑图探险", "适合挑战末影龙", "适合开荒新区域", "适合修一座红石机关", "适合去林地府邸探险", "适合驯一匹新马", "适合造一艘船去远航", "适合带上藏宝图去寻宝", "适合去打一次凋灵试试"],
+  "weather.tips.hot": [
+    "注意防暑，别中暑了",
+    "天太热，记得多补水",
+    "高温下挖矿，记得带水桶",
+    "大热天适合在家吹风扇"
+  ],
+  "weather.tips.cold": [
+    "注意保暖，别冻坏了",
+    "天冷，多穿点再出门",
+    "低温下带好食物和火把",
+    "天寒地冻，适合在家烤火"
+  ],
+  "weather.tips.thunder": [
+    "雷雨天别站高处，小心被雷劈",
+    "雷雨天气，适合在家研究红石",
+    "打雷了，快进屋躲躲",
+    "雷雨交加，别带金属装备"
+  ],
+  "weather.tips.storm": [
+    "雨太大了，在家整理仓库吧",
+    "暴雨天别出门，小心被冲走",
+    "下大雨，适合在家做附魔",
+    "大雨倾盆，在家烤火喝茶"
+  ],
+  "weather.tips.snow": [
+    "下雪了，适合堆雪人",
+    "雪天适合在家烤面包",
+    "雪天出门记得带火把",
+    "银装素裹，适合出门看雪景",
+    "雪地走路小心滑倒"
+  ],
+  "weather.tips.rain": [
+    "雨天适合在家建房子",
+    "雨天适合整理箱子",
+    "雨天适合研究红石",
+    "毛毛雨，适合去钓鱼",
+    "雨天撑伞去跑图也不错",
+    "细雨绵绵，适合在家种田"
+  ],
+  "weather.tips.fog": [
+    "雾大，别跑太远",
+    "雾天适合在家研究药水",
+    "大雾弥漫看不清路，注意安全",
+    "雾天出门记得带指南针"
+  ],
+  "weather.tips.clear": [
+    "适合出门挖矿",
+    "适合探索新洞穴",
+    "适合下矿寻宝",
+    "适合扩建你的基地",
+    "适合去钓鱼种田",
+    "适合出门跑图探险",
+    "适合挑战末影龙",
+    "适合开荒新区域",
+    "适合修一座红石机关",
+    "适合去林地府邸探险",
+    "适合驯一匹新马",
+    "适合造一艘船去远航",
+    "适合带上藏宝图去寻宝",
+    "适合去打一次凋灵试试"
+  ],
   "weather.desc.晴": "晴",
   "weather.desc.多云": "多云",
   "weather.desc.阴": "阴",
@@ -82,7 +130,6 @@
   "weather.desc.浮尘": "浮尘",
   "weather.desc.扬沙": "扬沙",
   "weather.desc.沙尘暴": "沙尘暴",
-
   "lunar.prefix": "农历",
   "lunar.leap": "闰",
   "lunar.month.1": "正月",
@@ -111,18 +158,16 @@
   "lunar.day.units.7": "七",
   "lunar.day.units.8": "八",
   "lunar.day.units.9": "九",
-
   "lunar.festival_today": "今天是 {name}！{msg}",
   "lunar.countdown_today": "今天就是 {name}！",
   "lunar.countdown_left": "{name} · 还有 {days} 天",
-
   "settings.title": "个性设置",
   "settings.desc": "改这里的设置会按你的 IP 记住，下次打开主页自动生效。",
   "settings.state_title": "当前状态",
   "settings.state_ip": "你的 IP：{ip}",
   "settings.state_name": "玩家名：{name}",
   "settings.state_name_unset": "玩家名：还没填",
-  "settings.state_lang": "当前语言：{lang}",
+  "settings.state_lang": "当前语言：{language}",
   "settings.state_seen": "记录保留到：{date}（{days} 天没来就会清掉）",
   "settings.state_none": "还没你的记录，改一下设置就建好了。",
   "settings.lang_title": "界面语言",
@@ -139,11 +184,10 @@
   "settings.code_import": "导入",
   "settings.code_box": "粘贴个性码",
   "settings.code_value": "你的个性码：",
-  "settings.code_ok": "导入成功，现在是{lang}。",
+  "settings.code_ok": "导入成功，现在是{language}。",
   "settings.code_bad": "个性码不对，检查有没有复制全。",
-  "settings.lang_changed": "语言已换成{lang}。",
+  "settings.lang_changed": "语言已换成{language}。",
   "settings.expired": "上次的记录已经过期清掉了，这是新的一份。",
-
   "lang.zh-hans": "简体中文",
   "lang.zh-hant": "繁體中文",
   "lang.en": "English"

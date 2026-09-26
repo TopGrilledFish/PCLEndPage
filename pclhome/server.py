@@ -36,6 +36,7 @@ from .weather import WeatherService
 from . import ai
 from . import calc
 from . import profiles
+from . import settings
 from .xaml import build_fallback_xaml
 
 # 需要"仅 PCL 客户端与真实浏览器可访问"的动态数据端点
@@ -310,6 +311,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(Response(404, b"Not Found", "text/plain; charset=utf-8"))
                 return
             self._note = "计算器：" + path
+            self._send(response)
+            return
+
+        if path in settings.SETTINGS_PATHS:
+            if service.config.guard_clients and not is_trusted_client(ua, referer):
+                self._force_warn = True
+                self._note = "来源守卫拦截（个性设置）：UA=" + (ua[:60] or "（空）")
+                self._send(Response.xaml(build_fallback_xaml(
+                    "访问被拒绝", "检测到异常访问（爬虫或扫描器）。如需使用本主页，请在 PCL2 启动器中打开。")))
+                return
+            response = settings.handle(service, path, parsed.query, self._log_ip, self._origin())
+            if response is None:
+                self._send(Response(404, b"Not Found", "text/plain; charset=utf-8"))
+                return
+            self._note = "个性设置：" + path
             self._send(response)
             return
 
