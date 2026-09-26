@@ -473,9 +473,6 @@ def build_landing(base_url: str) -> str:
         '<TextBlock Text="Minecraft 计算器" FontSize="24" FontWeight="Bold" '
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
         + note("以下是本主页提供的MC计算器列表", "0,10,0,0")
-        + note("照中文 Minecraft Wiki 的计算器页做的，搬了纯数值的那些。"
-               "旗帜、地图、附魔预览之类的要么要整套数据表、要么得画图，这儿做不了，就没搬。",
-               "0,6,0,0")
 
         + '<TextBlock Text="选一个" FontSize="13" FontWeight="Bold" Margin="0,18,0,10" '
         'Foreground="{DynamicResource ColorBrush1}" />'
