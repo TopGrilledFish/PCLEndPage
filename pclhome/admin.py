@@ -265,7 +265,8 @@ def handle(service, handler, path: str, query: str):
         ip = str(handler.headers.get("X-Forwarded-For") or "127.0.0.1").split(",")[0].strip()
         origin = config.resolved_base_url("http://" + (handler.headers.get("Host") or "localhost"))
         try:
-            body = service.homepage(ip, origin)
+            # homepage() 返回的是 (XAML, HomeData)，后者是给日志用的，别整个塞进 JSON
+            body, _data = service.homepage(ip, origin)
         except Exception as exc:
             return _json({"ok": False, "error": str(exc)}, 500)
         return _json({"ok": True, "xaml": body})

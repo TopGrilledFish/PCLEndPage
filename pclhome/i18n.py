@@ -82,8 +82,15 @@ def _lookup(key: str, lang: str):
     return value if isinstance(value, str) else None
 
 
-def t(key: str, lang: str = DEFAULT_LANG, **kw) -> str:
-    """取一句话。缺键回退 zh-hans，再缺就原样返回键名（便于体检时发现）。"""
+def t(key: str, /, lang: str = DEFAULT_LANG, **kw) -> str:
+    """取一句话。缺键回退 zh-hans，再缺就原样返回键名（便于体检时发现）。
+
+    ``key`` 前面那个 ``/`` 是**参数位限定**：第一个参数只能按位置传。因为它是按
+    关键字传的，``t("ai.key_saved", lang, key=...)`` 会撞成
+    "got multiple values for argument 'key'"——占位符叫 ``{key}`` 的句子正好会这么调，
+    一撞就是个 TypeError，页面被兜成"服务器正在更新"。限定成位置参数之后，
+    ``key`` 这个名字在 ``**kw`` 里就空出来了。
+    """
     lang = normalize_lang(lang)
     text = _lookup(key, lang)
     if text is None and lang != DEFAULT_LANG:

@@ -395,6 +395,47 @@ def check_templates(report: Report, config: Config) -> None:
             report.good(name + " 占位符齐全（" + str(len(tokens)) + " 个）")
 
 
+class _AiService:
+    """``ai.handle`` 只用得上 ``config`` 和 ``homepage`` 这两样，凑一个给它。"""
+
+    def __init__(self, config: Config):
+        self.config = config
+
+    def homepage(self, ip: str, origin: str):
+        return _fake_render(self.config), None
+
+
+def _ai_pages(config: Config) -> list:
+    """AI 那 20 个接口各调两次，``[(名字, 响应体 bytes)]``。
+
+    **这些接口主页和页面本身都不经过**：PCL 点按钮时才按 ``EventType="打开帮助"``
+    先读 .json 拿弹窗标题、再读 .xaml 拿内容。所以页面渲得再好，某个接口少传一个
+    参数照样一调就抛——抛了被 ``_dispatch`` 兜成"服务器正在更新"，看着像在维护。
+    真出过两次：``_styled()`` 少传 ``ip``（20 个接口全挂）；私人密钥页的
+    ``ai.key_saved`` 那个 ``{key}`` 占位符撞上 ``t()`` 的第一个参数名（存过密钥才炸）。
+
+    "没存密钥"和"存了密钥"两种状态各走一遍——上面两个 bug 就分别只在其中一种状态下
+    出现。假 IP + 把 ``submit`` 换成桩：真提交要扣额度、调 AI、还往 ``stats.db`` 里写。
+    """
+    ip = "203.0.113.7"
+    service = _AiService(config)
+    real = ai.submit
+    ai.submit = lambda config, ip, raw, use_own, lang="zh-hans": (True, ai.t("ai.submitted", lang))
+    pages = []
+    try:
+        for stage, key in (("没密钥", ""), ("有密钥", "sk-doctor-1234")):
+            if key:
+                ai.set_own_key(ip, key)
+            for path in sorted(ai.AI_PATHS):
+                pages.append((stage + " " + path,
+                              ai.handle(service, path, "q=https://mclo.gs/abcd", ip,
+                                        "http://localhost").body))
+    finally:
+        ai.clear_own_key(ip)
+        ai.submit = real
+    return pages
+
+
 def _fake_render(config: Config, lang: str = "zh-hans"):
     """用假 IP 走一遍完整渲染，不联网。"""
     config = dataclasses.replace(config, enable_weather=False)
@@ -462,12 +503,24 @@ def _check_localised_pages(report: Report, config: Config) -> None:
 
 
 def _english_pages(config: Config) -> list:
-    """所有应当全英文的页面，``[(名字, XAML)]``。"""
+    """所有应当全英文的页面，``[(名字, XAML)]``。
+
+    私人密钥页有"存过密钥"和"没存过"两种样子，两种都得翻干净：存过的那种会多一句
+    带密钥掩码的提示，词条和调用都跟另一种不一样。
+    """
     ai_config = dataclasses.replace(config, enable_ai=True, ai_api_key="sk-doctor")
+    ip = "203.0.113.7"
     pages = [("主页", _fake_render(config, "en")),
              ("计算器列表", calc.build_landing("http://localhost", "en")),
-             ("AI 页", ai.build_page(ai_config, "203.0.113.7", "http://localhost", "en")),
-             ("私人密钥页", ai.build_own_page(ai_config, "203.0.113.7", "http://localhost", "en"))]
+             ("AI 页", ai.build_page(ai_config, ip, "http://localhost", "en"))]
+    for stage, key in (("没存密钥", ""), ("存了密钥", "sk-doctor-1234")):
+        if key:
+            ai.set_own_key(ip, key)
+        else:
+            ai.clear_own_key(ip)
+        pages.append(("私人密钥页/" + stage,
+                      ai.build_own_page(ai_config, ip, "http://localhost", "en")))
+    ai.clear_own_key(ip)
     for item in calc.CALCS:
         for raw in ("", "1 2"):
             pages.append(("计算器 " + item["id"] + "/" + (raw or "空"),
@@ -557,6 +610,32 @@ def check_rendered(report: Report, config: Config) -> None:
                         + str(len(own_page)) + " 字节）")
     except Exception as exc:
         report.bad("AI 页面构建失败：" + repr(exc))
+
+    # AI 那 20 个接口（点按钮时才会走到的那些）也逐个调一遍。页面构建得再对，
+    # 接口里少传个参数照样一点就抛，然后被兜成"服务器正在更新"。
+    try:
+        pages = _ai_pages(config)
+        broken = []
+        for label, raw in pages:
+            text = raw.decode("utf-8", "replace")
+            if label.endswith(".json"):
+                try:                            # 给 PCL 的弹窗描述必须是 {Title, Description}
+                    if not isinstance(json.loads(text).get("Title"), str):
+                        broken.append(label + "：没有 Title")
+                except Exception as exc:
+                    broken.append(label + "：不是合法 JSON（" + str(exc) + "）")
+            else:
+                try:
+                    ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root '
+                                  + _XAML_ROOT_NS + ">" + text + "</root>")
+                except ET.ParseError as exc:
+                    broken.append(label + "：" + str(exc))
+        if broken:
+            report.bad("AI 接口有问题：" + "；".join(broken[:4]))
+        else:
+            report.good("AI " + str(len(pages)) + " 个接口都能调通、返回内容良构")
+    except Exception as exc:
+        report.bad("AI 接口调用失败：" + repr(exc))
 
     # 计算器：列表页 + 每个计算器页都要是良构 XML（空输入和带输入各来一遍）
     try:
