@@ -105,7 +105,7 @@ def _fetch_term(config: Config, today: date, cache_path: Path, cached: dict) -> 
         return cached
 
     data = fetch_json(config.lunar_api, timeout=config.http_timeout,
-                      retries=config.max_retries)
+                      retries=config.max_retries, headers=config.uapi_headers())
     term = str((data or {}).get("solar_term") or "").strip() if isinstance(data, dict) else ""
     if not term:
         # 接口没给出节气：今天的农历照样显示（没有节气那一截），缓存不动

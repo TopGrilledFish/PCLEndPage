@@ -155,22 +155,29 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str,
 
 
 def build_footer_card(config: Config, lang: str, base: str, version: str) -> str:
-    """底标：作者、仓库、当前版本，外加个性设置的入口。
+    """底标：作者、仓库、当前版本、原作署名，外加个性设置的入口。
 
     仓库按钮走的是「打开网页」（开浏览器），不是「打开帮助」（翻 PCL 内页），
     所以不能直接用 ``xaml.help_button``。
+
+    **原作那一截是署名**：上游是 MIT 协议，署名是应该的；顺带让人一眼看懂这两个
+    仓库是什么关系（不然摆两个仓库地址看着像重复）。
     """
     from .i18n import t
-    from .xaml import ICON_HOME, escape_url_attr, help_button
+    from .xaml import ICON_HOME, divider, escape_url_attr, help_button
 
     if not version:
         version = t("home.footer_version_unknown", lang)
+
+    # 原作仓库：config.source_url 就是它（默认值写死在 Config 里），
+    # 配置里被清空了也不会让按钮指向空——EventData 空着 PCL 会弹个空白浏览器
+    origin_url = config.source_url or "https://github.com/wlasfjdskfj/pcl-homepage"
 
     def line(text: str) -> str:
         return ('<TextBlock Text="' + escape_attr(text) + '" FontSize="12" '
                 'Foreground="{DynamicResource ColorBrush2}" Margin="0,0,0,6" />')
 
-    def link_button(text: str, url: str, margin: str = "") -> str:
+    def link_button(text: str, url: str, margin: str = "", color: str = "Highlight") -> str:
         """开浏览器的按钮——EventType 必须是「打开网页」。
 
         教程文件里写得很清楚：「打开网页」是拿 EventData 当网址开浏览器，
@@ -179,8 +186,8 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         """
         return ('<local:MyIconTextButton' + (' Margin="' + margin + '"' if margin else "")
                 + ' Height="36" Text="' + escape_attr(text) + '" LogoScale="0.8" Logo="'
-                + ICON_HOME + '" ColorType="Highlight" EventType="打开网页" EventData="'
-                + escape_url_attr(url) + '" />')
+                + ICON_HOME + '"' + (' ColorType="' + color + '"' if color else "")
+                + ' EventType="打开网页" EventData="' + escape_url_attr(url) + '" />')
 
     return (
         '<local:MyCard Title="' + escape_attr(t("home.footer_title", lang))
@@ -189,9 +196,15 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         + line(t("home.footer_author", lang))
         + line(t("home.footer_repo", lang))
         + line(t("home.footer_version", lang, version=version))
+        + divider("0,10,0,12")
+        + line(t("home.footer_origin_author", lang))
+        + line(t("home.footer_origin_repo", lang))
+        + line(t("home.footer_origin_note", lang))
         + '<StackPanel Orientation="Horizontal" Margin="0,10,0,0">'
         + link_button(t("home.footer_open_repo", lang),
                       "https://github.com/TopGrilledFish/PCLEndPage", "0,0,8,0")
+        # 原项目这枚不点亮：一列按钮里只有一个高亮，视线才落得到"自己的仓库"上
+        + link_button(t("home.footer_open_origin", lang), origin_url, "0,0,8,0", color="")
         # 个性设置走「打开帮助」，在 PCL 里翻页，不是开浏览器
         + help_button(t("home.footer_settings", lang), ICON_HOME,
                       base + "/settings_page.json", 36, color="")

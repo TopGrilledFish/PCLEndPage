@@ -218,7 +218,8 @@ class WeatherService:
         for params in candidates:
             url = self.config.weather_api + (("?" + urlencode(params)) if params else "")
             data, status = fetch_json_ex(url, timeout=self.config.http_timeout,
-                                         retries=self.config.max_retries)
+                                         retries=self.config.max_retries,
+                                         headers=self.config.uapi_headers())
             if data and data.get("temperature") is not None:
                 break
             if len(candidates) > 1:

@@ -309,6 +309,16 @@ def check_config(report: Report, config: Config) -> None:
     else:
         report.warning("BASE_URL 未配置，将按请求 Host 推导（反向代理后建议固定）")
 
+    # uapis.cn 的密钥（每日一言/农历/天气都走这家）。**别把密钥本身打出来**，
+    # 只报配没配、认证头有没有真的生成出来。
+    headers = config.uapi_headers()
+    if config.uapi_key and headers.get("Authorization", "").endswith(config.uapi_key.strip()):
+        report.good("uapis.cn 密钥已配好，请求会带上 Authorization 头")
+    elif config.uapi_key:
+        report.bad("uapis.cn 密钥配了但认证头没生成，接口会退回匿名额度")
+    else:
+        report.warning("uapis.cn 密钥未配置，走公共免费额度（够用，只是配额大家共享）")
+
     report.good("来源守卫：" + ("开启" if config.guard_clients else "关闭")
                 + "；天气：" + ("开启" if config.enable_weather else "关闭")
                 + "；壁纸：" + ("开启" if config.enable_wallpaper else "关闭"))

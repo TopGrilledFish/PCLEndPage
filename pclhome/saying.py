@@ -75,7 +75,8 @@ def _from_api(config: Config, today: date, cache_path: Path) -> Saying | None:
     url = config.sayings_api + "?mode=daily"
     if config.saying_source:
         url += "&source=" + urlquote(config.saying_source)
-    data = fetch_json(url, timeout=config.http_timeout, retries=config.max_retries)
+    data = fetch_json(url, timeout=config.http_timeout, retries=config.max_retries,
+                      headers=config.uapi_headers())
     item = (data or {}).get("item") if isinstance(data, dict) else None
     if isinstance(item, dict):
         text, author = str(item.get("content") or ""), str(item.get("author") or "")
