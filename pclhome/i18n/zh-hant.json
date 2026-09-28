@@ -52,6 +52,7 @@
   "btn.continue": "繼續",
   "btn.settings": "個性設置",
   "weather.humidity": "濕度 {value}%",
+  "weather.updated_at": "更新於 {time}",
   "weather.unavailable": "天氣獲取失敗，請稍後刷新重試。",
   "weather.unavailable_reason": "天氣獲取失敗（{reason}）。",
   "weather.tips.hot": [

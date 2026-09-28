@@ -29,7 +29,7 @@ from .config import Config
 from .geo import is_unlocatable, locate
 from .i18n import DEFAULT_LANG, has, t, t_list
 from .log import debug, out, warn
-from .net import fetch_json_ex
+from . import uapi
 from .xaml import escape_attr
 
 # 提示语各语种放在 i18n 表里（``weather.tips.<类别>``），zh-hans 是母版。
@@ -112,14 +112,32 @@ def weather_wind(direction: str, power: str, lang: str) -> str:
     return text
 
 
+def beijing_clock(when: float | None = None) -> str:
+    """取北京时间 HH:MM。页面上别的时间（问候、日期）都按北京时间走，这里跟着。"""
+    from datetime import datetime, timezone
+
+    from .personalize import BEIJING
+
+    moment = (datetime.fromtimestamp(when, timezone.utc) if when
+              else datetime.now(timezone.utc))
+    return moment.astimezone(BEIJING).strftime("%H:%M")
+
+
 def build_weather_xaml(location: str, temp, desc: str, wind: str, humidity,
-                       lang: str = DEFAULT_LANG) -> str:
-    """天气卡片：温度为主，天气/位置次之，分隔线，风力与湿度，一句应景建议。"""
+                       lang: str = DEFAULT_LANG, updated: float | None = None) -> str:
+    """天气卡片：温度为主，天气/位置次之，分隔线，风力与湿度，一句应景建议。
+
+    ``updated`` 是这份数据的抓取时刻。卡片按城市缓存三个小时，不写出时间的话
+    访客没法知道看到的温度是什么时候的——所以这行必须有。
+    """
     detail = escape_attr(wind or "")
     if humidity not in (None, ""):
         detail += (" · " if detail else "") + t("weather.humidity", lang, value=humidity)
     tip = _pick_tip(int(temp), str(desc), lang)
     shown = weather_desc(desc, lang)
+    stamp = ('<TextBlock Text="' + escape_attr(t("weather.updated_at", lang, time=beijing_clock(updated)))
+             + '" FontSize="10" HorizontalAlignment="Center" '
+             'Foreground="{DynamicResource ColorBrush3}" Margin="0,4,0,0" />') if updated else ""
 
     return ('<Border CornerRadius="10" Padding="16,16" Margin="0,0,0,0" Background="{DynamicResource ColorBrush7}">'
             "<StackPanel>"
@@ -138,6 +156,7 @@ def build_weather_xaml(location: str, temp, desc: str, wind: str, humidity,
             "</LinearGradientBrush></Border.Background></Border>"
             '<TextBlock Text="' + detail + '" FontSize="11" HorizontalAlignment="Center" '
             'Foreground="{DynamicResource ColorBrush3}" />'
+            + stamp +
             '<TextBlock Text="' + escape_attr(tip) + '" FontSize="12" HorizontalAlignment="Center" '
             'Foreground="{DynamicResource ColorBrush1}" Margin="0,4,0,0" TextWrapping="Wrap" TextAlignment="Center" />'
             "</StackPanel>"
@@ -217,9 +236,8 @@ class WeatherService:
         data, status = None, None
         for params in candidates:
             url = self.config.weather_api + (("?" + urlencode(params)) if params else "")
-            data, status = fetch_json_ex(url, timeout=self.config.http_timeout,
-                                         retries=self.config.max_retries,
-                                         headers=self.config.uapi_headers())
+            data, status = uapi.fetch_json_ex(url, self.config, timeout=self.config.http_timeout,
+                                              retries=self.config.max_retries)
             if data and data.get("temperature") is not None:
                 break
             if len(candidates) > 1:
@@ -253,7 +271,8 @@ class WeatherService:
         out("[Weather] " + location + " " + str(temperature) + "° " + desc
             + "（" + who + "，" + str(round(elapsed)) + "ms）")
         return {
-            "body": build_weather_xaml(location, temperature, desc, wind, data.get("humidity"), lang),
+            "body": build_weather_xaml(location, temperature, desc, wind,
+                                       data.get("humidity"), lang, updated=time.time()),
             "kind": classify_weather(desc),
             "source": location,
         }

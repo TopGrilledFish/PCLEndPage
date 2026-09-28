@@ -153,9 +153,9 @@ class Config:
     enable_wallpaper: bool = True    # 必应每日壁纸
     wallpaper_url: str = ""          # 手动指定横幅大图；留空则构建期取必应每日壁纸
     enable_saying: bool = True       # 每日一言走 uapis.cn
-    # uapis.cn 的密钥。免费端点不填也能用（现在用的这三个都是免费的），填了走
-    # 你自己的额度、不会被公共限流。**只走请求头**——塞进 URL 的话，
-    # net.py 出错时会把整条 URL 打进日志，密钥就跟着进日志文件了。
+    # uapis.cn 的密钥。免费端点不填也能用，填了走你自己的额度。**只走请求头**——
+    # 塞进 URL 的话 net.py 出错时会把整条 URL 打进日志，密钥就跟着漏出去了。
+    # 带头/退匿名那套逻辑在 uapi.py，别在这儿再写一份。
     uapi_key: str = ""
     saying_source: str = SAYING_SOURCE   # 一言语料 slug；留空 = 不限（会出英文）
     enable_lunar: bool = True        # 日期下面的农历行走 uapis.cn（失败退回本地换算）
@@ -192,7 +192,9 @@ class Config:
 
     # ---- 缓存 ----
     wallpaper_cache_hours: int = 6
-    weather_cache_seconds: int = 3600
+    # 天气按城市缓存 3 小时：接口按 IP 定位、还要外呼一次，每次请求都打一遍
+    # 又慢又费额度。卡片上会写"更新于几点"，所以放旧一点也不会让人误会。
+    weather_cache_seconds: int = 3 * 3600
     saying_cache_hours: int = 24     # 每日一言按天缓存，全站共用一句
 
     # ---- 来源守卫：上游只放行 PCL 客户端与真实浏览器 ----
@@ -209,15 +211,6 @@ class Config:
     def ai_window_text(self) -> str:
         """给日志和后台看的中文窗口名。"""
         return "每天" if self.ai_window() == "day" else "每小时"
-
-    def uapi_headers(self) -> dict:
-        """调 uapis.cn 时带的认证头。没配 ``uapi_key`` 就返回空字典。
-
-        免费端点不带也能用，所以这里不强制；带了就走自己的额度。
-        **不放 URL 里**：``net.py`` 失败时会把整条 URL 写进日志，密钥会跟着漏出去。
-        """
-        key = str(self.uapi_key or "").strip()
-        return {"Authorization": "Bearer " + key} if key else {}
 
 
 def site_slug(site: dict) -> str:

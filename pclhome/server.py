@@ -495,6 +495,9 @@ def _log_boot(config: Config, service: HomepageService, host, port) -> None:
                else ("（按访问者 IP 定位城市）" if config.enable_geo else "（按服务器 IP 定位）")))
     log.out("[Boot] 壁纸=" + ("必应每日壁纸（构建期）" if config.enable_wallpaper else "PCL 内置图")
             + "    功能网站 " + str(len(config.sites)) + " 个")
+    # 只报"配没配"，密钥本身不进日志
+    from . import uapi
+    uapi.log_state(config)
     if config.enable_ai:
         log.out("[Boot] AI 日志分析=" + config.ai_model + " @ " + config.ai_api_base
                 + "    内置密钥=" + ("已配置 " + ai.mask_key(config.ai_api_key)

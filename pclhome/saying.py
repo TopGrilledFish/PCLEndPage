@@ -25,7 +25,7 @@ from urllib.parse import quote as urlquote
 from .log import out, warn
 from .config import VAR_DIR, Config
 from .data.text import QUOTES
-from .net import fetch_json
+from . import uapi
 from .store import Store
 
 SAYING_CACHE = VAR_DIR / "saying.json"
@@ -75,8 +75,8 @@ def _from_api(config: Config, today: date, cache_path: Path) -> Saying | None:
     url = config.sayings_api + "?mode=daily"
     if config.saying_source:
         url += "&source=" + urlquote(config.saying_source)
-    data = fetch_json(url, timeout=config.http_timeout, retries=config.max_retries,
-                      headers=config.uapi_headers())
+    data = uapi.fetch_json(url, config, timeout=config.http_timeout,
+                    retries=config.max_retries)
     item = (data or {}).get("item") if isinstance(data, dict) else None
     if isinstance(item, dict):
         text, author = str(item.get("content") or ""), str(item.get("author") or "")

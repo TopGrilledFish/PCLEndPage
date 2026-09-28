@@ -24,7 +24,7 @@ from .config import VAR_DIR, Config
 from .i18n import DEFAULT_LANG, has, t
 from .log import debug, out, warn
 from .lunar import solar_to_lunar
-from .net import fetch_json
+from . import uapi
 from .xaml import escape_attr
 
 LUNAR_CACHE = VAR_DIR / "lunar.json"
@@ -98,20 +98,28 @@ def _parts(today: date, cached: dict) -> dict:
 
 
 def _fetch_term(config: Config, today: date, cache_path: Path, cached: dict) -> dict:
-    """问一次接口补上节气名，结果连同数字一起写回缓存。"""
+    """问一次接口补上节气名，问完就把日期记下——**今天不再问第二次**。
+
+    ``cached["date"]`` 是"这个节气是给哪天的"，等于今天就直接用，**不管有没有
+    节气**：一年里只有二十来天有节气，以前要求 ``term`` 非空才认缓存，于是剩下
+    三百多天每次请求都外呼一遍。没节气的日子把空的 ``term`` 一起记下来就行。
+
+    接口没通（``data`` 不是字典）**不记日期**：网络抖一下就把今天整天钉成"没节气"
+    太亏了，下次请求再试。
+    """
     if not config.enable_lunar:
         return cached
-    if cached.get("date") == today.isoformat() and cached.get("term"):
+    if cached.get("date") == today.isoformat():
         return cached
 
-    data = fetch_json(config.lunar_api, timeout=config.http_timeout,
-                      retries=config.max_retries, headers=config.uapi_headers())
-    term = str((data or {}).get("solar_term") or "").strip() if isinstance(data, dict) else ""
-    if not term:
-        # 接口没给出节气：今天的农历照样显示（没有节气那一截），缓存不动
+    data = uapi.fetch_json(config.lunar_api, config, timeout=config.http_timeout,
+                           retries=config.max_retries)
+    if not isinstance(data, dict):
         return cached
-    fresh = dict(cached)
-    fresh.update({"date": today.isoformat(), "term": term})
+    # 只写这两个键。早先的文件里还有一份渲染好的 text，那是没人读的死数据
+    # （月日现在一律本地算），留着只会让人以为它有份量。
+    fresh = {"date": today.isoformat(),
+             "term": str(data.get("solar_term") or "").strip()}
     _write_cache(cache_path, fresh)
     return fresh
 

@@ -230,8 +230,71 @@ def check_hash(report: Report) -> None:
         report.good("哈希与上游逐位一致（" + str(len(HASH_VECTORS)) + " 个基准向量）")
 
 
-def check_lunar(report: Report) -> None:
-    print("\n[4/9] 农历换算与上游一致性")
+def _check_caches(report: Report, config: Config) -> None:
+    """两个"别每次请求都外呼"的缓存：农历一天一次、天气三小时一次。
+
+    两条都是用户直接提的：农历以前非要"今天有节气"才写缓存，于是一年里那三百多天
+    每次请求都要问一遍接口；天气以前一小时一换，而且卡片上不写数据是什么时候的。
+    全程假 IP + 桩，不联网、不碰真实缓存文件。
+    """
+    import tempfile
+    import time as _time
+
+    from . import lunartime, uapi
+    from .weather import WeatherService, build_weather_xaml
+
+    # ---- 农历：同一天问第二次不许再外呼 ----
+    asked = []
+    real_fetch = uapi.fetch_json
+    uapi.fetch_json = lambda *a, **kw: (asked.append(1), {"solar_term": ""})[1]
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dataclasses.replace(config, enable_lunar=True)
+            for _ in range(3):
+                lunartime.get_lunar_text(cfg, date(2026, 9, 28), "zh-hans",
+                                         cache_path=Path(tmp) / "lunar.json")
+    finally:
+        uapi.fetch_json = real_fetch
+    if len(asked) != 1:
+        report.bad("农历一天问了 " + str(len(asked)) + " 次接口（应该只问一次）")
+    else:
+        report.good("农历一天只问一次接口（没节气的日子也不重复问）")
+
+    # ---- 天气：三小时内复用缓存，超过三小时才重新外呼 ----
+    cfg = dataclasses.replace(config, enable_weather=True, weather_city="测试市",
+                              weather_cache_seconds=3 * 3600)
+    service = WeatherService(cfg)
+    calls = []
+
+    def fake_fetch(candidates, who, lang="zh-hans"):
+        calls.append(1)
+        return {"body": build_weather_xaml("测试市", 20, "晴", "东风 3级", 40, lang,
+                                           updated=_time.time()),
+                "kind": "clear", "source": "测试市"}
+
+    service._fetch = fake_fetch                     # 桩：只数次数，不联网
+    body = service.get("203.0.113.7", "zh-hans")["body"]
+    first = len(calls)
+    service.get("203.0.113.7", "zh-hans")           # 三小时内：该命中缓存
+    second = len(calls)
+    for key, (stamp, payload) in list(service._cache.items()):
+        service._cache[key] = (stamp - 4 * 3600, payload)    # 把缓存往回拨 4 小时
+    service.get("203.0.113.7", "zh-hans")           # 过点了：该重新外呼
+    third = len(calls)
+    hours = round(cfg.weather_cache_seconds / 3600, 1)
+
+    if (first, second) != (1, 1):
+        report.bad("天气三小时内重复外呼了（第一次 " + str(first) + " 回，第二次 " + str(second) + " 回）")
+    elif third != 2:
+        report.bad("天气缓存过了 " + str(hours) + " 小时还不再更新（一共 " + str(third) + " 回）")
+    elif "更新于" not in body:
+        report.bad("天气卡片上没写数据是什么时候的（weather.updated_at 没渲染）")
+    else:
+        report.good("天气缓存 " + str(hours) + " 小时生效，卡片带更新时间")
+
+
+def check_lunar(report: Report, config: Config) -> None:
+    print("\n[4/9] 农历、节日与缓存")
     mismatches = []
     for raw, expected in LUNAR_VECTORS:
         year, month, day = (int(x) for x in raw.split("-"))
@@ -242,6 +305,8 @@ def check_lunar(report: Report) -> None:
         report.bad("农历换算不一致：" + "；".join(mismatches[:3]))
     else:
         report.good("农历换算与上游一致（" + str(len(LUNAR_VECTORS)) + " 个基准日期）")
+
+    _check_caches(report, config)
 
     # 节日表（上游那份 + 我们补的那份）：每条都得算得出公历日期、三种语言都有词条。
     # 补了节日忘了配翻译，或者月日写错，都会在这儿冒出来。
@@ -310,14 +375,43 @@ def check_config(report: Report, config: Config) -> None:
         report.warning("BASE_URL 未配置，将按请求 Host 推导（反向代理后建议固定）")
 
     # uapis.cn 的密钥（每日一言/农历/天气都走这家）。**别把密钥本身打出来**，
-    # 只报配没配、认证头有没有真的生成出来。
-    headers = config.uapi_headers()
-    if config.uapi_key and headers.get("Authorization", "").endswith(config.uapi_key.strip()):
+    # 只报配没配、以及密钥坏了会不会自动退回匿名。
+    from . import net as net_module
+    from . import uapi
+    uapi.reset()
+    if not config.uapi_key:
+        report.warning("uapis.cn 密钥未配置，走匿名额度（够用，只是配额大家共享）")
+    elif uapi.auth_headers(config).get("Authorization", "").endswith(config.uapi_key.strip()):
         report.good("uapis.cn 密钥已配好，请求会带上 Authorization 头")
-    elif config.uapi_key:
-        report.bad("uapis.cn 密钥配了但认证头没生成，接口会退回匿名额度")
     else:
-        report.warning("uapis.cn 密钥未配置，走公共免费额度（够用，只是配额大家共享）")
+        report.bad("uapis.cn 密钥配了但认证头没生成，接口会退回匿名额度")
+
+    # 密钥被拒（401 无效 / 402 没积分）时，得**当场匿名重试**，不然配了把坏密钥
+    # 反而比不配更糟——免费端点带着无效密钥也会被 401 拒掉。
+    seen = []
+    real = net_module.fetch_json_ex
+
+    def fake(url, timeout=6.0, retries=1, headers=None):
+        seen.append(dict(headers or {}))
+        return (None, 402) if len(seen) == 1 else ({"ok": True}, 200)
+
+    net_module.fetch_json_ex = fake
+    uapi.reset()
+    try:
+        data, status = uapi.fetch_json_ex("https://uapis.cn/x", config)
+        cooling = uapi.cooling_down(config)
+    finally:
+        net_module.fetch_json_ex = real
+        uapi.reset()
+    if len(seen) != 2 or "Authorization" not in seen[0] or "Authorization" in seen[1]:
+        report.bad("密钥被拒时没改成匿名重试（发了 " + str(len(seen)) + " 次请求）")
+    elif data != {"ok": True} or status != 200:
+        report.bad("匿名重试的结果没被用上：" + repr((data, status)))
+    elif config.uapi_key and cooling <= 0:
+        report.bad("密钥被拒后没进冷却期，下个请求还会带着它挨拒")
+    else:
+        report.good("密钥被拒（401/402）会自动改用匿名额度重试，并冷却 "
+                    + str(round(uapi.COOLDOWN_SECONDS / 60)) + " 分钟")
 
     report.good("来源守卫：" + ("开启" if config.guard_clients else "关闭")
                 + "；天气：" + ("开启" if config.enable_weather else "关闭")
@@ -917,7 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
     check_data(report)
     check_i18n(report)
     check_hash(report)
-    check_lunar(report)
+    check_lunar(report, config)
     check_config(report, config)
     check_geo(report)
     check_templates(report, config)

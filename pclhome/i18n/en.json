@@ -52,6 +52,7 @@
   "btn.continue": "Continue",
   "btn.settings": "Preferences",
   "weather.humidity": "Humidity {value}%",
+  "weather.updated_at": "Updated {time}",
   "weather.unavailable": "Could not fetch the weather. Refresh in a moment.",
   "weather.unavailable_reason": "Could not fetch the weather ({reason}).",
   "weather.tips.hot": [
