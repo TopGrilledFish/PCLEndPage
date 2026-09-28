@@ -164,7 +164,7 @@
   "settings.lang_title": "Language",
   "settings.lang_hint": "Tap one to switch. The whole page follows, calculators and the AI page included.",
   "settings.unit_title": "Temperature unit",
-  "settings.unit_hint": "Only changes how the temperature is shown on the homepage weather card.",
+  "settings.unit_hint": "Change the temperature unit shown on the homepage.",
   "settings.unit_c": "Celsius ℃",
   "settings.unit_f": "Fahrenheit ℉",
   "settings.unit_saved": "Temperature unit set to {unit}.",
