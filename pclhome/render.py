@@ -62,15 +62,16 @@ class HomeData:
 
 
 def build_home_data(config: Config, store: Store, weather: WeatherService,
-                    ip: str, origin: str, lang: str = DEFAULT_LANG) -> HomeData:
-    """算出本次请求的全部内容（文案按 ``lang`` 出）。"""
+                    ip: str, origin: str, lang: str = DEFAULT_LANG,
+                    unit: str = "c") -> HomeData:
+    """算出本次请求的全部内容（文案按 ``lang`` 出，温度按 ``unit`` 出）。"""
     date = get_beijing_date()
 
     extra_festivals = store.get_json("custom_festivals", []) or []
     custom_countdown = store.get_json("custom_countdown", None)
 
     saying = get_saying(config, store, date.today)
-    weather_result = weather.get(ip, lang)
+    weather_result = weather.get(ip, lang, unit)
     festival = get_festival(date.today, extra_festivals, lang)
     lunar_text = get_lunar_text(config, date.today, lang)
 

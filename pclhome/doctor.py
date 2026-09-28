@@ -266,10 +266,10 @@ def _check_caches(report: Report, config: Config) -> None:
     service = WeatherService(cfg)
     calls = []
 
-    def fake_fetch(candidates, who, lang="zh-hans"):
+    def fake_fetch(candidates, who, lang="zh-hans", unit="c"):
         calls.append(1)
         return {"body": build_weather_xaml("测试市", 20, "晴", "东风 3级", 40, lang,
-                                           updated=_time.time()),
+                                           updated=_time.time(), unit=unit),
                 "kind": "clear", "source": "测试市"}
 
     service._fetch = fake_fetch                     # 桩：只数次数，不联网
@@ -291,6 +291,25 @@ def _check_caches(report: Report, config: Config) -> None:
         report.bad("天气卡片上没写数据是什么时候的（weather.updated_at 没渲染）")
     else:
         report.good("天气缓存 " + str(hours) + " 小时生效，卡片带更新时间")
+
+    # ---- 温度单位：换单位要换数字，而且两种单位不能共用一份缓存 ----
+    celsius = service.get("203.0.113.7", "zh-hans", "c")["body"]
+    before = len(calls)
+    fahrenheit = service.get("203.0.113.7", "zh-hans", "f")["body"]
+    if "20°C" not in celsius:
+        report.bad("摄氏卡片上没写 ℃ / 温度不对：" + repr(_temp_of(celsius)))
+    elif "68°F" not in fahrenheit:                  # 20°C = 68°F
+        report.bad("华氏卡片换算不对：" + repr(_temp_of(fahrenheit)))
+    elif len(calls) != before + 1:
+        report.bad("华氏和摄氏共用了一份缓存（换单位没重新算）")
+    else:
+        # 别用 ↔ 之类的符号：Windows 控制台是 GBK，印不出来会直接把体检带崩
+        report.good("温度单位切换正常（20°C = 68°F，两种单位各缓存各的）")
+
+
+def _temp_of(body: str) -> list:
+    """卡片里那串温度（体检报错时好看）"""
+    return re.findall(r'Text="(\d+°[CF]?)"', body)
 
 
 def check_lunar(report: Report, config: Config) -> None:
@@ -652,7 +671,7 @@ def _settings_pages() -> list:
         try:
             for lang in ("zh-hans", "en", "zh-hant"):
                 profiles_module.PROFILES.bind(ip, name="Doctor", lang=lang)
-                for suffix, query in (("", ""), ("/导出", "export=1")):
+                for suffix, query in (("", ""), ("/导出", "export=1"), ("/切华氏", "unit=f")):
                     pages.append(("设置页/" + lang + suffix,
                                   settings_module.build_settings_page(
                                       "http://localhost", ip, query)))
@@ -810,8 +829,15 @@ def check_rendered(report: Report, config: Config) -> None:
             report.bad("设置页导出后没有复制按钮（复制文本事件没了）")
         elif not any("PCLP1-" in body for _, body in pages):
             report.bad("设置页导出后没看到个性码")
+        elif not all(("?unit=" + code) in body for _, body in pages for code in ("c", "f")):
+            report.bad("设置页缺温度单位按钮（?unit=c / ?unit=f）")
+        elif not any(label.endswith("/切华氏") and any(
+                "✓" in tag and "?unit=f" in tag
+                for tag in re.findall(r"<local:MyIconTextButton[^>]*/>", body))
+                for label, body in pages):
+            report.bad("设置页切到华氏后，按钮上没把当前这一档标出来")
         else:
-            report.good("设置页 " + str(len(pages)) + " 种形态 XML 良构，导出带复制按钮")
+            report.good("设置页 " + str(len(pages)) + " 种形态 XML 良构，导出带复制按钮，有温度单位按钮")
     except Exception as exc:
         report.bad("设置页构建失败：" + repr(exc))
 

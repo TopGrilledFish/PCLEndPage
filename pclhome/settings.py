@@ -76,6 +76,9 @@ def _state_block(record, ip: str, lang: str) -> str:
     else:
         rows.append(t("settings.state_name_unset", lang))
     rows.append(t("settings.state_lang", lang, language=LANG_NAMES.get(lang, lang)))
+    rows.append(t("settings.state_unit", lang,
+                  unit=t("settings.unit_" + profiles.normalize_unit((record or {}).get("unit")),
+                         lang)))
     if record:
         extra = _expiry_text(record, lang)
         if extra:
@@ -95,6 +98,17 @@ def _lang_buttons(base: str, lang: str) -> str:
         label = t("lang." + code, lang)
         cells.append(help_button(label, ICON_KEY, base + "/settings_page.json?lang=" + code,
                                  38, margin="0,0,6,6", color=""))
+    return '<StackPanel Orientation="Horizontal" Margin="0,8,0,0">' + "".join(cells) + "</StackPanel>"
+
+
+def _unit_buttons(base: str, lang: str, current: str) -> str:
+    """温度单位两个按钮，当前那个点亮——跟配色那两行一个做法。"""
+    cells = []
+    for code in profiles.UNITS:
+        cells.append(help_button(
+            ("✓ " if code == current else "") + t("settings.unit_" + code, lang), ICON_KEY,
+            base + "/settings_page.json?unit=" + code, 34,
+            margin="0,0,6,0", color="Highlight" if code == current else ""))
     return '<StackPanel Orientation="Horizontal" Margin="0,8,0,0">' + "".join(cells) + "</StackPanel>"
 
 
@@ -155,6 +169,13 @@ def build_settings_page(base_url: str, ip: str, query: str) -> str:
         lang = wanted
         result = t("settings.lang_changed", lang, language=LANG_NAMES.get(lang, lang))
 
+    if params.get("unit"):
+        # 认不出来的写法一律当摄氏度（normalize_unit 兜底），不报错——PCL 的
+        # 输入框拼 URL 时什么都可能带进来，为这个弹一句"参数错误"不值当
+        wanted_unit = profiles.normalize_unit(params["unit"])
+        profiles.PROFILES.bind(ip, unit=wanted_unit)
+        result = t("settings.unit_saved", lang, unit=t("settings.unit_" + wanted_unit, lang))
+
     if params.get("name") is not None:
         name = (params.get("name") or "").strip()
         if not name:
@@ -171,6 +192,7 @@ def build_settings_page(base_url: str, ip: str, query: str) -> str:
             if data.get("lang"):
                 lang = data["lang"]
             profiles.PROFILES.bind(ip, name=data.get("name", ""), lang=data.get("lang", ""),
+                                   unit=data.get("unit", ""),
                                    panel=data.get("panel"), text=data.get("text"))
             result = t("settings.code_ok", lang, language=LANG_NAMES.get(lang, lang))
 
@@ -196,6 +218,10 @@ def build_settings_page(base_url: str, ip: str, query: str) -> str:
     body.append(heading(t("settings.lang_title", lang), "0,20,0,0"))
     body.append(note(t("settings.lang_hint", lang), "0,6,0,0"))
     body.append(_lang_buttons(base, lang))
+
+    body.append(heading(t("settings.unit_title", lang), "0,20,0,0"))
+    body.append(note(t("settings.unit_hint", lang), "0,6,0,0"))
+    body.append(_unit_buttons(base, lang, profiles.normalize_unit((record or {}).get("unit"))))
 
     body.append(heading(t("settings.name_title", lang), "0,20,0,0"))
     body.append(note(t("settings.name_hint", lang), "0,6,0,0"))

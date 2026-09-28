@@ -166,11 +166,12 @@ class HomepageService:
     def homepage(self, ip: str, origin: str):
         """返回 ``(渲染好的 XAML, HomeData)``——后者给日志用。
 
-        语言按访客 IP 从个性设置里取（``profiles.lang_for``），没记录就是简中。
-        取语言这一步是纯内存查表，不会让主页变慢。
+        语言和温度单位按访客 IP 从个性设置里取（``profiles.lang_for`` /
+        ``unit_for``），没记录就是简中 + 摄氏度。这两步都是纯内存查表，不会让主页变慢。
         """
         lang = profiles.lang_for(ip)
-        data = build_home_data(self.config, self.store, self.weather, ip, origin, lang)
+        unit = profiles.PROFILES.unit_for(ip)
+        data = build_home_data(self.config, self.store, self.weather, ip, origin, lang, unit)
         text = render_homepage(self.static_template("Custom.xaml"), data, self.config,
                                origin, lang)
         return palette.apply(text, profiles.PROFILES.palette_for(ip)), data

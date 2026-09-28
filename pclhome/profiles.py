@@ -33,6 +33,18 @@ _CLEANUP_INTERVAL = 86400.0          # 清理本身每天最多跑一次
 _NAME_MAX = 32
 _MAX_IPS = 16                        # 一份记录最多记几个 IP，防着扫
 
+# 温度单位：c = 摄氏度、f = 华氏度。跟语言一样是"显示偏好"。
+UNITS = ("c", "f")
+DEFAULT_UNIT = "c"
+
+
+def normalize_unit(value) -> str:
+    """把各种写法归一到 c / f，认不出来回摄氏度。"""
+    text = str(value or "").strip().lower()
+    if text in ("f", "fahrenheit", "fahrenheit", "华氏", "华氏度", "℉", "°f"):
+        return "f"
+    return "c"
+
 
 def _now() -> float:
     return time.time()
@@ -119,14 +131,20 @@ class Profiles:
         from .palette import brushes
         return brushes(self.by_ip(ip))
 
+    def unit_for(self, ip: str) -> str:
+        """主页渲染时用：这个 IP 选的温度单位（``c`` / ``f``）。"""
+        record = self.by_ip(ip)
+        return normalize_unit((record or {}).get("unit") or DEFAULT_UNIT)
+
     # ---- 写入 ----
 
-    def bind(self, ip: str, name: str = "", lang: str = "",
+    def bind(self, ip: str, name: str = "", lang: str = "", unit: str = "",
              panel=None, text=None):
         """记下这个 IP 的设置。返回 (记录, 是否是新建的)。
 
         找记录的次序：这个 IP 已有的 → 同名记录（把新 IP 追加进去）→ 都没有就新建。
-        ``panel`` / ``text`` 是配色档位，传 None 表示这次不动它。
+        ``panel`` / ``text`` 是配色档位，传 None 表示这次不动它；
+        ``name`` / ``lang`` / ``unit`` 传空串表示这次不动它。
         """
         from .palette import PANEL_CHOICES, TEXT_CHOICES, normalize
         ip = (ip or "").strip()
@@ -146,7 +164,7 @@ class Profiles:
                         break
             if record is None:
                 record = {"name": "", "ips": [], "lang": DEFAULT_LANG,
-                          "created": _now(), "updated": _now()}
+                          "unit": DEFAULT_UNIT, "created": _now(), "updated": _now()}
                 self._records[self._new_id()] = record
                 fresh = True
 
@@ -157,6 +175,8 @@ class Profiles:
                 record["name"] = name
             if lang:
                 record["lang"] = lang
+            if unit:
+                record["unit"] = normalize_unit(unit)
             if panel is not None:
                 record["panel"] = normalize(panel, PANEL_CHOICES, 7)
             if text is not None:
@@ -207,7 +227,8 @@ def encode_code(record: dict) -> str:
     """把一份设置编成个性码。"""
     import base64
     from .palette import DEFAULTS as PALETTE_DEFAULTS, brushes
-    data = {"lang": normalize_lang(record.get("lang") or DEFAULT_LANG)}
+    data = {"lang": normalize_lang(record.get("lang") or DEFAULT_LANG),
+            "unit": normalize_unit(record.get("unit"))}
     name = (record.get("name") or "").strip()
     if name:
         data["name"] = name
@@ -240,6 +261,10 @@ def decode_code(code: str) -> dict | None:
     if not isinstance(data, dict):
         return None
     out = {"lang": normalize_lang(data.get("lang"))}
+    # 温度单位**总是**跟着码走（新码里一定有）：老码没有这个字段，那就当"这次不动它"，
+    # 所以只在键存在时才写进去——跟配色的处理一致。
+    if "unit" in data:
+        out["unit"] = normalize_unit(data["unit"])
     name = data.get("name")
     if isinstance(name, str) and name.strip():
         out["name"] = name.strip()[:_NAME_MAX]

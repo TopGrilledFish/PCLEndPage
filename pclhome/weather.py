@@ -29,6 +29,7 @@ from .config import Config
 from .geo import is_unlocatable, locate
 from .i18n import DEFAULT_LANG, has, t, t_list
 from .log import debug, out, warn
+from .profiles import normalize_unit
 from . import uapi
 from .xaml import escape_attr
 
@@ -123,18 +124,39 @@ def beijing_clock(when: float | None = None) -> str:
     return moment.astimezone(BEIJING).strftime("%H:%M")
 
 
+def to_fahrenheit(celsius: float) -> int:
+    """摄氏度 → 华氏度（四舍五入成整数，跟摄氏那边一样只显示整数）。"""
+    return round(float(celsius) * 9 / 5 + 32)
+
+
 def build_weather_xaml(location: str, temp, desc: str, wind: str, humidity,
-                       lang: str = DEFAULT_LANG, updated: float | None = None) -> str:
+                       lang: str = DEFAULT_LANG, updated: float | None = None,
+                       unit: str = "c") -> str:
     """天气卡片：温度为主，天气/位置次之，分隔线，风力与湿度，一句应景建议。
 
     ``updated`` 是这份数据的抓取时刻。卡片按城市缓存三个小时，不写出时间的话
     访客没法知道看到的温度是什么时候的——所以这行必须有。
+
+    ``unit`` 是访客选的温度单位（``c`` / ``f``）。**判断冷热一律用摄氏度**：
+    ``_pick_tip`` 的 30 度 / 0 度是摄氏口径，换算只发生在最后显示那一步，
+    不然华氏用户会看到"30 度就别出门了"这种反过来的建议。数字上带单位字母，
+    两地来回看的人不用记自己选的是哪个。
     """
     detail = escape_attr(wind or "")
     if humidity not in (None, ""):
         detail += (" · " if detail else "") + t("weather.humidity", lang, value=humidity)
     tip = _pick_tip(int(temp), str(desc), lang)
     shown = weather_desc(desc, lang)
+    try:
+        celsius = float(temp)
+    except (TypeError, ValueError):
+        celsius = None
+    if celsius is None:                       # 温度本身不是数字：原样显示，别硬算
+        shown_temp, letter = str(temp), ""
+    elif str(unit).lower() == "f":
+        shown_temp, letter = str(to_fahrenheit(celsius)), "F"
+    else:
+        shown_temp, letter = str(round(celsius)), "C"
     stamp = ('<TextBlock Text="' + escape_attr(t("weather.updated_at", lang, time=beijing_clock(updated)))
              + '" FontSize="10" HorizontalAlignment="Center" '
              'Foreground="{DynamicResource ColorBrush3}" Margin="0,4,0,0" />') if updated else ""
@@ -142,7 +164,7 @@ def build_weather_xaml(location: str, temp, desc: str, wind: str, humidity,
     return ('<Border CornerRadius="10" Padding="16,16" Margin="0,0,0,0" Background="{DynamicResource ColorBrush7}">'
             "<StackPanel>"
             '<StackPanel Orientation="Horizontal" HorizontalAlignment="Center">'
-            '<TextBlock Text="' + str(temp) + '°" FontSize="36" FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" />'
+            '<TextBlock Text="' + shown_temp + "°" + letter + '" FontSize="36" FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" />'
             '<TextBlock Text="' + escape_attr(shown) + '" FontSize="15" VerticalAlignment="Bottom" '
             'Foreground="{DynamicResource ColorBrush3}" Margin="8,0,0,8" />'
             "</StackPanel>"
@@ -177,7 +199,7 @@ class WeatherService:
         self._cache: dict[str, tuple[float, dict]] = {}
         self._lock = threading.Lock()
 
-    def get(self, ip: str, lang: str = DEFAULT_LANG) -> dict:
+    def get(self, ip: str, lang: str = DEFAULT_LANG, unit: str = "c") -> dict:
         """返回 ``{"body": XAML, "kind": 天气类别, "source": 简述}``；永不抛异常。"""
         if not self.config.enable_weather:
             return {"body": build_weather_unavailable(t("weather.reason.off", lang), lang),
@@ -186,18 +208,19 @@ class WeatherService:
         candidates, cache_key, who = self._targets(ip)
 
         now = time.time()
-        # 缓存的是渲染好的 XAML，所以缓存键必须带上语言：同一个城市、
-        # 一个简中访客和一个英文访客看到的不是同一块卡片。
+        # 缓存的是渲染好的 XAML，所以缓存键必须带上语言与温度单位：同一个城市，
+        # 简中访客和英文访客、摄氏用户和华氏用户看到的不是同一块卡片。
+        slot = cache_key + "|" + lang + "|" + normalize_unit(unit)
         with self._lock:
-            hit = self._cache.get(cache_key + "|" + lang)
+            hit = self._cache.get(slot)
         if hit and now - hit[0] < self.config.weather_cache_seconds:
-            debug("[Weather] 命中缓存（" + cache_key + "|" + lang + "）")
+            debug("[Weather] 命中缓存（" + slot + "）")
             return hit[1]
 
-        result = self._fetch(candidates, who, lang)
+        result = self._fetch(candidates, who, lang, unit)
         if result["kind"] is not None:
             with self._lock:
-                self._cache[cache_key + "|" + lang] = (now, result)
+                self._cache[slot] = (now, result)
         return result
 
     def _targets(self, ip: str) -> tuple[list[dict], str, str]:
@@ -230,7 +253,8 @@ class WeatherService:
             reason = "归属地查不到"
         return [{}], "__server__", "服务器本机（" + reason + "）"
 
-    def _fetch(self, candidates: list[dict], who: str, lang: str = DEFAULT_LANG) -> dict:
+    def _fetch(self, candidates: list[dict], who: str, lang: str = DEFAULT_LANG,
+               unit: str = "c") -> dict:
         """按候选参数依次查；返回第一个成功的结果。"""
         started = time.perf_counter()
         data, status = None, None
@@ -272,7 +296,8 @@ class WeatherService:
             + "（" + who + "，" + str(round(elapsed)) + "ms）")
         return {
             "body": build_weather_xaml(location, temperature, desc, wind,
-                                       data.get("humidity"), lang, updated=time.time()),
+                                       data.get("humidity"), lang, updated=time.time(),
+                                       unit=unit),
             "kind": classify_weather(desc),
             "source": location,
         }
