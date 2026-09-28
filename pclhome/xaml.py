@@ -69,6 +69,42 @@ ICON_CALC = ("M256 96 H768 A64 64 0 0 1 832 160 V864 A64 64 0 0 1 768 928 H256 "
 ICON_COPY = ("M256 256 H896 V896 H256 Z M384 384 H768 V768 H384 Z "
              "M128 128 H768 V256 H128 Z M128 256 H256 V768 H128 Z")
 
+
+def _gear_outline(teeth: int = 8, tip: float = 410.0, root: float = 310.0,
+                  center: float = 512.0) -> str:
+    """齿轮的外轮廓：一颗齿四个点（齿根 → 齿顶 → 齿顶 → 齿根），绕一圈。（见下）
+
+    整圈是**一条**闭合子路径：齿与齿之间直接用弦连起来。齿轮这种"一堆方块绕一圈"
+    的形状最容易踩 EvenOdd 的坑——真拿八个矩形去拼，矩形和圆环重叠的地方会被
+    挖成洞，看着像缺了好几块。写成一条轮廓就没这问题。
+    """
+    import math
+
+    each = math.pi / teeth          # 一颗齿占的半个角
+    points = []
+    for index in range(teeth):
+        base = index * 2 * each
+        # 0.78 / 0.34 是齿根和齿顶各占的角度比例，留出来的空档就是齿槽
+        for offset, radius in ((-each * 0.78, root), (-each * 0.34, tip),
+                               (each * 0.34, tip), (each * 0.78, root)):
+            angle = base + offset
+            points.append("%.0f %.0f" % (center + radius * math.cos(angle),
+                                         center + radius * math.sin(angle)))
+    return "M" + " L".join(points) + " Z"
+
+
+def _circle_path(cx: float, cy: float, r: float) -> str:
+    """一个整圆：两段半圆弧拼起来（跟 ICON_KEY 那个钥匙孔一个写法）。
+
+    单独画是圆点，套在别的子路径里面就是 EvenOdd 的孔——齿轮中间那个孔用的就是它。
+    """
+    return ("M%.0f %.0f A%.0f %.0f 0 1 0 %.0f %.0f A%.0f %.0f 0 1 0 %.0f %.0f Z"
+            % (cx - r, cy, r, r, cx + r, cy, r, r, cx - r, cy))
+
+
+# 齿轮（个性设置的入口）：一条外轮廓 + 中间一个圆孔
+ICON_GEAR = _gear_outline() + " " + _circle_path(512, 512, 122)
+
 _ACTION_BUTTONS = (
     ("btn.memory", "内存优化", "-", "M128 192h768v192H128z M128 448h768v192H128z M256 224v128 M256 480v128"),
     ("btn.refresh", "刷新页面", "-",

@@ -164,7 +164,7 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
     仓库是什么关系（不然摆两个仓库地址看着像重复）。
     """
     from .i18n import t
-    from .xaml import ICON_HOME, divider, escape_url_attr, help_button
+    from .xaml import ICON_GEAR, ICON_HOME, divider, escape_url_attr, help_button
 
     if not version:
         version = t("home.footer_version_unknown", lang)
@@ -199,14 +199,14 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         + divider("0,10,0,12")
         + line(t("home.footer_origin_author", lang))
         + line(t("home.footer_origin_repo", lang))
-        + line(t("home.footer_origin_note", lang))
         + '<StackPanel Orientation="Horizontal" Margin="0,10,0,0">'
         + link_button(t("home.footer_open_repo", lang),
                       "https://github.com/TopGrilledFish/PCLEndPage", "0,0,8,0")
         # 原项目这枚不点亮：一列按钮里只有一个高亮，视线才落得到"自己的仓库"上
         + link_button(t("home.footer_open_origin", lang), origin_url, "0,0,8,0", color="")
-        # 个性设置走「打开帮助」，在 PCL 里翻页，不是开浏览器
-        + help_button(t("home.footer_settings", lang), ICON_HOME,
+        # 个性设置走「打开帮助」，在 PCL 里翻页，不是开浏览器。
+        # 图标是齿轮——之前跟"打开仓库"一样用的房子，两个按钮长得一模一样。
+        + help_button(t("home.footer_settings", lang), ICON_GEAR,
                       base + "/settings_page.json", 36, color="")
         + "</StackPanel></StackPanel></local:MyCard>")
 
