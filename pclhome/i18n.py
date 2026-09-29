@@ -1,24 +1,5 @@
 # -*- coding: utf-8 -*-
-"""界面文案的多语言查表。
 
-三种语言：
-
-* ``zh-hans`` 简体中文（默认，也是唯一"手写"的那份）
-* ``zh-hant`` 繁體中文
-* ``en``      英文
-
-字符串表放 ``pclhome/i18n/*.json``，键是语义化的短名（``home.welcome``、
-``calc.damage.hint``），按组前缀排。**zh-hans 是母版**：其它语言缺键就回退
-到它，并且记一条 warn——这些串大多在主页关键路径上，不能因为漏翻一句就让
-整页崩掉（跟项目其它地方的容错风格一致）。
-
-繁中那份不是手打的：``tools/make_zh_hant.py`` 拿转换表从 zh-hans 生成，
-再人工过一遍术语。改文案要改 zh-hans，然后重跑那个脚本。
-
-**为什么不用运行期转换**：转换表在运行期要跟着走，等于把一份字典塞进服务端
-热路径，而且简繁转换有上下文（"里"要变"裡"还是"裏"），一次生成好、人工校对
-比每次请求都猜一遍靠谱。
-"""
 from __future__ import annotations
 
 import json
@@ -33,7 +14,6 @@ LANG_NAMES = {"zh-hans": "简体中文", "zh-hant": "繁體中文", "en": "Engli
 
 I18N_DIR = Path(__file__).resolve().parent / "i18n"
 
-# 常见写法的归一：PCL 那边、系统语言、用户手输都可能给出这些
 _ALIASES = {
     "zh": "zh-hans", "zh-cn": "zh-hans", "zh-sg": "zh-hans", "zh-my": "zh-hans",
     "zh-hans-cn": "zh-hans", "chs": "zh-hans", "简体": "zh-hans", "简体中文": "zh-hans",
@@ -46,7 +26,6 @@ _ALIASES = {
 
 
 def normalize_lang(value) -> str:
-    """把各种写法归一到三种语言码之一，认不出来就回默认。"""
     text = str(value or "").strip().lower().replace("_", "-")
     if not text:
         return DEFAULT_LANG
@@ -56,7 +35,6 @@ def normalize_lang(value) -> str:
         return _ALIASES[text]
     head = text.split("-")[0]
     if head in ("zh", "en"):
-        # zh 但认不出具体形式：看有没有 hant/tw/hk 的线索，否则当简体
         return "zh-hant" if any(k in text for k in ("hant", "tw", "hk", "mo")) else (
             "en" if head == "en" else DEFAULT_LANG)
     return DEFAULT_LANG
@@ -64,7 +42,6 @@ def normalize_lang(value) -> str:
 
 @lru_cache(maxsize=8)
 def table(lang: str) -> dict:
-    """读一份字符串表；读不到就用空的（下面会回退到 zh-hans）。"""
     path = I18N_DIR / (normalize_lang(lang) + ".json")
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -77,24 +54,15 @@ def table(lang: str) -> dict:
 
 @lru_cache(maxsize=4096)
 def _lookup(key: str, lang: str):
-    """查一次表。返回 None 表示这个语言里没有。"""
     value = table(lang).get(key)
     return value if isinstance(value, str) else None
 
 
 def t(key: str, /, lang: str = DEFAULT_LANG, **kw) -> str:
-    """取一句话。缺键回退 zh-hans，再缺就原样返回键名（便于体检时发现）。
 
-    ``key`` 前面那个 ``/`` 是**参数位限定**：第一个参数只能按位置传。因为它是按
-    关键字传的，``t("ai.key_saved", lang, key=...)`` 会撞成
-    "got multiple values for argument 'key'"——占位符叫 ``{key}`` 的句子正好会这么调，
-    一撞就是个 TypeError，页面被兜成"服务器正在更新"。限定成位置参数之后，
-    ``key`` 这个名字在 ``**kw`` 里就空出来了。
-    """
     lang = normalize_lang(lang)
     text = _lookup(key, lang)
     if text is None and lang != DEFAULT_LANG:
-        # 只在非默认语言上回退：默认语言自己没有就是真缺了
         warn("[i18n] " + lang + " 缺这句话，回退简中：" + key)
         text = _lookup(key, DEFAULT_LANG)
     if text is None:
