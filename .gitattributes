@@ -1,5 +1,3 @@
-# 换行符统一：仓库里一律 LF，检出到 Windows 也不自动转 CRLF。
-# 不锁的话，同一份文件在 Windows 和 Linux 上各改一次就会整文件 diff。
 * text=auto
 
 *.py   text eol=lf
@@ -10,7 +8,6 @@
 *.xaml text eol=lf
 *.yml  text eol=lf
 
-# 二进制，别动
 *.ico binary
 *.png binary
 *.jpg binary
