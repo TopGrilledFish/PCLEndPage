@@ -45,10 +45,10 @@ from . import palette
 from . import profiles
 from .log import debug, error, out, warn
 from .store import STATS_DB
-from .xaml import (ICON_AI, ICON_BACK, ICON_HOME, ICON_KEY, ICON_REFRESH,
-                   ICON_SAVE, ICON_TRASH, attr, bind_to, divider, escape_attr,
-                   grid2, heading, help_button, input_row, nav_row, note,
-                   url_attr)
+from .xaml import (HOME_EVENT_DATA, HOME_EVENT_TYPE, ICON_AI, ICON_BACK, ICON_HOME,
+                   ICON_KEY, ICON_REFRESH, ICON_SAVE, ICON_TRASH, attr, bind_to,
+                   divider, escape_attr, grid2, heading, help_button, input_row,
+                   nav_row, note, url_attr)
 
 JOBS_FILE = VAR_DIR / "ai_jobs.json"
 
@@ -793,7 +793,7 @@ def build_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_LANG)
 
         + _result_block(config, job, lang)
 
-        + _nav_row(base, refresh_url=base + "/ai_page.json", lang=lang)
+        + _nav_row(refresh_url=base + "/ai_page.json", lang=lang)
 
         + "</StackPanel>"
         "</local:MyCard>")
@@ -867,7 +867,7 @@ def build_own_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_L
 
         + _result_block(config, job, lang)
 
-        + _nav_row(base, refresh_url=base + "/ai_own_page.json", lang=lang,
+        + _nav_row(refresh_url=base + "/ai_own_page.json", lang=lang,
                    extra_text=t("ai.back_to_analysis", lang), extra_url=base + "/ai_page.json")
 
         + "</StackPanel>"
@@ -922,21 +922,23 @@ def reset(scope: str = "all", ip: str = "", window: str = "hour") -> dict:
 
 
 def build_popup(title: str, message: str, theme: str = "Blue", back: str = "",
-                home: str = "", lang: str = DEFAULT_LANG) -> str:
+                home: bool = False, lang: str = DEFAULT_LANG) -> str:
     """提示弹窗。
 
     「继续」按钮重新打开对应页面（``打开帮助``）：PCL 会重新下载那对 .json/.xaml，
     于是显示的是最新状态（正在分析 / 结果）。用 ``刷新页面`` 只会把当前这个弹窗
     自己重画一遍，看不到任何新东西。
 
-    再配一个「返回主页」：这些页是一层层叠上去的，点几下就深了，
-    有这个按钮就能一步回去，不用沿路把左上角按穿。
+    ``home=True`` 再加一个「返回主页」：这些页是一层层叠上去的，点几下就深了，
+    有这个按钮就能一步回去，不用沿路把左上角按穿。它走 ``切换页面|Launch`` 切回
+    启动器主页——以前是再翻开一份 home.json，那出来的其实是帮助页。
     """
     cells = []
     if home:
         cells.append('<local:MyButton Height="35" Width="110" Text="'
                      + escape_attr(t("btn.back_home", lang)) + '" '
-                     'EventType="打开帮助" EventData="' + _url_attr(home) + '" />')
+                     'EventType="' + HOME_EVENT_TYPE + '" EventData="'
+                     + HOME_EVENT_DATA + '" />')
     if back:
         cells.append('<local:MyButton Height="35" Width="110" Text="'
                      + escape_attr(t("btn.continue", lang)) + '" ColorType="Highlight" '
@@ -972,7 +974,6 @@ def popup_json(title: str, desc: str) -> str:
 _META = {
     "/ai_page.json": ("ai.title", "ai.meta.page"),
     "/ai_own_page.json": ("ai.own_key", "ai.meta.own_page"),
-    "/home.json": ("btn.back_home", "ai.meta.home"),
     "/ai.json": ("ai.title", "ai.meta.builtin"),
     "/ai_own.json": ("ai.title", "ai.meta.own"),
     "/ai_key.json": ("ai.meta.save_key_title", "ai.meta.save_key"),
@@ -981,7 +982,7 @@ _META = {
     "/ai_model.json": ("ai.save_model", "ai.meta.model"),
     "/ai_clear.json": ("ai.meta.clear_title", "ai.meta.clear"),
 }
-_DO = {"/ai_page.xaml": "page", "/ai_own_page.xaml": "own_page", "/home.xaml": "home",
+_DO = {"/ai_page.xaml": "page", "/ai_own_page.xaml": "own_page",
        "/ai.xaml": "builtin", "/ai_own.xaml": "own",
        "/ai_key.xaml": "savekey", "/ai_base_openai.xaml": "base_openai",
        "/ai_base_anthropic.xaml": "base_anthropic", "/ai_model.xaml": "savemodel",
@@ -1024,7 +1025,6 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
     base = config.resolved_base_url(origin)
     page_url = base + "/ai_page.json"
     own_url = base + "/ai_own_page.json"
-    home_url = base + "/home.json"
 
     if action == "page":
         return _xaml_response(palette.apply(build_page(config, ip, base, lang),
@@ -1035,62 +1035,50 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
             palette.apply(build_own_page(config, ip, base, lang),
                           profiles.PROFILES.palette_for(ip)))
 
-    if action == "home":
-        # 这些页面是一层层叠着开的，想回主页就得按好几下左上角。
-        # 这里直接再给一份主页，点一下就到。
-        try:
-            body, _data = service.homepage(ip, origin)
-            return _xaml_response(body)
-        except Exception as exc:
-            warn("[AI] 返回主页时组装失败：" + repr(exc))
-            return _xaml_response(_styled(build_popup(
-                t("ai.err.home_failed", lang), t("ai.err.home_failed_msg", lang), "Yellow",
-                back=page_url, home=home_url, lang=lang), ip))
-
     if action == "savekey":
         if set_own_key(ip, params.get("q", "")):
             return _xaml_response(_styled(build_popup(
                 t("ai.popup.key_saved", lang), t("ai.popup.key_saved_msg", lang),
-                back=own_url, home=home_url, lang=lang), ip))
+                back=own_url, home=True, lang=lang), ip))
         return _xaml_response(_styled(build_popup(
             t("ai.popup.key_empty", lang), t("ai.popup.key_empty_msg", lang),
-            "Yellow", back=own_url, home=home_url, lang=lang), ip))
+            "Yellow", back=own_url, home=True, lang=lang), ip))
 
     if action in ("base_openai", "base_anthropic"):
         protocol = "openai" if action == "base_openai" else "anthropic"
         if not get_own_key(ip):
             return _xaml_response(_styled(build_popup(
                 t("ai.popup.need_key", lang), t("ai.popup.need_key_base", lang),
-                "Yellow", back=own_url, home=home_url, lang=lang), ip))
+                "Yellow", back=own_url, home=True, lang=lang), ip))
         set_own_base(ip, params.get("q", ""), protocol)
         return _xaml_response(_styled(build_popup(
             t("ai.popup.base_saved", lang, protocol=protocol_name(protocol, lang)),
             t("ai.popup.now", lang, desc=describe_own_key(ip, lang)),
-            back=own_url, home=home_url, lang=lang), ip))
+            back=own_url, home=True, lang=lang), ip))
 
     if action == "savemodel":
         if not get_own_key(ip):
             return _xaml_response(_styled(build_popup(
                 t("ai.popup.need_key", lang), t("ai.popup.need_key_model", lang),
-                "Yellow", back=own_url, home=home_url, lang=lang), ip))
+                "Yellow", back=own_url, home=True, lang=lang), ip))
         set_own_model(ip, params.get("q", ""))
         return _xaml_response(_styled(build_popup(
             t("ai.popup.model_saved", lang),
             t("ai.popup.model_saved_msg", lang, desc=describe_own_key(ip, lang)),
-            back=own_url, home=home_url, lang=lang), ip))
+            back=own_url, home=True, lang=lang), ip))
 
     if action == "clearkey":
         had = clear_own_key(ip)
         return _xaml_response(_styled(build_popup(
             t("ai.popup.cleared" if had else "ai.popup.nothing", lang),
             t("ai.popup.cleared_msg" if had else "ai.popup.nothing_msg", lang),
-            back=own_url, home=home_url, lang=lang), ip))
+            back=own_url, home=True, lang=lang), ip))
 
     ok, message = submit(config, ip, params.get("q", ""), use_own=(action == "own"), lang=lang)
     return _xaml_response(_styled(build_popup(
         t("ai.popup.started" if ok else "ai.popup.not_started", lang), message,
         "Blue" if ok else "Yellow",
-        back=own_url if action == "own" else page_url, home=home_url, lang=lang), ip))
+        back=own_url if action == "own" else page_url, home=True, lang=lang), ip))
 
 
 def parse_query(query: str) -> dict:

@@ -35,7 +35,7 @@ from .personalize import hash_code
 from .render import build_home_data, find_leftover_placeholders, render_homepage
 from .store import Store
 from .weather import WeatherService
-from .xaml import build_action_buttons
+from .xaml import HOME_EVENT_DATA, HOME_EVENT_TYPE, build_action_buttons
 
 
 PCL_UA = "PCL2/2.13.0"
@@ -519,40 +519,46 @@ def check_templates(report: Report, config: Config) -> None:
 
 
 class _AiService:
-    """``ai.handle`` 只用得上 ``config`` 和 ``homepage`` 这两样，凑一个给它。"""
+    """``ai.handle`` 只用得上 ``config``，凑一个给它。
+
+    它以前还要 ``homepage``（``/home.xaml`` 会把主页当帮助页再翻一份），那个接口
+    已经删了——「返回主页」现在走 ``切换页面|Launch``，不经过服务端。
+    """
 
     def __init__(self, config: Config):
         self.config = config
 
-    def homepage(self, ip: str, origin: str):
-        return _fake_render(self.config), None
-
 
 def _ai_pages(config: Config) -> list:
-    """AI 那 20 个接口各调两次，``[(名字, 响应体 bytes)]``。
+    """AI 那 18 个接口各调三次，``[(名字, 响应体 bytes, 该不该有「返回主页」)]``。
 
     **这些接口主页和页面本身都不经过**：PCL 点按钮时才按 ``EventType="打开帮助"``
     先读 .json 拿弹窗标题、再读 .xaml 拿内容。所以页面渲得再好，某个接口少传一个
     参数照样一调就抛——抛了被 ``_dispatch`` 兜成"服务器正在更新"，看着像在维护。
-    真出过两次：``_styled()`` 少传 ``ip``（20 个接口全挂）；私人密钥页的
+    真出过两次：``_styled()`` 少传 ``ip``（那时 20 个接口全挂）；私人密钥页的
     ``ai.key_saved`` 那个 ``{key}`` 占位符撞上 ``t()`` 的第一个参数名（存过密钥才炸）。
 
-    "没存密钥"和"存了密钥"两种状态各走一遍——上面两个 bug 就分别只在其中一种状态下
-    出现。假 IP + 把 ``submit`` 换成桩：真提交要扣额度、调 AI、还往 ``stats.db`` 里写。
+    "AI 没开 / 开了没密钥 / 开了有密钥"三种状态各走一遍——上面两个 bug 就分别只在其中
+    一种状态下出现；AI 没开时那两个页面会变成「未开启」提示（本来就没有底部那排按钮，
+    所以那一态不查「返回主页」）。假 IP + 把 ``submit`` 换成桩：真提交要扣额度、调 AI、
+    还往 ``stats.db`` 里写。
     """
     ip = "203.0.113.7"
-    service = _AiService(config)
     real = ai.submit
     ai.submit = lambda config, ip, raw, use_own, lang="zh-hans": (True, ai.t("ai.submitted", lang))
     pages = []
     try:
-        for stage, key in (("没密钥", ""), ("有密钥", "sk-doctor-1234")):
-            if key:
-                ai.set_own_key(ip, key)
+        stages = [("AI 未开启", _AiService(config), False)]
+        on = dataclasses.replace(config, enable_ai=True, ai_api_key="sk-doctor")
+        stages += [("没密钥", _AiService(on), True), ("有密钥", _AiService(on), True)]
+        for stage, service, want_home in stages:
+            if stage == "有密钥":
+                ai.set_own_key(ip, "sk-doctor-1234")
             for path in sorted(ai.AI_PATHS):
                 pages.append((stage + " " + path,
                               ai.handle(service, path, "q=https://mclo.gs/abcd", ip,
-                                        "http://localhost").body))
+                                        "http://localhost").body,
+                              want_home))
     finally:
         ai.clear_own_key(ip)
         ai.submit = real
@@ -710,6 +716,12 @@ def check_rendered(report: Report, config: Config) -> None:
         except ET.ParseError as exc:
             report.bad(label + " XML 解析失败：" + str(exc))
 
+    # AI 页会把这个 IP 最近一条分析记录连着结果一起显示出来。假 IP 上不该有记录，
+    # 但真会有：体检自己某次没被桩拦住的提交、或者手工探一下，都会留下一条中文结果
+    # （提交时是什么语言就存什么语言）。留着它，后面"英文页面里没有中文"的扫描就会
+    # 凭空报红——先把这个 IP 的记录清掉，体检才是可重复的。
+    ai.reset_jobs("203.0.113.7")
+
     # AI 那两个页面开着的时候也必须是良构 XML。不联网：只读当前状态。
     try:
         ai_config = dataclasses.replace(config, enable_ai=True, ai_api_key="sk-doctor")
@@ -719,13 +731,14 @@ def check_rendered(report: Report, config: Config) -> None:
             ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root ' + _XAML_ROOT_NS
                           + ">" + body + "</root>")
         problems = []
-        for name in ("ailoginput", "公用密钥", "私人密钥", "MC崩溃？AI智能分析", "/home.json"):
+        home_mark = 'EventType="' + HOME_EVENT_TYPE + '" EventData="' + HOME_EVENT_DATA + '"'
+        for name in ("ailoginput", "公用密钥", "私人密钥", "MC崩溃？AI智能分析", home_mark):
             if name not in page:
-                problems.append("分析页缺 " + name)
+                problems.append("分析页缺 " + (name if name is not home_mark else "返回主页"))
         for name in ("ailoginput", "aikeyinput", "aibaseinput", "aimodelinput",
-                     "开始分析", "/home.json"):
+                     "开始分析", home_mark):
             if name not in own_page:
-                problems.append("私人密钥页缺 " + name)
+                problems.append("私人密钥页缺 " + (name if name is not home_mark else "返回主页"))
         if problems:
             report.bad("；".join(problems))
         else:
@@ -734,12 +747,12 @@ def check_rendered(report: Report, config: Config) -> None:
     except Exception as exc:
         report.bad("AI 页面构建失败：" + repr(exc))
 
-    # AI 那 20 个接口（点按钮时才会走到的那些）也逐个调一遍。页面构建得再对，
+    # AI 那些接口（点按钮时才会走到的那些）也逐个调一遍。页面构建得再对，
     # 接口里少传个参数照样一点就抛，然后被兜成"服务器正在更新"。
     try:
         pages = _ai_pages(config)
         broken = []
-        for label, raw in pages:
+        for label, raw, want_home in pages:
             text = raw.decode("utf-8", "replace")
             if label.endswith(".json"):
                 try:                            # 给 PCL 的弹窗描述必须是 {Title, Description}
@@ -753,6 +766,9 @@ def check_rendered(report: Report, config: Config) -> None:
                                   + _XAML_ROOT_NS + ">" + text + "</root>")
                 except ET.ParseError as exc:
                     broken.append(label + "：" + str(exc))
+                # 每个 .xaml 底下都得有「返回主页」，而且得是切回启动器主页
+                if want_home and 'EventType="' + HOME_EVENT_TYPE + '" EventData="' + HOME_EVENT_DATA + '"' not in text:
+                    broken.append(label + "：返回主页按钮不对")
         if broken:
             report.bad("AI 接口有问题：" + "；".join(broken[:4]))
         else:
@@ -811,6 +827,24 @@ def check_rendered(report: Report, config: Config) -> None:
             report.good("计算器列表图标均已镜像到本地")
     except Exception as exc:
         report.bad("计算器页构建失败：" + repr(exc))
+
+    # 子页面底部的「返回主页」必须是 ``切换页面|Launch``——PCL 的「切换页面」切到启动器的
+    # 启动页，右边就是这份自定义主页。以前走的是「打开帮助」+ 一份 home.json，点下去翻开
+    # 的是个帮助页（左上角还多一个返回箭头），用户一眼就看出来了。
+    try:
+        mark = 'EventType="' + HOME_EVENT_TYPE + '" EventData="' + HOME_EVENT_DATA + '"'
+        rows = [("计算器列表", calc.build_landing("http://localhost", "zh-hans"))]
+        rows += [("计算器/" + item["id"],
+                  calc.build_calc_page(item, "", "http://localhost", "zh-hans"))
+                 for item in calc.CALCS]
+        rows += _settings_pages()
+        bad = [label for label, body in rows if mark not in body]
+        if bad:
+            report.bad("「返回主页」不是切回启动器主页：" + "、".join(bad[:6]))
+        else:
+            report.good("计算器与设置页的「返回主页」都走 切换页面|Launch")
+    except Exception as exc:
+        report.bad("「返回主页」检查失败：" + repr(exc))
 
     # 设置页：空着 / 导出 / 三种语言都得是良构 XML。导出那一段（里面是"复制到
     # 剪切板"那个按钮）平时渲染不到，只有 ?export=1 才出得来，所以单拎出来验。
@@ -948,8 +982,73 @@ def check_rendered(report: Report, config: Config) -> None:
     _check_localised_pages(report, config)
 
 
+# 绝不允许从外面拿到的东西。静态目录一度是 [STATIC_DIR, ROOT] 两个候选，等于把整个项目
+# 目录挂到公网上——config.json（各种密钥）、var/server.log、var/profiles.json、
+# pclhome/*.py 全都能直接 GET 下来。2026-10-14 就是这么被扫走密钥、刷掉 240 万 token 的。
+# 这份清单同时用于离线（直接问静态处理器）和线上（真发请求）两处检查，只许加不许减。
+FORBIDDEN_PATHS = (
+    "/config.json",
+    "/config.example.json",
+    "/config.json.bak",
+    "/var/server.log",
+    "/var/profiles.json",
+    "/var/stats.db",
+    "/run.py",
+    "/pclhome/config.py",
+    "/pclhome/server.py",
+    "/tools/port_data.py",
+    "/Custom.xaml.tpl",
+)
+
+
+def _static_probe(path: str, config: Config):
+    """不启服务，直接拿静态处理器走一遍，返回 ``(状态码, 字节数)``。
+
+    处理器只用到 ``service.config``、``_note`` 和 ``_send`` 三样，所以绕过 ``__init__``
+    （它要真 socket）凑一个出来就够。``_send`` 换成收集器，免得真往连接里写。
+    """
+    from types import SimpleNamespace
+
+    from .server import Handler
+    handler = Handler.__new__(Handler)
+    handler.service = SimpleNamespace(config=config)
+    handler._note = ""
+    sent = []
+    handler._send = sent.append
+    try:
+        handler._serve_static(path)
+    except Exception as exc:
+        return "异常：" + repr(exc), 0
+    return (sent[0].status, len(sent[0].body)) if sent else (None, 0)
+
+
 def check_static(report: Report, config: Config) -> None:
     print("\n[9/9] 静态资源")
+
+    # ---- 先查最要命的：项目目录里的东西能不能被外人拿走 ----
+    #
+    # 静态处理器一度是 `[STATIC_DIR / safe, ROOT / safe]` 两个候选，第二个等于把**整个
+    # 项目目录**挂到公网上：`GET /config.json` 直接吐配置（uapi_key、ai_api_key、
+    # admin_token），`/var/server.log`、`/var/profiles.json`、`/pclhome/*.py` 一样能下。
+    # 2026-10-14 发现时，上线当天就被扫走、AI 密钥被刷掉 240 万 token。
+    # 所以这里钉死：这些路径必须 404，而主页那两个构建产物必须还能拿到。
+    try:
+        leaked = [p for p in FORBIDDEN_PATHS if _static_probe(p, config)[0] == 200]
+        if leaked:
+            report.bad("静态目录把项目文件发出去了（能被外人直接下载）：" + "、".join(leaked))
+        else:
+            report.good("敏感路径 " + str(len(FORBIDDEN_PATHS)) + " 个全部 404，不会泄露配置与日志")
+
+        # 反向也要看一眼：白名单收得太紧会把主页也挡掉。
+        # 只验 /Custom.xaml：``Custom.xaml.version`` 是"静态部署"才有的占位文件，服务器上
+        # 本来就可能没有（对外发的版本号由 /Custom.xaml.version 路由现算，线上那段单独验）。
+        keep_ok = [p for p in ("/Custom.xaml",) if _static_probe(p, config)[0] != 200]
+        if keep_ok:
+            report.bad("该发的构建产物反而拿不到了：" + "、".join(keep_ok))
+        else:
+            report.good("主页构建产物 /Custom.xaml 仍可正常获取")
+    except Exception as exc:
+        report.bad("静态目录白名单检查失败：" + repr(exc))
 
     from .sites import local_icon, site_slug
     if not config.sites:
@@ -1006,6 +1105,18 @@ def check_online(report: Report, base: str) -> None:
             report.bad(label + " 内容异常（没有 StackPanel）")
         else:
             report.good(label + " 正常（" + str(len(body)) + " 字节，占位符已替换）")
+
+    # 敏感文件：线上也得 404。离线那条测的是应用逻辑，这条测的是**真正部署出去的样子**——
+    # 反代配置、老版本进程、静态目录挂载方式，任何一个环节都能把它漏出去。
+    leaked = []
+    for path in FORBIDDEN_PATHS:
+        status, body, _ = _probe(base + path, PCL_UA)
+        if status == 200:
+            leaked.append(path)
+    if leaked:
+        report.bad("线上直接能下载到这些文件（密钥/日志泄露）：" + "、".join(leaked))
+    else:
+        report.good("线上 " + str(len(FORBIDDEN_PATHS)) + " 个敏感路径均已 404")
 
     # 来源守卫：爬虫 UA 应当被拒
     status, body, _ = _probe(base + "/Custom.xaml", "python-requests/2.31")

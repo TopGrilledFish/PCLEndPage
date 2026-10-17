@@ -1,5 +1,17 @@
 # -*- coding: utf-8 -*-
+"""调 uapis.cn 的那一层：密钥不能用就退回匿名（访客额度）。
 
+**为什么非要有这一层**：uapis 的免费端点本来不带密钥也能用，但一旦带上一个
+**无效或没积分的密钥，反而会被拒**（官方错误码表里 ``UNAUTHORIZED`` 401 的说明
+就是"Key 无效、过期、已删除**或未携带**"，``INSUFFICIENT_CREDITS`` 402 是"积分与
+余额不足"）。也就是说配了一把坏密钥，比不配还糟——每日一言、农历、天气会一起挂掉。
+
+所以这里统一做：带密钥请求 → 撞上 401/402 就把它记成"暂时别用了"，**当场改用匿名
+重试一次**（访客额度，不影响这次请求），随后一段时间不再带这个头。等冷却过去会再
+试一次密钥，所以充值之后不用重启服务，自己就恢复了。
+
+密钥换了（``uapi_key`` 变了）就重新认，不受上一把的冷却影响。
+"""
 from __future__ import annotations
 
 import threading
@@ -8,8 +20,11 @@ import time
 from . import net
 from .log import debug, out, warn
 
+# 踩到 401/402 之后，多久之内不再带这个密钥。短了会一直白挨拒，
+# 长了充值之后要等太久才恢复（到点会自动再试）。
 COOLDOWN_SECONDS = 30 * 60
 
+# 401 = UNAUTHORIZED（密钥无效/过期/已删），402 = INSUFFICIENT_CREDITS（积分用完）
 DEAD_STATUS = (401, 402)
 
 _lock = threading.Lock()
@@ -21,6 +36,7 @@ def _mask(key: str) -> str:
 
 
 def auth_headers(config) -> dict:
+    """这次请求该带的认证头。没配密钥、或密钥正在冷却期，都返回空字典。"""
     key = str(getattr(config, "uapi_key", "") or "").strip()
     if not key:
         return {}

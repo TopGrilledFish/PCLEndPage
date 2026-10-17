@@ -36,9 +36,10 @@ from .config import ICONS_DIR, PACK_FALLBACK_IMAGE
 from .i18n import DEFAULT_LANG, t
 from . import palette
 from .log import warn
-from .xaml import (ICON_BACK, ICON_CALC, ICON_HOME, attr, bind_to, escape_attr,
-                   grid2, heading, help_button, indent_block, input_row, nav_row,
-                   note, render_template, url_attr)
+from .xaml import (ICON_BACK, ICON_CALC, ICON_COPY, ICON_HOME, attr, bind_to,
+                   copy_button, escape_attr, grid2, heading, help_button,
+                   indent_block, input_row, nav_row, note, render_template,
+                   url_attr)
 
 
 # ============ 输入 / 输出 ============
@@ -112,16 +113,24 @@ def _one(raw, what, lang):
 # 只有数字和 X/Y/Z 这类坐标符号不翻。
 
 def _calc_nether(raw: str, lang: str):
-    """主世界 ↔ 下界坐标。横向 8:1，Y 不变。"""
+    """主世界 ↔ 下界坐标。横向 8:1，Y 不变。
+
+    输入是 ``X,Z`` 或 ``X,Y,Z``——填了三个数时第二个数是 Y，不是 Z。
+    以前这里写死 ``x, z = nums[0], nums[1]``，三个数就把 Y 当成 Z 用了。
+    """
     nums = _floats(raw)
     _need(nums, 2, t("calc.nether.what", lang), lang)
-    x, z = nums[0], nums[1]
+    if len(nums) >= 3:
+        x, y, z = nums[0], nums[1], nums[2]
+    else:
+        x, z = nums[0], nums[1]
+        y = None
     rows = [
         (t("calc.nether.to_nether", lang), "X " + _f(x / 8) + "   Z " + _f(z / 8)),
         (t("calc.nether.to_over", lang), "X " + _f(x * 8) + "   Z " + _f(z * 8)),
     ]
-    if len(nums) >= 3:
-        rows.append(("Y", t("calc.nether.y_note", lang, n=_f(nums[1]))))
+    if y is not None:
+        rows.append(("Y", t("calc.nether.y_note", lang, n=_f(y))))
     rows.append((t("calc.nether.ratio", lang), t("calc.nether.ratio_value", lang)))
     return rows
 
@@ -145,18 +154,29 @@ def _calc_chunk(raw: str, lang: str):
 
 
 def _calc_distance(raw: str, lang: str):
-    """两点距离。填 6 个数算三维，填 4 个数按水平面算。"""
+    """两点距离。填 6 个数算三维，填 4 个数按水平面算。
+
+    以前 5 个数会被静默截成前 4 个（少一个坐标也不报错），现在只认 4 个或
+    6 个；4 个数时会在结果下面多一行说明「按水平面算」，免得把水平距离当成
+    直线距离。
+    """
     nums = _floats(raw)
-    if nums is not None and len(nums) >= 6:
+    if nums is None:
+        raise ValueError(t("calc.distance.what", lang))
+    if len(nums) >= 6:
         x1, y1, z1, x2, y2, z2 = nums[:6]
-    elif nums is not None and len(nums) >= 4:
-        x1, z1, x2, z2 = nums[:4]
+        flat_only = False
+    elif len(nums) == 4:
+        x1, z1, x2, z2 = nums
         y1 = y2 = 0.0
+        flat_only = True
+    elif len(nums) == 5:
+        raise ValueError(t("calc.distance.count", lang, n=len(nums)))
     else:
         raise ValueError(t("calc.distance.what", lang))
     dx, dy, dz = x2 - x1, y2 - y1, z2 - z1
     flat = math.hypot(dx, dz)
-    return [
+    rows = [
         (t("calc.distance.flat", lang), t("calc.blocks", lang, n=_f(flat))),
         (t("calc.distance.straight", lang),
          t("calc.blocks", lang, n=_f(math.sqrt(dx * dx + dy * dy + dz * dz)))),
@@ -164,6 +184,9 @@ def _calc_distance(raw: str, lang: str):
         (t("calc.distance.via_nether", lang),
          t("calc.distance.via_nether_value", lang, flat=_f(flat), nether=_f(flat / 8))),
     ]
+    if flat_only:
+        rows.append((t("calc.note", lang), t("calc.distance.flat_only", lang)))
+    return rows
 
 
 def _calc_tick(raw: str, lang: str):
@@ -179,10 +202,22 @@ def _calc_tick(raw: str, lang: str):
 
 
 def _calc_exp(raw: str, lang: str):
-    """升到某级需要多少经验。分段公式，和游戏里一致。"""
-    level = int(_one(raw, t("calc.exp.what", lang), lang))
-    if level < 0:
+    """升到某级需要多少经验。分段公式，和游戏里一致。
+
+    填一个数是「从 0 级升到这一级」，填两个数是「从 a 级升到 b 级」。
+    以前信息面板上写着能算「某一级升到另一级」，但代码只取了第一个数，
+    第二个数被静默丢掉。
+    """
+    nums = _floats(raw)
+    _need(nums, 1, t("calc.exp.what", lang), lang)
+    if len(nums) >= 2:
+        start, level = int(nums[0]), int(nums[1])
+    else:
+        start, level = 0, int(nums[0])
+    if start < 0 or level < 0:
         raise ValueError(t("calc.exp.negative", lang))
+    if level < start:
+        start, level = level, start
 
     def total(n):
         if n <= 16:
@@ -193,9 +228,9 @@ def _calc_exp(raw: str, lang: str):
 
     points = lambda n: t("calc.exp.points", lang, n=n)      # noqa: E731
     rows = [(t("calc.exp.from_zero", lang, level=level), points(total(level)))]
-    if level > 0:
-        rows.append((t("calc.exp.between", lang, a=level - 1, b=level),
-                     points(total(level) - total(level - 1))))
+    if start > 0:
+        rows.append((t("calc.exp.between", lang, a=start, b=level),
+                     points(total(level) - total(start))))
     rows.append((t("calc.exp.next", lang), points(total(level + 1) - total(level))))
     rows.append((t("calc.exp.convert", lang),
                  t("calc.exp.convert_value", lang, n=total(1))))
@@ -229,25 +264,39 @@ def _calc_armor(raw: str, lang: str):
 
 
 def _calc_stack(raw: str, lang: str):
-    """物品数量 ↔ 组数 / 潜影盒 / 箱子。"""
+    """物品数量 ↔ 组数 / 潜影盒 / 箱子。
+
+    以前容器那两行用的是 ``divmod(n, 64*27)`` 的**个**级余数，于是 1000 个物品
+    显示成「潜影盒 0 盒 又 1000 个」、1728 个显示成「大箱子 0 箱 又 1728 个」——
+    余数比一整个容器还大，读起来完全没用。现在余数先折算成「组 + 个」，再补一句
+    「共需几个容器」。
+    """
     n = int(_one(raw, t("calc.stack.what", lang), lang))
     if n < 0:
         raise ValueError(t("calc.stack.negative", lang))
     stacks, rest = divmod(n, 64)
-    boxes, box_rest = divmod(n, 64 * 27)
-    chests, chest_rest = divmod(n, 64 * 54)
 
-    def count(value, rest_value, unit_key, note_key=""):
-        text = t(unit_key, lang, n=value)
-        if rest_value:
-            text += t("calc.stack.and_n", lang, n=rest_value)
-        return text + (t(note_key, lang) if note_key else "")
+    def fill(capacity, full_key, rest_key):
+        """装满了几个容器、剩下的零头是多少组多少个、总共要几个容器。"""
+        full, left = divmod(n, capacity)
+        need = full + (1 if left else 0)
+        if not left:
+            return t(full_key, lang, full=full, need=need)
+        left_stacks, left_items = divmod(left, 64)
+        return t(rest_key, lang, full=full, need=need,
+                 stacks=left_stacks, items=left_items)
+
+    stacks_text = t("calc.stack.stack_unit", lang, n=stacks)
+    if rest:
+        stacks_text += t("calc.stack.and_n", lang, n=rest)
 
     return [
         (t("calc.stack.count", lang), str(n)),
-        (t("calc.stack.stacks", lang), count(stacks, rest, "calc.stack.stack_unit")),
-        (t("calc.stack.boxes", lang), count(boxes, box_rest, "calc.stack.box_unit", "calc.stack.box_note")),
-        (t("calc.stack.chests", lang), count(chests, chest_rest, "calc.stack.chest_unit", "calc.stack.chest_note")),
+        (t("calc.stack.stacks", lang), stacks_text),
+        (t("calc.stack.boxes", lang),
+         fill(64 * 27, "calc.stack.box_full", "calc.stack.box_rest")),
+        (t("calc.stack.chests", lang),
+         fill(64 * 54, "calc.stack.chest_full", "calc.stack.chest_rest")),
     ]
 
 
@@ -289,7 +338,7 @@ def _calc_uuid(raw: str, lang: str):
     hexed = digest.hex()
     dashed = "-".join([hexed[0:8], hexed[8:12], hexed[12:16], hexed[16:20], hexed[20:32]])
     return [
-        (t("calc.uuid.name", lang), name),
+        (t("calc.uuid.player", lang), name),
         (t("calc.uuid.uuid", lang), dashed),
         (t("calc.uuid.dashed", lang), hexed),
         (t("calc.note", lang), t("calc.uuid.note_value", lang)),
@@ -475,6 +524,9 @@ def _calc_damage(raw: str, lang: str):
         return default if value is None else value
 
     attack = filled(0)
+    if attack <= 0:
+        # 攻击力填 0 或者空着，后面乘出来永远是 0——那不是答案，是输入不全
+        raise ValueError(t("calc.damage.min", lang))
     sharp = int(filled(1))
     smite = int(filled(2))
     bane = int(filled(3))
@@ -564,6 +616,90 @@ CALCS = [
 CALC_BY_ID = {item["id"]: item for item in CALCS}
 
 
+# 输入框里那句灰字提示：「示例：8,5」。以前这里放的是「仅支持逗号作分割」，
+# 说了半天没说该填什么——那句话现在挪到输入框上面的正文里（见 ``build_calc_page``），
+# 框里改成这个计算器真实的示例值。
+EXAMPLES = {
+    "damage": "8,5",
+    "nether": "800,-1600",
+    "chunk": "100,-200",
+    "distance": "0,64,0,100,64,100",
+    "stronghold": "0,0,12345",
+    "tick": "1200",
+    "exp": "0,30",
+    "armor": "20,20",
+    "stack": "1000",
+    "color": "FF8800",
+    "uuid": "Notch",
+    "seed": "hello",
+}
+
+
+# 快捷按钮：点一下就用固定的 ``?q=`` 打开本页，不用自己敲。
+# 这是「一个输入框」限制下唯一能给的「多选」——按钮自己带参数，绕开输入框。
+# 颜色那个尤其需要：``#`` 一拼进 URL 就被当成 fragment，服务端根本收不到，
+# 所以直接把不带 ``#`` 的示例摆成按钮，让用户不用去想这件事。
+PRESETS = {
+    "damage": [
+        ("calc.preset.fist", "1"),
+        ("calc.preset.wood_sword", "4"),
+        ("calc.preset.stone_sword", "5"),
+        ("calc.preset.iron_sword", "6"),
+        ("calc.preset.diamond_sword", "7"),
+        ("calc.preset.netherite_sword", "8"),
+    ],
+    "nether": [
+        ("calc.preset.over_to_nether", "800,-1600"),
+        ("calc.preset.nether_to_over", "100,100"),
+    ],
+    "distance": [
+        ("calc.preset.dist_3d", "0,64,0,100,64,100"),
+        ("calc.preset.dist_flat", "0,0,100,100"),
+    ],
+    "stronghold": [
+        ("calc.preset.seed_zero", "0,0,0"),
+        ("calc.preset.seed_text", "0,0,hello"),
+    ],
+    "tick": [
+        ("calc.preset.tick_sec", "20"),
+        ("calc.preset.tick_min", "1200"),
+        ("calc.preset.tick_day", "24000"),
+        ("calc.preset.tick_repeater", "2"),
+    ],
+    "exp": [
+        ("calc.preset.lv30", "30"),
+        ("calc.preset.lv50", "50"),
+        ("calc.preset.lv100", "100"),
+    ],
+    "armor": [
+        ("calc.preset.iron_armor", "20,15"),
+        ("calc.preset.diamond_armor", "20,20"),
+        ("calc.preset.netherite_armor", "20,20,12"),
+    ],
+    "stack": [
+        ("calc.preset.stack64", "64"),
+        ("calc.preset.box_items", "1728"),
+        ("calc.preset.chest_items", "3456"),
+    ],
+    "color": [
+        ("calc.preset.white", "FFFFFF"),
+        ("calc.preset.black", "000000"),
+        ("calc.preset.red", "FF0000"),
+        ("calc.preset.orange", "FF8800"),
+        ("calc.preset.green", "00FF00"),
+        ("calc.preset.blue", "0000FF"),
+    ],
+    "uuid": [
+        ("calc.preset.notch", "Notch"),
+        ("calc.preset.herobrine", "Herobrine"),
+    ],
+    "seed": [
+        ("calc.preset.seed_hello", "hello"),
+        ("calc.preset.seed_minecraft", "minecraft"),
+    ],
+}
+
+
 def calc_name(item: dict, lang: str) -> str:
     return t("calc." + item["id"] + ".name", lang)
 
@@ -641,6 +777,40 @@ def _calc_items(base: str, lang: str) -> str:
     return indent_block("\n".join(blocks), 12)
 
 
+def _example(item: dict, lang: str) -> str:
+    """输入框里的灰字：这个计算器该填成什么样。"""
+    value = EXAMPLES.get(item["id"], "")
+    if not value:
+        return ""
+    return t("calc.hint_example", lang, q=value)
+
+
+def _preset_block(item: dict, base: str, lang: str) -> str:
+    """快捷值按钮：一行三个，点一下直接出结果。"""
+    presets = PRESETS.get(item["id"]) or []
+    if not presets:
+        return ""
+    rows = []
+    for start in range(0, len(presets), 3):
+        group = presets[start:start + 3]
+        cells = []
+        for index, (label_key, value) in enumerate(group):
+            cells.append(help_button(
+                t(label_key, lang), ICON_CALC,
+                base + "/calc_" + item["id"] + ".json?q=" + value,
+                34, column=index, margin="0,0,6,6", color="ColorBrush6"))
+        rows.append('<Grid><Grid.ColumnDefinitions>'
+                    + '<ColumnDefinition Width="1*" />' * 3
+                    + "</Grid.ColumnDefinitions>" + "".join(cells) + "</Grid>")
+    return (heading(t("calc.preset_title", lang), "0,6,0,8")
+            + '<StackPanel>' + "".join(rows) + "</StackPanel>")
+
+
+def _result_text(rows: list) -> str:
+    """把结果表压成一段可复制的纯文本，一行一条。"""
+    return "\n".join(label + "  " + value for label, value in rows)
+
+
 def build_landing(base_url: str, lang: str = DEFAULT_LANG) -> str:
     """计算器首页：列出所有能算的。"""
     base = url_attr(base_url)
@@ -657,7 +827,7 @@ def build_landing(base_url: str, lang: str = DEFAULT_LANG) -> str:
         'Foreground="{DynamicResource ColorBrush1}" />'
         + _calc_items(base, lang)
 
-        + nav_row(base, lang=lang)
+        + nav_row(lang=lang)
 
         + "</StackPanel>"
         + "</local:MyCard>")
@@ -677,6 +847,11 @@ def build_calc_page(item: dict, raw: str, base_url: str, lang: str = DEFAULT_LAN
             warn("[Calc] " + item["id"] + " 计算失败：" + repr(exc))
             problem = t("calc.err.unknown", lang)
 
+    # 结果最上面先回显收到的输入：算错时一眼就能看出是输入被 URL 吃掉了一半
+    # （填 ``#FF8800`` 那种）还是公式本身不对。
+    if rows:
+        rows = [(t("calc.echo", lang), (raw or "").strip())] + list(rows)
+
     if problem:
         result = ('<local:MyHint Theme="Yellow" Margin="0,16,0,0" Text="'
                   + attr(problem) + '" />')
@@ -687,6 +862,11 @@ def build_calc_page(item: dict, raw: str, base_url: str, lang: str = DEFAULT_LAN
                   'Foreground="{DynamicResource ColorBrush1}" Margin="0,0,0,10" />'
                   '<Border Background="{DynamicResource ColorBrush7}" CornerRadius="8" '
                   'Padding="16,14">' + _rows_block(rows) + "</Border>"
+                  '<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" '
+                  'Margin="0,10,0,0">'
+                  + copy_button(t("calc.copy_result", lang), ICON_COPY,
+                                _result_text(rows), 34)
+                  + "</StackPanel>"
                   "</StackPanel>")
     else:
         result = ''
@@ -698,16 +878,17 @@ def build_calc_page(item: dict, raw: str, base_url: str, lang: str = DEFAULT_LAN
         '<TextBlock Text="' + escape_attr(name) + '" FontSize="24" FontWeight="Bold" '
         'Foreground="#FF000000" HorizontalAlignment="Center" />'
         + note(calc_info(item, lang), "0,10,0,0")
-        # 该填什么、按什么顺序，写成正文；输入框里的提示统一只说分隔符
-        + note(calc_hint(item, lang), "0,12,0,0")
-        + input_row("calcinput", separator_hint(lang), 40, "0,8,0,0")
+        # 该填什么、按什么顺序，写成正文；分隔符那句也并进来，省一行
+        + note(calc_hint(item, lang) + "  " + separator_hint(lang), "0,12,0,0")
+        + input_row("calcinput", _example(item, lang), 40, "0,8,0,0")
         + help_button(t("calc.submit", lang), ICON_CALC,
                       bind_to("calcinput", base, "/calc_" + item["id"] + ".json"),
                       44, margin="0,10,0,0")
 
+        + _preset_block(item, base, lang)
         + result
 
-        + nav_row(base, lang=lang, extra_text=t("calc.other", lang),
+        + nav_row(lang=lang, extra_text=t("calc.other", lang),
                   extra_url=base + "/calc.json")
 
         + "</StackPanel>"
@@ -771,18 +952,35 @@ def json_meta(title: str, desc: str) -> str:
     return json.dumps({"Title": title, "Description": desc}, ensure_ascii=False)
 
 
+def _repair_encoding(text: str) -> str:
+    """把「UTF-8 字节被当成 latin-1 读进来」的串还原回去。
+
+    ``http.server`` 是按 ISO-8859-1 解请求行的，所以输入框里填的中文到了这边
+    已经被拆成一串 latin-1 字符（``玩家`` → ``çŽ©å®¶``），直接拿去算就废了。
+    正经百分号编码的（``%E7%8E%A9``）本来就是对的，encode 那一步会失败，原样返回。
+    """
+    if not text:
+        return text
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
 def parse_query(query: str) -> dict:
     """宽松解析查询串——PCL 把输入框原文直接拼进 URL，不做编码。"""
     try:
         values = parse_qs(query or "", keep_blank_values=True)
-        return {key: val[0] for key, val in values.items() if val}
+        return {_repair_encoding(key): _repair_encoding(val[0])
+                for key, val in values.items() if val}
     except Exception:
         result = {}
         for pair in (query or "").split("&"):
             if "=" in pair:
                 key, _, value = pair.partition("=")
                 try:
-                    result[key] = unquote(value)
+                    value = unquote(value)
                 except Exception:
-                    result[key] = value
+                    pass
+                result[_repair_encoding(key)] = _repair_encoding(value)
         return result

@@ -84,6 +84,10 @@ STATIC_CACHE_RULES = (
     ("/favicon.png", 604800),
 )
 
+# 允许从**项目根目录**对外发的文件，只有这两个构建产物。
+# 这是个白名单：往这里加任何东西之前先想清楚它能不能给陌生人看。
+ROOT_FILES = ("Custom.xaml", "Custom.xaml.version")
+
 
 @dataclass
 class Response:
@@ -389,9 +393,16 @@ class Handler(BaseHTTPRequestHandler):
 
         if path in ("/healthz", "/health"):
             self._note = "健康检查"
+            # ``Custom.xaml.version`` 是给"静态部署"用的占位文件，动态服务这套可以没有它
+            # （对外发的版本号由 /Custom.xaml.version 那条路由现算时间戳）。以前这里直接
+            # static_template()，服务器上没这个文件就抛 FileNotFoundError，被外层兜成
+            # 维护页——健康检查反倒成了最容易挂的端点。
+            try:
+                generated = service.static_template("Custom.xaml.version").strip()
+            except OSError:
+                generated = ""
             self._send(Response.text(json.dumps({
-                "ok": True, "generated": service.static_template("Custom.xaml.version").strip(),
-                "uptime": log.uptime(),
+                "ok": True, "generated": generated, "uptime": log.uptime(),
             }, ensure_ascii=False), "application/json; charset=utf-8"))
             return
 
@@ -407,7 +418,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(Response(404, b"Not Found"))
             return
 
-        candidates = [STATIC_DIR / safe, ROOT / safe]
+        # 一律只在 static/ 里找；根目录只有白名单里那两个文件能出。
+        #
+        # 以前这里是 `[STATIC_DIR / safe, ROOT / safe]`——第二个候选等于把**整个项目目录**
+        # 挂到公网上发：`GET /config.json` 直接吐配置（uapi_key、ai_api_key、admin_token），
+        # `/var/server.log`、`/var/profiles.json`、`/pclhome/config.py`、`/run.py` 一样能下。
+        # 2026-10-14 才发现：日志里十几个不同 IP 拉走过 config.json，AI 密钥被拿去刷了
+        # 240 万 token。所以根目录改白名单，别再退回"第二个候选"那种写法。
+        candidates = [STATIC_DIR / safe]
+        if safe in ROOT_FILES:
+            candidates.append(ROOT / safe)
         # 壁纸缓存目录也直接暴露出去
         if safe == "images/wallpaper.jpg":
             candidates.insert(0, self.service.config.wallpaper_path)

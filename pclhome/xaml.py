@@ -192,6 +192,25 @@ def help_button(text: str, logo: str, url: str, height: int = 38, column=None,
             + '" EventType="打开帮助" EventData="' + url_attr(url) + '" />')
 
 
+# 「回到启动器主页」用的自定义事件：PCL 的「切换页面」直接切到 ``Launch`` 页，右边
+# 就是这份自定义主页。以前这里用的是「打开帮助」+ 再拉一份 home.json，那是把主页当成
+# 一层帮助页压进导航栈——点完看到的是个帮助页（左上角还多一个返回箭头），不是启动器
+# 主页。``Launch`` 取自 PCL 的 FormMain.PageType，那个枚举是自定义事件的公开 API。
+HOME_EVENT_TYPE = "切换页面"
+HOME_EVENT_DATA = "Launch"
+
+
+def home_button(text: str, height: int = 38, margin: str = "", logo: str = ICON_HOME,
+                color: str = "Highlight") -> str:
+    """「返回主页」按钮：切回启动器主页（``切换页面|Launch``），不翻帮助页。"""
+    attrs = ' Margin="' + margin + '"' if margin else ""
+    if color:
+        attrs += ' ColorType="' + color + '"'
+    return ('<local:MyIconTextButton' + attrs + ' Height="' + str(height) + '" Text="'
+            + escape_attr(text) + '" LogoScale="0.8" Logo="' + logo
+            + '" EventType="' + HOME_EVENT_TYPE + '" EventData="' + HOME_EVENT_DATA + '" />')
+
+
 def copy_button(text: str, logo: str, data: str, height: int = 38, column=None,
                 margin: str = "", color: str = "Highlight") -> str:
     """把 ``data`` 塞进剪切板的按钮——PCL 的「复制文本」事件。
@@ -238,23 +257,28 @@ def note(text: str, margin: str = "0,8,0,0") -> str:
             'Margin="' + margin + '" Foreground="{DynamicResource ColorBrush3}" />')
 
 
-def nav_row(base: str, refresh_url: str = "", extra_text: str = "",
+def nav_row(refresh_url: str = "", extra_text: str = "",
             extra_url: str = "", lang: str = "") -> str:
     """页面底部那排：刷新 / 回到某页 / 返回主页。
 
-    「返回主页」专门治「进得太深、左上角要按好几下」：它直接再翻开一份主页
-    （见 ai.handle 里的 ``home`` 动作），一下就到，不用沿路往回退。
+    「返回主页」专门治「进得太深、左上角要按好几下」：走 ``切换页面|Launch`` 一步切回
+    启动器主页（就是这份自定义主页），不用沿路往回退——见 ``home_button``。
     """
     from .i18n import DEFAULT_LANG, t
     lang = lang or DEFAULT_LANG
-    items = []
+    rows = []                                    # (文字, 图标, True=回主页)
     if refresh_url:
-        items.append((t("btn.refresh_result", lang), ICON_REFRESH, refresh_url))
+        rows.append((t("btn.refresh_result", lang), ICON_REFRESH, refresh_url, False))
     if extra_url:
-        items.append((extra_text, ICON_BACK, extra_url))
-    items.append((t("btn.back_home", lang), ICON_HOME, base + "/home.json"))
-    cells = [help_button(text, logo, url, 36, margin=("8,0,0,0" if index else ""))
-             for index, (text, logo, url) in enumerate(items)]
+        rows.append((extra_text, ICON_BACK, extra_url, False))
+    rows.append((t("btn.back_home", lang), ICON_HOME, "", True))
+    cells = []
+    for index, (text, logo, url, is_home) in enumerate(rows):
+        margin = "8,0,0,0" if index else ""
+        if is_home:
+            cells.append(home_button(text, 36, margin=margin, logo=logo))
+        else:
+            cells.append(help_button(text, logo, url, 36, margin=margin))
     return ('<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" '
             'Margin="0,18,0,0">' + "".join(cells) + "</StackPanel>")
 
