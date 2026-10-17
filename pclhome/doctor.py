@@ -602,8 +602,24 @@ def _cjk_hits(xaml: str) -> list:
             for match in re.finditer(r'[^"<>\n]*' + CJK_RE.pattern + r'[^"<>\n]*', text)]
 
 
+def _color_state_hits(xaml: str) -> list:
+    """``ColorType`` 里填了画刷资源名的地方，返回 ``[(值, 片段)]``。
+
+    ``ColorType`` 只认 PCL 的 ``ColorState`` 枚举（默认 Black、``Highlight``、``Red``…）。
+    写成 ``ColorBrush6`` 这类画刷名，PCL 解析整份 XAML 时就抛
+    ``XamlParseException: ColorBrush6 不是 ColorState 的有效值``，用户看到的是
+    一整个「加载帮助 XAML 失败」弹窗——2026-10 真的这么翻过一次车，所以在这儿拦。
+    """
+    hits = []
+    for match in re.finditer(r'ColorType="([^"]*)"', xaml):
+        value = match.group(1)
+        if value.startswith("ColorBrush"):
+            hits.append(value)
+    return hits
+
+
 def _check_localised_pages(report: Report, config: Config) -> None:
-    """三种语言各渲染一遍，确认英文页面上不漏中文。
+    """三种语言各渲染一遍，确认英文页面上不漏中文、按钮配色没写错。
 
     这是整套多语言里最容易悄悄坏掉的一环：``t()`` 缺键会回退成简中，
     页面上就冒出一句中文，得盯着看才发现。
@@ -618,8 +634,14 @@ def _check_localised_pages(report: Report, config: Config) -> None:
             return
 
     try:
+        pages = _english_pages(config)
+    except Exception as exc:
+        report.bad("英文页面扫描失败：" + repr(exc))
+        return
+
+    try:
         problems = []
-        for label, body in _english_pages(config):
+        for label, body in pages:
             hits = _cjk_hits(body)
             if hits:
                 problems.append(label + "（" + hits[0] + "）")
@@ -629,6 +651,19 @@ def _check_localised_pages(report: Report, config: Config) -> None:
             report.good("英文主页 / 计算器 / AI 页面都没有残留中文（每日一言除外）")
     except Exception as exc:
         report.bad("英文页面扫描失败：" + repr(exc))
+
+    try:
+        problems = []
+        for label, body in pages:
+            for value in _color_state_hits(body):
+                problems.append(label + "（" + value + "）")
+        if problems:
+            report.bad("ColorType 写成了画刷名，PCL 会解析失败："
+                       + "；".join(problems[:4]))
+        else:
+            report.good("ColorType 只用了 ColorState 的值，没有混进画刷资源名")
+    except Exception as exc:
+        report.bad("ColorType 扫描失败：" + repr(exc))
 
 
 def _english_pages(config: Config) -> list:

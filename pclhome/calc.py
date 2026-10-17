@@ -795,10 +795,15 @@ def _preset_block(item: dict, base: str, lang: str) -> str:
         group = presets[start:start + 3]
         cells = []
         for index, (label_key, value) in enumerate(group):
+            # 快捷按钮是次要操作，`color=""` 不写 ColorType 就是默认配色；
+            # 上面「计算」那个才是主题色，不抢焦点。
+            # 别想着传 "ColorBrush6" 让它再淡一点：ColorType 只认 PCL 的 ColorState
+            # 枚举（默认 Black / Highlight / Red…），画刷资源名传进去，PCL 解析整份
+            # XAML 时就抛 XamlParseException，用户看到的是「加载帮助 XAML 失败」。
             cells.append(help_button(
                 t(label_key, lang), ICON_CALC,
                 base + "/calc_" + item["id"] + ".json?q=" + value,
-                34, column=index, margin="0,0,6,6", color="ColorBrush6"))
+                34, column=index, margin="0,0,6,6", color=""))
         rows.append('<Grid><Grid.ColumnDefinitions>'
                     + '<ColumnDefinition Width="1*" />' * 3
                     + "</Grid.ColumnDefinitions>" + "".join(cells) + "</Grid>")

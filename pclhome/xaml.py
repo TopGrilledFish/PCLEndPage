@@ -179,7 +179,13 @@ def input_row(name: str, hint: str, height: int = 38, margin: str = "0,8,0,0") -
 
 def help_button(text: str, logo: str, url: str, height: int = 38, column=None,
                 margin: str = "", color: str = "Highlight") -> str:
-    """走「打开帮助」的按钮——PCL 会去拉 ``url`` 对应的 .json/.xaml 并翻开新页。"""
+    """走「打开帮助」的按钮——PCL 会去拉 ``url`` 对应的 .json/.xaml 并翻开新页。
+
+    ``color`` 进的是 ``ColorType``，只认 PCL 的 ``ColorState`` 枚举
+    （``Highlight`` / ``Red`` / ``Black`` 默认）。**别传 ``ColorBrush6`` 这类画刷
+    资源名**：那是 ``Background``/``Foreground`` 用的，塞进 ``ColorType`` 会让 PCL
+    解析整份 XAML 时抛 ``XamlParseException``，整页报「加载帮助 XAML 失败」。
+    """
     attrs = ""
     if column is not None:
         attrs += ' Grid.Column="' + str(column) + '"'
@@ -217,6 +223,8 @@ def copy_button(text: str, logo: str, data: str, height: int = 38, column=None,
 
     跟 ``help_button`` 长得一样，只是不拉页面、点一下直接复制，所以 ``data``
     按纯文本转义（``attr``），不是 ``url_attr``。
+
+    ``color`` 的限制跟 ``help_button`` 一样：只认 ``ColorState``，不能传画刷名。
     """
     attrs = ""
     if column is not None:
