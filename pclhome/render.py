@@ -145,6 +145,7 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str,
         # 这三块以前是构建期写死的，现在按语言现算
         "ACTION_BUTTONS": build_action_buttons(config, lang),
         "SITE_ITEMS": indent_block(build_site_items(config, lang, base), 8),
+        "RIP_CARD": build_rip_card(lang, base),
         "FOOTER_CARD": build_footer_card(config, lang, base, short),
 
         # 欢迎卡片那排按钮里「AI 分析」入口的绝对地址（构建期不知道对外域名）
@@ -210,6 +211,67 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         + help_button(t("home.footer_settings", lang), ICON_GEAR,
                       base + "/settings_page.json", 36, color="")
         + "</StackPanel></StackPanel></local:MyCard>")
+
+
+# ============ 纪念专栏 ============
+
+RIP_SOURCE_URL = "https://github.com/Light-Beacon/PCL2-NewsHomepage"
+RIP_LICENSE_URL = "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+
+
+def build_rip_card(lang: str, base: str) -> str:
+    """「PCL 老师的 RIP 纪念专栏」卡片。
+
+    图片与内容取自 Light Beacon 的 PCL2-NewsHomepage，那份内容按
+    **CC BY-NC-SA 4.0** 发布，所以卡片上必须带署名和许可（许可条款要求
+    「署名 + 相同方式共享」，删掉这段署名就不合规了）。
+
+    图片镜像在 ``static/images/rip/``，走本站 ``/images/`` 静态路由，
+    不直接挂到上游服务器（上游哪天挪了文件，卡片就开天窗）。
+    """
+    from .i18n import t
+    from .xaml import ICON_HOME, escape_attr, escape_url_attr
+
+    def image(name: str, column: int) -> str:
+        # 结构与上游 pcl_downloader_rip.xaml 完全一致（三列 * / Auto / *，
+        # MaxHeight=180、Stretch=Uniform，两个侧翼用同一张图），别改成别的布局
+        return ('<local:MyImage Grid.Column="' + str(column) + '" Source="'
+                + escape_url_attr(base + "/images/rip/" + name)
+                + '" MaxHeight="180" Stretch="Uniform" />')
+
+    def line(text: str, margin: str = "0,6,0,0") -> str:
+        return ('<TextBlock Text="' + escape_attr(text) + '" FontSize="12" TextWrapping="Wrap" '
+                'TextAlignment="Center" HorizontalAlignment="Center" '
+                'Foreground="{DynamicResource ColorBrush2}" Margin="' + margin + '" />')
+
+    def link(text: str, url: str, margin: str = "", color: str = "") -> str:
+        # 「打开网页」才是开浏览器；写成「打开帮助」PCL 会去拉这个网址当内页，直接报错
+        return ('<local:MyIconTextButton' + (' Margin="' + margin + '"' if margin else "")
+                + ' Height="34" Text="' + escape_attr(text) + '" LogoScale="0.8" Logo="' + ICON_HOME + '"'
+                + (' ColorType="' + color + '"' if color else "")
+                + ' EventType="打开网页" EventData="' + escape_url_attr(url) + '" />')
+
+    return (
+        '<local:MyCard Title="' + escape_attr(t("home.rip_title", lang))
+        + '" Margin="0,0,0,16" CanSwap="True">'
+        '<Grid Margin="20,40,20,16">'
+        '<Grid.ColumnDefinitions>'
+        '<ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" />'
+        '</Grid.ColumnDefinitions>'
+        + image("lm.jpg", 0)
+        + image("pclls.png", 1)
+        + image("lm.jpg", 2)
+        + '</Grid>'
+        '<StackPanel Margin="20,0,20,20">'
+        + line(t("home.rip_source", lang), "0,0,0,0")
+        + line(t("home.rip_license", lang), "0,4,0,0")
+        + line(RIP_LICENSE_URL, "0,2,0,0")
+        + '<StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">'
+        + link(t("home.rip_open_source", lang), RIP_SOURCE_URL, "0,0,8,0")
+        + link(t("home.rip_open_license", lang), RIP_LICENSE_URL)
+        + '</StackPanel>'
+        '</StackPanel></local:MyCard>'
+    )
 
 
 # ============ 替换 ============
