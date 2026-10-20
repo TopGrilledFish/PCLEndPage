@@ -199,6 +199,13 @@ class WeatherService:
         self._cache: dict[str, tuple[float, dict]] = {}
         self._lock = threading.Lock()
 
+    def clear_cache(self) -> int:
+        """后台「清理缓存」用：丢掉内存里的天气结果，返回清掉的条数。"""
+        with self._lock:
+            count = len(self._cache)
+            self._cache.clear()
+        return count
+
     def get(self, ip: str, lang: str = DEFAULT_LANG, unit: str = "c") -> dict:
         """返回 ``{"body": XAML, "kind": 天气类别, "source": 简述}``；永不抛异常。"""
         if not self.config.enable_weather:

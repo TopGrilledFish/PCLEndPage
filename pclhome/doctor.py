@@ -111,13 +111,26 @@ _XAML_ROOT_NS = ('xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentati
 
 
 class Report:
-    def __init__(self):
+    def __init__(self, quiet: bool = False):
         self.ok = 0
         self.warn = 0
         self.fail = 0
+        self.quiet = quiet
+        self.sections: list[dict] = []
+        self._current: dict | None = None
+
+    def section(self, title: str) -> None:
+        """分节标题。后台体检会把它连同条目一起丢给前端渲染。"""
+        if not self.quiet:
+            print("\n[" + title + "]")
+        self._current = {"title": title, "items": []}
+        self.sections.append(self._current)
 
     def _line(self, tag, msg):
-        print("  [" + tag + "] " + msg)
+        if not self.quiet:
+            print("  [" + tag + "] " + msg)
+        if self._current is not None:
+            self._current["items"].append({"level": tag.lower(), "msg": msg})
 
     def good(self, msg):
         self.ok += 1
@@ -131,11 +144,15 @@ class Report:
         self.fail += 1
         self._line("FAIL", msg)
 
+    def as_dict(self) -> dict:
+        return {"ok": self.ok, "warn": self.warn, "fail": self.fail,
+                "sections": self.sections}
+
 
 # ============ 本地检查 ============
 
 def check_data(report: Report) -> None:
-    print("\n[1/9] 数据完整性")
+    report.section("1/9 数据完整性")
     for name, (value, expected) in EXPECTED_COUNTS.items():
         if len(value) == expected:
             report.good(name + " 共 " + str(expected) + " 条")
@@ -154,7 +171,7 @@ def check_i18n(report: Report) -> None:
     要紧的一条是「英文里不许漏出中文」——``t()`` 缺键会悄悄回退到简中，
     页面上就会出现一句中文，很难发现。所以这条按**必须覆盖**来判。
     """
-    print("\n[2/9] 多语言词条")
+    report.section("2/9 多语言词条")
     from . import i18n
     i18n.reload_tables()
 
@@ -218,7 +235,7 @@ def check_i18n(report: Report) -> None:
 
 
 def check_hash(report: Report) -> None:
-    print("\n[3/9] 哈希算法与上游一致性（决定「同一人当天内容固定」）")
+    report.section("3/9 哈希算法与上游一致性（决定「同一人当天内容固定」）")
     mismatches = []
     for raw, expected in HASH_VECTORS:
         got = hash_code(raw)
@@ -313,7 +330,7 @@ def _temp_of(body: str) -> list:
 
 
 def check_lunar(report: Report, config: Config) -> None:
-    print("\n[4/9] 农历、节日与缓存")
+    report.section("4/9 农历、节日与缓存")
     mismatches = []
     for raw, expected in LUNAR_VECTORS:
         year, month, day = (int(x) for x in raw.split("-"))
@@ -379,7 +396,7 @@ def _countdown_of(today: date):
 
 
 def check_config(report: Report, config: Config) -> None:
-    print("\n[5/9] 配置检查")
+    report.section("5/9 配置检查")
     if config.admin_token == "admin":
         if config.host in ("127.0.0.1", "localhost", "::1"):
             report.warning("后台令牌仍是默认值 admin（本机自用可忽略）")
@@ -457,7 +474,7 @@ def check_config(report: Report, config: Config) -> None:
 
 def check_geo(report: Report) -> None:
     """访客 IP → 城市 这一步的纯逻辑（不联网，联网部分只在真跑起来时才用）。"""
-    print("\n[6/9] 访客 IP 归属地（天气按 IP 定位用）")
+    report.section("6/9 访客 IP 归属地（天气按 IP 定位用）")
 
     # 这些地址查归属地要么没意义、要么会白等一次超时，必须直接判为"不用查"
     unlocatable = ["127.0.0.1", "0.0.0.0", "192.168.1.10", "10.0.0.1", "172.16.0.1",
@@ -485,7 +502,7 @@ def check_geo(report: Report) -> None:
 
 
 def check_templates(report: Report, config: Config) -> None:
-    print("\n[7/9] 模板与生成物")
+    report.section("7/9 模板与生成物")
     for name in ("Custom.xaml.tpl",):
         path = TEMPLATES_DIR / name
         if path.exists():
@@ -722,7 +739,7 @@ def _settings_pages() -> list:
 
 
 def check_rendered(report: Report, config: Config) -> None:
-    print("\n[8/9] 渲染结果（假 IP 走一遍完整替换）")
+    report.section("8/9 渲染结果（假 IP 走一遍完整替换）")
     try:
         homepage = _fake_render(config)
     except Exception as exc:
@@ -1058,7 +1075,7 @@ def _static_probe(path: str, config: Config):
 
 
 def check_static(report: Report, config: Config) -> None:
-    print("\n[9/9] 静态资源")
+    report.section("9/9 静态资源")
 
     # ---- 先查最要命的：项目目录里的东西能不能被外人拿走 ----
     #
@@ -1119,7 +1136,7 @@ def _probe(url: str, ua: str, timeout: float = 15.0):
 
 
 def check_online(report: Report, base: str) -> None:
-    print("\n[线上] 探测 " + base)
+    report.section("线上 探测 " + base)
     base = base.rstrip("/")
 
     status, body, _ = _probe(base + "/Custom.xaml.version", PCL_UA)
@@ -1164,6 +1181,38 @@ def check_online(report: Report, base: str) -> None:
 
 
 # ============ 入口 ============
+
+def run_checks(config: Config | None = None, online: bool = False,
+               url: str = "http://127.0.0.1:8787") -> dict:
+    """后台「系统体检」用：跟命令行同一套检查，但不往 stdout 刷屏。
+
+    返回 ``{"ok": 通过数, "warn": 警告数, "fail": 失败数, "sections": [...]}``，
+    每个 section 形如 ``{"title": "1/9 数据完整性", "items": [{"level","msg"}]}``。
+    """
+    config = config or load_config()
+    report = Report(quiet=True)
+    for check, args in (
+        (check_data, ()),
+        (check_i18n, ()),
+        (check_hash, ()),
+        (check_lunar, (config,)),
+        (check_config, (config,)),
+        (check_geo, ()),
+        (check_templates, (config,)),
+        (check_rendered, (config,)),
+        (check_static, (config,)),
+    ):
+        try:
+            check(report, *args)
+        except Exception as exc:                      # 单项炸了不该拖垮整份体检
+            report.bad("检查过程异常：" + str(exc))
+    if online:
+        try:
+            check_online(report, url)
+        except Exception as exc:
+            report.bad("线上检查异常：" + str(exc))
+    return report.as_dict()
+
 
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]

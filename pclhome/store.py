@@ -85,6 +85,12 @@ class Store:
             self._data.pop(key, None)
             self._flush()
 
+    def replace_all(self, data: dict) -> None:
+        """整体替换（后台 JSON 编辑器用）。调用方负责先备份旧内容。"""
+        with self._lock:
+            self._data = dict(data)
+            self._flush()
+
     def all(self) -> dict:
         with self._lock:
             return dict(self._data)
@@ -160,7 +166,11 @@ class Stats:
         # 北京时间当天 0 点对应的 Unix 时间戳
         beijing = now + 8 * 3600
         today_start = int((beijing - beijing % 86400 - 8 * 3600) * 1000)
-        empty = {"total": 0, "today": 0, "unique": 0, "countries": [], "hosts": [], "recent": []}
+        # 折线/柱状图要的是"完整的一天"：从 days-1 天前的北京时间 0 点算起
+        day_start = beijing - beijing % 86400 - (days - 1) * 86400
+        trend_cutoff = int((day_start - 8 * 3600) * 1000)
+        empty = {"total": 0, "today": 0, "unique": 0, "countries": [], "hosts": [],
+                 "recent": [], "trend": []}
         try:
             with self._lock:
                 conn = self._connect()
@@ -179,15 +189,30 @@ class Stats:
                     recent = cur.execute(
                         "SELECT ip, COALESCE(country,'XX'), ts FROM visits WHERE ts >= ? "
                         "ORDER BY ts DESC LIMIT 20", (cutoff,)).fetchall()
+                    # 按北京时间切天：ts 是 UTC 毫秒，加 8 小时再整除一天的毫秒数
+                    trend_rows = cur.execute(
+                        "SELECT ((ts + 28800000) / 86400000) d, COUNT(*) n FROM visits "
+                        "WHERE ts >= ? GROUP BY d ORDER BY d", (trend_cutoff,)).fetchall()
                 finally:
                     conn.close()
         except Exception as exc:
             warn("[Stats] 统计读取失败：" + str(exc))
             return empty
 
+        # SQL 里的 d 是"北京时间的第几天"，Python 这边用同样的口径对齐。
+        # stamp 本身就是"平移过的北京时间戳"，直接 gmtime 出来的日期就是北京日期；
+        # 再减 8 小时反而会退到前一天（北京时间 0 点对应 UTC 前一天 16 点）。
+        counts = {int(d): int(n) for d, n in trend_rows}
+        trend = []
+        for index in range(days):
+            stamp = day_start + index * 86400
+            trend.append({"date": time.strftime("%Y-%m-%d", time.gmtime(stamp)),
+                          "count": counts.get(stamp // 86400, 0)})
+
         return {
             "total": total, "today": today, "unique": unique,
             "countries": [{"code": c, "count": n} for c, n in countries],
             "hosts": [{"ip": ip, "count": n, "last": last} for ip, n, last in hosts],
             "recent": [{"ip": ip, "code": c, "ts": ts} for ip, c, ts in recent],
+            "trend": trend,
         }

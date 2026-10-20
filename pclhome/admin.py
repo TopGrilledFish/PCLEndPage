@@ -2,35 +2,49 @@
 """管理后台（对应上游 functions/admin.js 的核心部分）。
 
 上游后台 1636 行，一半在跟 Cloudflare API 打交道（用量统计、KV 批量读写）。
-复刻版落到单机，只需要保留真正有用的运维能力：
+复刻版落到单机，需要的其实是**把整套运维动作收进一个网页**：
 
-    维护模式 / 维护白名单        临时把主页切成"服务器正在更新"，自己仍可访问
-    封禁列表                    按 IP 拒绝访问
-    公告                        多公告轮播（≥2 条）与单条公告（跑马灯）
-    每日一言                    自定义文案，支持 {date}/{weekday}/{year}
-    节日与倒计时                自定义公历节日、自定义倒计时目标
-    访问统计                    7 天总量 / 今日 / 独立 IP / 地区分布
-    模板重新生成                改完模板或服务器列表后一键重跑 generate
+    总览      访问量走势 / 地区分布 / 最近访客 / 一键开关维护
+    内容      多公告轮播、单条公告、每日一言、节日、倒计时
+    访客      维护模式与白名单、封禁列表、最近访问（可一键封禁）
+    AI        额度用量、运行中任务、重置
+    系统      服务信息、体检、日志、缓存、模板重新生成与预览
+    高级      store.json 原始编辑器、导出/导入、配置开关
+
+页面本体在 :mod:`pclhome.admin_page`，这里只管鉴权、路由和读写。
 
 鉴权：``config.admin_token`` 换一个会话 cookie（默认 8 小时）。后台只应在
 本机或内网使用；对外暴露请套一层反代并强制 HTTPS。
 """
 from __future__ import annotations
 
+import ipaddress
 import json
+import os
+import platform
 import secrets
+import sys
 import threading
 import time
 import urllib.parse
+from dataclasses import replace
+from pathlib import Path
 
 from . import ai
-from .log import out, warn
-from .config import Config
+from .admin_page import ADMIN_PAGE
+from .config import CACHE_DIR, CONFIG_FILE, ROOT, VAR_DIR, Config
 from .generate import generate
-from .log import info, warn
+from .log import info, uptime, warn
+from .weather import WeatherService
 
 SESSION_COOKIE = "admin_session"
 SESSION_TTL = 8 * 3600
+
+# 后台版本号，跟 server.py 的 server_version 保持一致
+ADMIN_VERSION = "1.0"
+
+# 日志文件：serve --log-file var/server.log；没开文件日志时后台会提示
+LOG_FILE = VAR_DIR / "server.log"
 
 _sessions: dict[str, float] = {}
 _sessions_lock = threading.Lock()
@@ -41,6 +55,33 @@ WRITABLE_KEYS = {
     "block:list", "banners", "homepage_banner", "quote_custom",
     "custom_festivals", "custom_countdown",
 }
+
+# 后台能改的 config.json 字段：只放不影响监听地址、密钥和鉴权的项
+CONFIG_FIELDS = {
+    "site_name": str,
+    "enable_weather": bool,
+    "enable_wallpaper": bool,
+    "enable_saying": bool,
+    "enable_lunar": bool,
+    "enable_geo": bool,
+    "guard_clients": bool,
+    "weather_city": str,
+}
+
+# 缓存清理目标 → 人话
+CACHE_TARGETS = {
+    "saying": "每日一言缓存（下一天重新取接口）",
+    "lunar": "农历与节气缓存",
+    "wallpaper": "横幅壁纸缓存",
+    "geo": "IP 归属地内存缓存",
+    "weather": "天气内存缓存",
+    "all": "以上全部",
+}
+
+# 体检结果缓存：跑一次约 3 秒，别每次刷新页面都跑
+_doctor_lock = threading.Lock()
+_doctor_cache: dict = {"at": 0.0, "report": None}
+DOCTOR_TTL = 60
 
 
 # ============ 会话 ============
@@ -65,6 +106,12 @@ def _valid_session(token: str) -> bool:
             _sessions.pop(token, None)
             return False
     return True
+
+
+def _session_count() -> int:
+    now = time.time()
+    with _sessions_lock:
+        return sum(1 for expires in _sessions.values() if expires >= now)
 
 
 def _get_cookie(handler, name: str) -> str:
@@ -100,15 +147,18 @@ def summarize(value, limit: int = 60) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def _json(payload: dict, status: int = 200, cookie: str | None = None):
+def _json(payload: dict, status: int = 200, cookie: str | None = None,
+          headers: dict | None = None):
     from .server import Response
-    headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+    extra = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
     if cookie:
-        headers["Set-Cookie"] = cookie
+        extra["Set-Cookie"] = cookie
+    if headers:
+        extra.update(headers)
     return Response(status=status,
                     body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                     content_type="application/json; charset=utf-8",
-                    headers=headers)
+                    headers=extra)
 
 
 def _html(body: str):
@@ -117,12 +167,21 @@ def _html(body: str):
                          headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
+def _download(name: str, body: str):
+    from .server import Response
+    return Response.text(body, "application/json; charset=utf-8", headers={
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": 'attachment; filename="' + name + '"',
+    })
+
+
 def _read_body(handler) -> dict:
     try:
         length = int(handler.headers.get("Content-Length") or 0)
     except ValueError:
         return {}
-    if length <= 0 or length > 1_000_000:
+    if length <= 0 or length > 2_000_000:
         return {}
     raw = handler.rfile.read(length).decode("utf-8", errors="replace")
     if (handler.headers.get("Content-Type") or "").startswith("application/json"):
@@ -131,6 +190,168 @@ def _read_body(handler) -> dict:
         except Exception:
             return {}
     return {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+
+
+# ============ 小工具 ============
+
+def _mask(value: str, keep: int = 4) -> str:
+    """密钥只露头尾几位，别让后台自己变成泄露点。"""
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= keep * 2:
+        return "***"
+    return text[:keep] + "***" + text[-keep:]
+
+
+def _size_of(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _human_size(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return (str(int(value)) if unit == "B" else "%.1f" % value) + " " + unit
+        value /= 1024
+    return str(size) + " B"
+
+
+def _mtime_of(path: Path) -> str:
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(path.stat().st_mtime))
+    except OSError:
+        return ""
+
+
+def _valid_ip(text: str) -> str:
+    """封禁/白名单只收合法 IP，别把半截域名写进去。"""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        return ""
+
+
+def _service_info(service) -> dict:
+    """后台「系统」那块的基本盘。"""
+    config: Config = service.config
+    store_file = VAR_DIR / "store.json"
+    db_file = VAR_DIR / "stats.db"
+    return {
+        "version": ADMIN_VERSION,
+        "pcl_version": _pcl_version(),
+        "uptime": uptime(),
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "pid": os.getpid(),
+        "listen": config.host + ":" + str(config.port),
+        "base_url": config.base_url or "（按请求 Host 推导）",
+        "site_name": config.site_name,
+        "guard_clients": config.guard_clients,
+        "features": {
+            "天气": config.enable_weather,
+            "壁纸": config.enable_wallpaper,
+            "每日一言": config.enable_saying,
+            "农历": config.enable_lunar,
+            "IP 归属地": config.enable_geo,
+            "AI 分析": config.enable_ai,
+        },
+        "secrets": {
+            "admin_token": _mask(config.admin_token, 3),
+            "ai_api_key": _mask(config.ai_api_key),
+            "uapi_key": _mask(config.uapi_key),
+        },
+        "ai": {
+            "enabled": config.enable_ai,
+            "model": config.ai_model,
+            "rate": str(config.ai_rate_limit) + " 次 / " + config.ai_window_text(),
+            "base": config.ai_api_base,
+        },
+        "paths": {
+            "root": str(ROOT),
+            "var": str(VAR_DIR),
+            "store": str(store_file),
+            "log": str(LOG_FILE),
+            "config": str(CONFIG_FILE),
+            "store_size": _human_size(_size_of(store_file)),
+            "db_size": _human_size(_size_of(db_file)),
+            "store_mtime": _mtime_of(store_file),
+            "log_size": _human_size(_size_of(LOG_FILE)),
+            "log_mtime": _mtime_of(LOG_FILE),
+        },
+        "sessions": _session_count(),
+        "store_keys": sorted(service.store.all().keys()),
+    }
+
+
+def _pcl_version() -> str:
+    """PCL 版本号走缓存文件，取不到就算了，别在后台里阻塞。"""
+    try:
+        from .version import current
+        return current()
+    except Exception:
+        return ""
+
+
+def _read_log(lines: int = 200) -> dict:
+    if not LOG_FILE.exists():
+        return {"available": False, "file": str(LOG_FILE), "lines": [],
+                "hint": "没有找到日志文件。用 serve --log-file var/server.log 启动才会有。"}
+    lines = max(20, min(int(lines or 200), 1000))
+    try:
+        size = LOG_FILE.stat().st_size
+        with LOG_FILE.open("rb") as handle:
+            start = max(0, size - 256 * 1024)
+            handle.seek(start)
+            raw = handle.read()
+    except OSError as exc:
+        return {"available": False, "file": str(LOG_FILE), "lines": [],
+                "hint": "读取日志失败：" + str(exc)}
+    text = raw.decode("utf-8", errors="replace")
+    if start > 0:
+        text = text.split("\n", 1)[-1]                    # 丢掉被截断的第一行
+    chunks = text.splitlines()[-lines:]
+    return {"available": True, "file": str(LOG_FILE), "lines": chunks,
+            "size": _human_size(size), "mtime": _mtime_of(LOG_FILE)}
+
+
+def _clear_cache(service, target: str) -> list[str]:
+    """清缓存。都是"删了会自己重建"的东西，失败也不该 500。"""
+    from . import saying as saying_module
+    from . import geo as geo_module
+
+    done: list[str] = []
+    targets = list(CACHE_TARGETS) if target == "all" else [target]
+    for name in targets:
+        if name == "all":
+            continue
+        try:
+            if name == "saying":
+                saying_module.clear_cache()
+                done.append("每日一言")
+            elif name == "lunar":
+                (VAR_DIR / "lunar.json").unlink(missing_ok=True)
+                done.append("农历")
+            elif name == "wallpaper":
+                removed = 0
+                for item in CACHE_DIR.glob("wallpaper*"):
+                    item.unlink(missing_ok=True)
+                    removed += 1
+                done.append("壁纸" + ("（" + str(removed) + " 个文件）" if removed else ""))
+            elif name == "geo":
+                done.append("IP 归属地（" + str(geo_module.clear_cache()) + " 条）")
+            elif name == "weather":
+                service.weather.clear_cache()
+                done.append("天气")
+        except Exception as exc:
+            warn("[Admin] 清理缓存 " + name + " 失败：" + str(exc))
+    return done
 
 
 # ============ 路由 ============
@@ -183,24 +404,25 @@ def handle(service, handler, path: str, query: str):
                 "guard_clients": config.guard_clients,
                 "enable_weather": config.enable_weather,
                 "enable_wallpaper": config.enable_wallpaper,
+                "enable_saying": config.enable_saying,
+                "enable_lunar": config.enable_lunar,
+                "enable_geo": config.enable_geo,
+                "enable_ai": config.enable_ai,
+                "weather_city": config.weather_city,
+                "sites": [{"name": s.get("name", ""), "url": s.get("url", "")}
+                          for s in (config.sites or [])],
             },
             "store": store.all(),
             "ai": ai.admin_state(config),
+            "info": _service_info(service),
+            "stats": service.stats.summary(),
         })
-
-    if action == "ai_reset":
-        if not config.enable_ai:
-            return _json({"ok": False, "error": "ai_disabled"}, 400)
-        body = _read_body(handler)
-        scope = str(body.get("scope") or "all")
-        if scope not in ("quota", "jobs", "keys", "all"):
-            return _json({"ok": False, "error": "bad_scope"}, 400)
-        return _json({"ok": True, "scope": scope,
-                      "result": ai.reset(scope, str(body.get("ip") or ""),
-                                         config.ai_window())})
 
     if action == "stats":
         return _json({"ok": True, "stats": service.stats.summary()})
+
+    if action == "info":
+        return _json({"ok": True, "info": _service_info(service)})
 
     if action == "set":
         body = _read_body(handler)
@@ -214,6 +436,22 @@ def handle(service, handler, path: str, query: str):
         info("[Admin] 修改 " + key + " → " + summarize(value) + "（" + client_hint(handler) + "）")
         return _json({"ok": True, "key": key})
 
+    if action == "set_batch":
+        body = _read_body(handler)
+        items = body.get("items")
+        if not isinstance(items, dict) or not items:
+            return _json({"ok": False, "error": "missing_items"}, 400)
+        saved = []
+        for key, value in items.items():
+            if key not in WRITABLE_KEYS:
+                return _json({"ok": False, "error": "key_not_writable", "key": key}, 400)
+            if isinstance(value, str):
+                value = value.replace("\r\n", "\n")
+            store.set(key, value)
+            saved.append(key)
+        info("[Admin] 批量修改 " + "、".join(saved) + "（" + client_hint(handler) + "）")
+        return _json({"ok": True, "keys": saved})
+
     if action == "delete":
         body = _read_body(handler)
         key = str(body.get("key") or "")
@@ -225,9 +463,10 @@ def handle(service, handler, path: str, query: str):
 
     if action == "block":
         body = _read_body(handler)
-        ip = str(body.get("ip") or "").strip()
+        raw = str(body.get("ip") or "").strip()
+        ip = _valid_ip(raw)
         if not ip:
-            return _json({"ok": False, "error": "missing_ip"}, 400)
+            return _json({"ok": False, "error": "bad_ip", "ip": raw}, 400)
         block_list = store.block_list()
         if body.get("remove"):
             block_list.pop(ip, None)
@@ -239,18 +478,80 @@ def handle(service, handler, path: str, query: str):
              + "（" + client_hint(handler) + "）")
         return _json({"ok": True, "block_list": block_list})
 
+    if action == "block_batch":
+        body = _read_body(handler)
+        raw_list = body.get("ips")
+        if isinstance(raw_list, str):
+            raw_list = raw_list.replace(",", "\n").split("\n")
+        if not isinstance(raw_list, list):
+            return _json({"ok": False, "error": "missing_ips"}, 400)
+        remove = bool(body.get("remove"))
+        reason = str(body.get("reason") or "手动封禁")
+        block_list = store.block_list()
+        added, skipped = [], []
+        for raw in raw_list[:500]:
+            ip = _valid_ip(str(raw))
+            if not ip:
+                if str(raw).strip():
+                    skipped.append(str(raw).strip())
+                continue
+            if remove:
+                block_list.pop(ip, None)
+            else:
+                block_list[ip] = reason
+            added.append(ip)
+        store.set("block:list", block_list)
+        info("[Admin] " + ("批量解封 " if remove else "批量封禁 ") + str(len(added)) + " 个 IP（"
+             + client_hint(handler) + "）")
+        return _json({"ok": True, "count": len(added), "skipped": skipped,
+                      "block_list": block_list})
+
     if action == "whitelist":
         body = _read_body(handler)
-        ip = str(body.get("ip") or "").strip()
-        if not ip:
-            return _json({"ok": False, "error": "missing_ip"}, 400)
+        raw_list = body.get("ips")
+        if raw_list is None:
+            raw_list = [body.get("ip") or ""]
+        if isinstance(raw_list, str):
+            raw_list = raw_list.replace(",", "\n").split("\n")
+        remove = bool(body.get("remove"))
         whitelist = store.get_json("maint_whitelist", {}) or {}
-        if body.get("remove"):
-            whitelist.pop(ip, None)
-        else:
-            whitelist[ip] = 1
+        added = []
+        for raw in raw_list[:500]:
+            ip = _valid_ip(str(raw))
+            if not ip:
+                continue
+            if remove:
+                whitelist.pop(ip, None)
+            else:
+                whitelist[ip] = 1
+            added.append(ip)
         store.set("maint_whitelist", whitelist)
-        return _json({"ok": True, "whitelist": whitelist})
+        return _json({"ok": True, "count": len(added), "whitelist": whitelist})
+
+    if action == "maintenance":
+        """一次请求把维护模式三个键写完，省得前端连发三次。"""
+        body = _read_body(handler)
+        updates = {
+            "maint_mode_live": "1" if body.get("on") else "0",
+            "maint_eta": str(body.get("eta") or ""),
+            "maint_reason": str(body.get("reason") or ""),
+        }
+        for key, value in updates.items():
+            store.set(key, value)
+        info("[Admin] 维护模式 " + ("开" if body.get("on") else "关")
+             + "（" + client_hint(handler) + "）")
+        return _json({"ok": True})
+
+    if action == "ai_reset":
+        if not config.enable_ai:
+            return _json({"ok": False, "error": "ai_disabled"}, 400)
+        body = _read_body(handler)
+        scope = str(body.get("scope") or "all")
+        if scope not in ("quota", "jobs", "keys", "all"):
+            return _json({"ok": False, "error": "bad_scope"}, 400)
+        return _json({"ok": True, "scope": scope,
+                      "result": ai.reset(scope, str(body.get("ip") or ""),
+                                         config.ai_window())})
 
     if action == "regenerate":
         try:
@@ -271,452 +572,132 @@ def handle(service, handler, path: str, query: str):
             return _json({"ok": False, "error": str(exc)}, 500)
         return _json({"ok": True, "xaml": body})
 
+    # ---- 系统 ----
+
+    if action == "log":
+        params = urllib.parse.parse_qs(query or "")
+        try:
+            count = int((params.get("lines") or ["200"])[0])
+        except ValueError:
+            count = 200
+        return _json({"ok": True, **_read_log(count)})
+
+    if action == "doctor":
+        body = _read_body(handler)
+        force = bool(body.get("force"))
+        now = time.time()
+        cached = _doctor_cache.get("report")
+        if cached is not None and not force and now - float(_doctor_cache.get("at") or 0) < DOCTOR_TTL:
+            return _json({"ok": True, "report": cached, "cached": True,
+                          "at": int(_doctor_cache.get("at") or 0)})
+        if not _doctor_lock.acquire(blocking=False):
+            return _json({"ok": False, "error": "busy"}, 409)
+        try:
+            from . import doctor as doctor_module
+            started = time.time()
+            report = doctor_module.run_checks(config, online=False)
+            report["took_ms"] = int((time.time() - started) * 1000)
+            _doctor_cache["at"] = time.time()
+            _doctor_cache["report"] = report
+            info("[Admin] 体检完成：通过 " + str(report.get("ok")) + " / 警告 "
+                 + str(report.get("warn")) + " / 失败 " + str(report.get("fail"))
+                 + "（" + client_hint(handler) + "）")
+            return _json({"ok": True, "report": report, "cached": False, "at": int(time.time())})
+        except Exception as exc:
+            warn("[Admin] 体检失败：" + str(exc))
+            return _json({"ok": False, "error": str(exc)}, 500)
+        finally:
+            _doctor_lock.release()
+
+    if action == "cache":
+        body = _read_body(handler)
+        target = str(body.get("target") or "all")
+        if target not in CACHE_TARGETS:
+            return _json({"ok": False, "error": "bad_target"}, 400)
+        cleared = _clear_cache(service, target)
+        service._templates.clear()
+        info("[Admin] 清理缓存 " + target + "（" + client_hint(handler) + "）")
+        return _json({"ok": True, "cleared": cleared})
+
+    if action == "sessions":
+        body = _read_body(handler)
+        if str(body.get("action") or "") != "revoke_others":
+            return _json({"ok": False, "error": "bad_action"}, 400)
+        keep = _get_cookie(handler, SESSION_COOKIE)
+        with _sessions_lock:
+            removed = len(_sessions)
+            _sessions.clear()
+            if keep:
+                _sessions[keep] = time.time() + SESSION_TTL
+                removed -= 1
+        info("[Admin] 清掉其它后台会话 " + str(removed) + " 个（" + client_hint(handler) + "）")
+        return _json({"ok": True, "removed": removed})
+
+    # ---- 数据 / 配置 ----
+
+    if action == "store_get":
+        return _json({"ok": True, "store": store.all(),
+                      "text": json.dumps(store.all(), ensure_ascii=False, indent=2)})
+
+    if action == "store_set":
+        body = _read_body(handler)
+        if not isinstance(body, dict) or not body:
+            return _json({"ok": False, "error": "empty"}, 400)
+        current = store.all()
+        backup = VAR_DIR / "store.backup.json"
+        try:
+            backup.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            warn("[Admin] 备份 store.json 失败：" + str(exc))
+        store.replace_all(body)
+        info("[Admin] 整体替换 store.json（" + str(len(body)) + " 个键，" + client_hint(handler) + "）")
+        return _json({"ok": True, "keys": sorted(body.keys()), "backup": str(backup)})
+
+    if action == "export":
+        payload = json.dumps(store.all(), ensure_ascii=False, indent=2)
+        name = "pclhome-store-" + time.strftime("%Y%m%d-%H%M%S") + ".json"
+        return _download(name, payload)
+
+    if action == "config_set":
+        body = _read_body(handler)
+        updates = body.get("updates")
+        if not isinstance(updates, dict) or not updates:
+            return _json({"ok": False, "error": "missing_updates"}, 400)
+        clean = {}
+        for key, value in updates.items():
+            caster = CONFIG_FIELDS.get(key)
+            if caster is None:
+                return _json({"ok": False, "error": "key_not_writable", "key": key}, 400)
+            if caster is bool:
+                if isinstance(value, str):
+                    value = value.strip().lower() in ("1", "true", "on", "yes")
+                clean[key] = bool(value)
+            else:
+                clean[key] = str(value)[:200]
+        raw = {}
+        try:
+            if CONFIG_FILE.exists():
+                raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return _json({"ok": False, "error": "config_unreadable: " + str(exc)}, 500)
+        raw.update(clean)
+        try:
+            tmp = CONFIG_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            os.chmod(tmp, 0o600)
+            tmp.replace(CONFIG_FILE)
+        except OSError as exc:
+            return _json({"ok": False, "error": "write_failed: " + str(exc)}, 500)
+
+        # 内存里的配置同步换掉，天气服务持有旧引用，得重建
+        new_config = replace(config, **clean)
+        service.config = new_config
+        try:
+            service.weather = WeatherService(new_config)
+        except Exception as exc:
+            warn("[Admin] 重建天气服务失败：" + str(exc))
+        service._templates.clear()
+        info("[Admin] 修改 config.json：" + "、".join(clean.keys()) + "（" + client_hint(handler) + "）")
+        return _json({"ok": True, "keys": sorted(clean.keys())})
+
     return _json({"ok": False, "error": "unknown_action"}, 404)
-
-
-# ============ 后台页面 ============
-
-ADMIN_PAGE = r"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>主页管理后台</title>
-<style>
-  :root{
-    --bg:#0b0d10; --card:#12161b; --card2:#171c23; --line:#232a33;
-    --ink:#eef1f5; --ink2:#98a3b2; --ink3:#5e6a7a;
-    --accent:#4d8dff; --accent-ink:#04101f;
-    --ok:#3fb950; --warn:#dfa02f; --danger:#e5544d;
-    --r:12px; --r2:9px;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
-    font:14px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
-    -webkit-font-smoothing:antialiased}
-  a{color:var(--accent);text-decoration:none}
-  a:hover{text-decoration:underline}
-  .ic{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-
-  header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;
-    padding:0 22px;height:58px;background:rgba(11,13,16,.86);
-    backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
-  .brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14.5px}
-  .mark{width:23px;height:23px;border-radius:7px;flex:none;display:grid;place-items:center;
-    background:linear-gradient(135deg,#4d8dff,#7c5cff)}
-  .mark svg{width:13px;height:13px}
-  header .sp{flex:1}
-
-  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
-    box-shadow:0 1px 2px rgba(0,0,0,.28)}
-  .card > h2{margin:0;padding:13px 17px;font-size:13.5px;font-weight:600;
-    border-bottom:1px solid var(--line);background:var(--card2);display:flex;align-items:center;gap:9px}
-  .card > h2 small{color:var(--ink3);font-weight:400;font-size:12px}
-  .body{padding:17px;display:grid;gap:15px}
-  label{display:block;font-size:12px;color:var(--ink2);margin-bottom:6px;font-weight:500}
-  input[type=text],input[type=password],textarea,select{
-    width:100%;background:#0d1015;border:1px solid var(--line);border-radius:var(--r2);color:var(--ink);
-    padding:9px 11px;font:13.5px/1.6 inherit;outline:none;transition:border-color .15s,box-shadow .15s}
-  input:focus,textarea:focus,select:focus{border-color:var(--accent);
-    box-shadow:0 0 0 3px rgba(77,141,255,.16)}
-  input::placeholder,textarea::placeholder{color:#4a5563}
-  textarea{min-height:96px;resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
-  .row{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
-
-  button{background:var(--accent);color:var(--accent-ink);border:0;border-radius:var(--r2);
-    padding:9px 15px;font:600 13.5px/1 inherit;cursor:pointer;transition:filter .15s,background .15s}
-  button:hover{filter:brightness(1.08)}
-  button.ghost{background:#1a2029;color:var(--ink);border:1px solid var(--line)}
-  button.ghost:hover{background:#20272f;filter:none}
-  button.danger{background:var(--danger);color:#fff}
-  button:disabled{opacity:.45;cursor:not-allowed;filter:none}
-  .btns{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
-  .hint{font-size:12px;color:var(--ink3)}
-  .hint b{color:var(--ink2)}
-
-  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
-    font-size:11px;font-weight:600}
-  .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
-  .pill.on{background:rgba(63,185,80,.14);color:var(--ok)}
-  .pill.off{background:rgba(152,163,178,.12);color:var(--ink2)}
-
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
-  tr:last-child td{border-bottom:0}
-  th{color:var(--ink3);font-weight:500;font-size:11.5px;letter-spacing:.3px}
-  td .ghost{padding:5px 10px;font-size:12px}
-
-  .kpi{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
-  .kpi div{background:var(--card2);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px}
-  .kpi span{font-size:12px;color:var(--ink3)}
-  .kpi b{display:block;font-size:26px;font-weight:650;margin-top:5px;letter-spacing:-.5px}
-
-  /* 侧栏导航 + 主区 */
-  .shell{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;
-    max-width:1180px;margin:0 auto;padding:22px}
-  .side{position:sticky;top:80px;align-self:start}
-  .side .cap{font-size:11px;font-weight:600;letter-spacing:.7px;text-transform:uppercase;
-    color:var(--ink3);padding:0 11px 8px}
-  #nav{display:grid;gap:3px}
-  #nav button{display:flex;align-items:center;gap:9px;text-align:left;width:100%;
-    background:transparent;color:var(--ink2);border:0;border-radius:var(--r2);
-    padding:9px 11px;font:500 13.5px/1 inherit;cursor:pointer}
-  #nav button:hover{background:#161b22;color:var(--ink);filter:none}
-  #nav button.on{background:rgba(77,141,255,.13);color:#a9c8ff;font-weight:600}
-  #nav .ic{width:15px;height:15px;flex:none;opacity:.85}
-  .main{display:grid;gap:16px;min-width:0}
-
-  .loginwrap{max-width:400px;margin:13vh auto;padding:0 22px}
-  .loginwrap .body{padding:22px;gap:16px}
-  .logo-big{width:44px;height:44px;border-radius:13px;margin:0 auto;
-    background:linear-gradient(135deg,#4d8dff,#7c5cff);display:grid;place-items:center}
-  .logo-big svg{width:22px;height:22px}
-
-  .toast{position:fixed;right:20px;bottom:20px;z-index:50;background:var(--card2);
-    border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;
-    padding:11px 16px;font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.45);max-width:70vw;
-    opacity:0;transform:translateY(10px);transition:.22s;pointer-events:none}
-  .toast.show{opacity:1;transform:none}
-  .hidden{display:none!important}
-
-  @media (max-width:820px){
-    .shell{grid-template-columns:1fr;gap:14px;padding:16px}
-    .side{position:static}
-    .side .cap{display:none}
-    #nav{display:flex;overflow-x:auto;gap:7px;padding-bottom:2px;scrollbar-width:none}
-    #nav::-webkit-scrollbar{display:none}
-    #nav button{width:auto;white-space:nowrap;border:1px solid var(--line);background:#12161b}
-    #nav button.on{border-color:transparent}
-    header{padding:0 16px}
-    .brand span{display:none}
-  }
-</style>
-</head>
-<body>
-<header>
-  <div class="brand">
-    <span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"
-      stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>
-    <span>主页管理后台</span>
-  </div>
-  <span id="status" class="pill off">未登录</span>
-  <span class="sp"></span>
-  <a href="/Custom.xaml" target="_blank" style="font-size:13px">查看主页</a>
-  <button class="ghost hidden" id="logout">退出</button>
-</header>
-
-<div id="login" class="loginwrap">
-  <div class="card">
-    <div class="body">
-      <div class="logo-big"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"
-        stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></div>
-      <div style="text-align:center">
-        <div style="font-size:16px;font-weight:600">主页管理后台</div>
-        <div class="hint" style="margin-top:3px">输入管理令牌继续</div>
-      </div>
-      <div><label>管理令牌</label>
-        <input type="password" id="token" placeholder="config.admin_token" autocomplete="current-password"></div>
-      <div class="btns"><button id="doLogin" style="width:100%">登录</button></div>
-    </div>
-  </div>
-</div>
-
-<div class="shell hidden" id="panel">
-  <aside class="side">
-    <div class="cap">管理</div>
-    <nav id="nav">
-      <button data-sec="overview" class="on"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>总览</button>
-      <button data-sec="content"><svg class="ic" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>首页内容</button>
-      <button data-sec="access"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.4-2.9 7.9-7 9-4.1-1.1-7-4.6-7-9V6z"/></svg>访客与维护</button>
-      <button data-sec="ai"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3l2.2 6.3L20.5 12l-6.3 2.7L12 21l-2.2-6.3L3.5 12l6.3-2.7z"/></svg>AI 分析</button>
-      <button data-sec="system"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2.2"/><circle cx="15" cy="12" r="2.2"/><circle cx="8" cy="17" r="2.2"/></svg>系统</button>
-    </nav>
-  </aside>
-  <main class="main" id="main"></main>
-</div>
-<div class="toast" id="toast"></div>
-
-<script>
-const $ = (s) => document.querySelector(s);
-const state = {};
-
-function toast(msg) {
-  const el = $('#toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.remove('show'), 2200);
-}
-
-async function api(action, data, method) {
-  const opt = { method: method || (data ? 'POST' : 'GET'), headers: {} };
-  if (data) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(data); }
-  const res = await fetch('/admin/api/' + action, opt);
-  const json = await res.json().catch(() => ({ ok: false, error: 'bad_json' }));
-  if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
-  if (!json.ok) throw new Error(json.error || 'failed');
-  return json;
-}
-
-function showLogin() {
-  $('#login').classList.remove('hidden');
-  $('#panel').classList.add('hidden');
-  $('#status').textContent = '未登录';
-  $('#status').className = 'pill off';
-}
-
-function showPanel() {
-  $('#login').classList.add('hidden');
-  $('#panel').classList.remove('hidden');
-  $('#logout').classList.remove('hidden');
-  $('#status').textContent = '已登录';
-  $('#status').className = 'pill on';
-}
-
-// 侧栏分区：卡片按 data-sec 归组，一次只显示一组，省得一屏堆九张卡
-let curSec = 'overview';
-
-function showSec(sec) {
-  curSec = sec;
-  document.querySelectorAll('#main .card').forEach(c => {
-    c.classList.toggle('hidden', c.dataset.sec !== sec);
-  });
-  document.querySelectorAll('#nav button').forEach(b => {
-    b.classList.toggle('on', b.dataset.sec === sec);
-  });
-}
-
-document.querySelectorAll('#nav button').forEach(b => {
-  b.onclick = () => showSec(b.dataset.sec);
-});
-
-async function load() {
-  const s = await api('state');
-  state.store = s.store || {};
-  state.config = s.config || {};
-  state.ai = s.ai || {};
-  render();
-  loadStats();
-  showPanel();
-}
-
-function jsonOf(key, fallback) {
-  const raw = state.store[key];
-  if (raw === undefined || raw === null || raw === '') return fallback;
-  if (typeof raw === 'object') return raw;
-  try { return JSON.parse(raw); } catch (e) { return fallback; }
-}
-
-function textOf(key) {
-  const raw = state.store[key];
-  return raw === undefined || raw === null ? '' : String(raw);
-}
-
-function render() {
-  const maint = ['1', 'true', 'on'].includes(textOf('maint_mode_live'));
-  const banners = jsonOf('homepage_banner', {});
-  const blocks = jsonOf('block:list', {});
-  const wl = jsonOf('maint_whitelist', {});
-  const cd = jsonOf('custom_countdown', {});
-  const fests = jsonOf('custom_festivals', []);
-
-  $('#main').innerHTML = `
-  <div class="card" data-sec="overview"><h2>KPI <small>近 7 天</small></h2><div class="body"><div class="kpi" id="kpi"></div></div></div>
-
-  <div class="card" data-sec="overview"><h2>访问统计 <small>近 7 天</small></h2>
-    <div class="body"><div id="stats"></div></div></div>
-
-  <div class="card" data-sec="content"><h2>公告</h2>
-    <div class="body">
-      <div><label>多公告轮播（每行一条，≥2 条生效，最多 4 条，每条 8 秒）</label>
-        <textarea id="banners" placeholder="第一条公告&#10;第二条公告">${esc(textOf('banners'))}</textarea></div>
-      <div class="row">
-        <div><label>单条公告开关</label>
-          <select id="banner_on"><option value="false">关闭</option><option value="true"${banners.enabled ? ' selected' : ''}>开启</option></select></div>
-        <div><label>单条公告内容（≤40 字淡入，超长跑马灯）</label>
-          <input type="text" id="banner_text" value="${esc(banners.text || '')}"></div>
-      </div>
-      <div class="btns"><button id="saveBanner">保存公告</button>
-        <span class="hint">多公告优先于单条公告</span></div>
-    </div></div>
-
-  <div class="card" data-sec="content"><h2>每日一言 <small>每行一条；支持 {date} {weekday} {year}</small></h2>
-    <div class="body">
-      <div class="hint">这里填了就用你的，一天轮换一条，接口不再调用；留空才走 uapis 接口。</div>
-      <textarea id="quote" placeholder="留空则使用 uapis 接口（接口挂了再用内置的 68 条文案）">${esc(textOf('quote_custom'))}</textarea>
-      <div class="btns"><button id="saveQuote">保存</button>
-        <button class="ghost" id="clearQuote">清空，改用接口</button></div>
-    </div></div>
-
-  <div class="card" data-sec="content"><h2>节日与倒计时</h2>
-    <div class="body">
-      <div class="row">
-        <div><label>自定义倒计时名称</label><input type="text" id="cd_name" value="${esc(cd.name || '')}" placeholder="如：我的生日"></div>
-        <div><label>目标日期</label><input type="text" id="cd_date" value="${esc(cd.date || '')}" placeholder="2026-10-01"></div>
-      </div>
-      <div class="btns"><button id="saveCd">保存倒计时</button><button class="ghost" id="clearCd">清除</button></div>
-      <div><label>自定义公历节日（JSON 数组）</label>
-        <textarea id="fests">${esc(JSON.stringify(fests, null, 2))}</textarea>
-        <div class="hint">格式：[{"month":10,"day":1,"name":"国庆节","msg":"祝祖国繁荣昌盛！"}]</div></div>
-      <div class="btns"><button id="saveFests">保存节日</button></div>
-    </div></div>
-
-  <div class="card" data-sec="access"><h2>维护模式 <small>开启后除白名单外都会看到"服务器正在更新"</small></h2>
-    <div class="body">
-      <div class="row">
-        <div><label>开关</label>
-          <select id="maint_on"><option value="0">关闭</option><option value="1"${maint ? ' selected' : ''}>开启</option></select></div>
-        <div><label>预计完成（可留空）</label><input type="text" id="maint_eta" value="${esc(textOf('maint_eta'))}" placeholder="如：10 分钟"></div>
-        <div><label>原因（可留空）</label><input type="text" id="maint_reason" value="${esc(textOf('maint_reason'))}" placeholder="如：升级数据库"></div>
-      </div>
-      <div class="btns"><button id="saveMaint">保存维护设置</button>
-        <span class="hint">白名单 ${Object.keys(wl).length} 个 IP</span></div>
-      <div><label>维护白名单（每行一个 IP）</label>
-        <textarea id="maint_wl">${esc(Object.keys(wl).join('\n'))}</textarea></div>
-      <div class="btns"><button class="ghost" id="saveWl">保存白名单</button></div>
-    </div></div>
-
-  <div class="card" data-sec="access"><h2>封禁列表</h2>
-    <div class="body">
-      <div class="row">
-        <div><label>IP</label><input type="text" id="block_ip" placeholder="1.2.3.4"></div>
-        <div><label>原因</label><input type="text" id="block_reason" placeholder="刷屏"></div>
-      </div>
-      <div class="btns"><button class="danger" id="doBlock">封禁</button></div>
-      <div id="blockTable"></div>
-    </div></div>
-
-  <div class="card" data-sec="ai"><h2>AI 日志分析</h2>
-    <div class="body"><div id="aiBox"></div></div></div>
-
-  <div class="card" data-sec="system"><h2>模板</h2>
-    <div class="body"><div class="btns">
-      <button id="regen">重新生成 XAML</button>
-      <button class="ghost" id="preview">预览渲染结果</button>
-      <span class="hint">改过 templates/*.tpl 或 config.json 后点一下</span>
-    </div>
-    <textarea id="pv" class="hidden" readonly style="min-height:220px"></textarea></div></div>
-  `;
-
-  $('#blockTable').innerHTML = Object.keys(blocks).length ? `
-    <table><tr><th>IP</th><th>原因</th><th></th></tr>
-    ${Object.entries(blocks).map(([ip, reason]) => `<tr><td>${esc(ip)}</td><td>${esc(reason)}</td>
-      <td><button class="ghost" data-unblock="${esc(ip)}">解封</button></td></tr>`).join('')}
-    </table>` : '<div class="hint">暂无封禁记录</div>';
-
-  const ai = state.ai || {};
-  if (!ai.enabled) {
-    $('#aiBox').innerHTML = '<div class="hint">未开启（config.json 里 enable_ai 设为 true 才生效）</div>';
-  } else {
-    const rows = ai.rows || [];
-    const win = ai.window === 'day' ? '天' : '小时';
-    $('#aiBox').innerHTML = `
-      <div class="hint">模型 <b>${esc(ai.model)}</b> @ ${esc(ai.base)} · 每个 IP 每${win} ${ai.limit} 次</div>
-      <div class="hint">${esc(ai.bucket)}：${rows.length} 个 IP 用过，共 ${ai.calls} 次 ·
-        正在分析 ${ai.running} 个 · 留存记录 ${ai.jobs} 条 · 私人密钥 ${ai.own_keys} 个</div>
-      ${rows.length ? `<table><tr><th>IP</th><th>这${win}用了</th><th></th></tr>
-        ${rows.map(r => `<tr><td>${esc(r.ip)}</td><td>${r.used}</td>
-          <td><button class="ghost" data-aireset="${esc(r.ip)}">重置这个 IP</button></td></tr>`).join('')}
-        </table>` : `<div class="hint">这${win}还没有人用过</div>`}
-      <div class="btns" style="margin-top:12px">
-        <button id="aiResetQuota">重置本${win}用量</button>
-        <button class="ghost" id="aiResetJobs">清空分析记录</button>
-        <button class="ghost" id="aiResetKeys">清空私人密钥</button>
-        <button class="danger" id="aiResetAll">全部重置</button>
-      </div>`;
-  }
-
-  bind();
-  showSec(curSec);
-}
-
-function bind() {
-  const set = (key, value) => api('set', { key, value }).then(() => toast('已保存')).then(load);
-
-  $('#saveMaint').onclick = () => {
-    api('set', { key: 'maint_mode_live', value: $('#maint_on').value })
-      .then(() => api('set', { key: 'maint_eta', value: $('#maint_eta').value }))
-      .then(() => api('set', { key: 'maint_reason', value: $('#maint_reason').value }))
-      .then(() => toast('维护设置已保存')).then(load);
-  };
-  $('#saveWl').onclick = () => {
-    const map = {};
-    $('#maint_wl').value.split('\n').map(s => s.trim()).filter(Boolean).forEach(ip => map[ip] = 1);
-    set('maint_whitelist', map);
-  };
-  $('#saveBanner').onclick = () => {
-    api('set', { key: 'banners', value: $('#banners').value })
-      .then(() => api('set', { key: 'homepage_banner', value: { enabled: $('#banner_on').value === 'true', text: $('#banner_text').value } }))
-      .then(() => toast('公告已保存')).then(load);
-  };
-  $('#saveQuote').onclick = () => set('quote_custom', $('#quote').value);
-  $('#clearQuote').onclick = () => api('delete', { key: 'quote_custom' }).then(() => toast('已清空，改回接口')).then(load);
-  $('#saveCd').onclick = () => set('custom_countdown', { name: $('#cd_name').value, date: $('#cd_date').value });
-  $('#clearCd').onclick = () => api('delete', { key: 'custom_countdown' }).then(() => toast('已清除')).then(load);
-  $('#saveFests').onclick = () => {
-    try { set('custom_festivals', JSON.parse($('#fests').value || '[]')); }
-    catch (e) { toast('JSON 格式有误：' + e.message); }
-  };
-  $('#doBlock').onclick = () => api('block', { ip: $('#block_ip').value, reason: $('#block_reason').value })
-    .then(() => toast('已封禁')).then(load);
-  document.querySelectorAll('[data-unblock]').forEach(btn => {
-    btn.onclick = () => api('block', { ip: btn.dataset.unblock, remove: true }).then(() => toast('已解封')).then(load);
-  });
-  const aiReset = (scope, ip) => {
-    if (!confirm('确定要重置吗？scope=' + scope + (ip ? ' ip=' + ip : ''))) return;
-    api('ai_reset', { scope: scope, ip: ip || '' })
-      .then(r => toast('已重置：' + JSON.stringify(r.result)))
-      .then(load).catch(e => toast('失败：' + e.message));
-  };
-  [['aiResetQuota', 'quota'], ['aiResetJobs', 'jobs'], ['aiResetKeys', 'keys'], ['aiResetAll', 'all']]
-    .forEach(([id, scope]) => { const el = $('#' + id); if (el) el.onclick = () => aiReset(scope); });
-  document.querySelectorAll('[data-aireset]').forEach(btn => {
-    btn.onclick = () => aiReset('all', btn.dataset.aireset);
-  });
-
-  $('#regen').onclick = () => {
-    $('#regen').disabled = true;
-    api('regenerate').then(() => toast('已重新生成')).catch(e => toast('失败：' + e.message))
-      .finally(() => $('#regen').disabled = false);
-  };
-  $('#preview').onclick = () => api('preview').then(r => {
-    const el = $('#pv');
-    el.value = r.xaml; el.classList.remove('hidden');
-  }).catch(e => toast('失败：' + e.message));
-}
-
-async function loadStats() {
-  try {
-    const { stats } = await api('stats');
-    $('#kpi').innerHTML = `
-      <div><span class="hint">总访问</span><b>${stats.total}</b></div>
-      <div><span class="hint">今日</span><b>${stats.today}</b></div>
-      <div><span class="hint">独立 IP</span><b>${stats.unique}</b></div>`;
-    const countries = (stats.countries || []).map(c => `${esc(c.code)} · ${c.count}`).join('　') || '暂无数据';
-    const hosts = (stats.hosts || []).map(h => `<tr><td>${esc(h.ip)}</td><td>${h.count}</td></tr>`).join('');
-    $('#stats').innerHTML = `<div class="hint" style="margin-bottom:10px">地区：${countries}</div>` +
-      (hosts ? `<table><tr><th>IP</th><th>次数</th></tr>${hosts}</table>` : '<div class="hint">暂无数据</div>');
-  } catch (e) { /* 未登录时忽略 */ }
-}
-
-function esc(s) {
-  return String(s === undefined || s === null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
-$('#doLogin').onclick = async () => {
-  try {
-    await api('login', { token: $('#token').value });
-    await load();
-  } catch (e) { toast('登录失败：令牌不正确'); }
-};
-$('#token').addEventListener('keydown', e => { if (e.key === 'Enter') $('#doLogin').click(); });
-$('#logout').onclick = () => api('logout', {}).then(showLogin);
-
-// 打开页面时若已有会话就直接进后台
-fetch('/admin/api/state').then(r => r.ok ? load() : showLogin()).catch(showLogin);
-</script>
-</body>
-</html>
-"""
