@@ -7,9 +7,6 @@
 
     </StackPanel.Resources>
     <!-- __BANNER__ -->
-    <!-- PCL 老师的 RIP 纪念专栏（图片与内容来自 Light Beacon 的 PCL2-NewsHomepage，
-         按 CC BY-NC-SA 4.0 使用；署名和许可由这一块自带，别删） -->
-    <!-- __RIP_CARD__ -->
     <!-- CanSwap=False 表示不可折叠；不带 IsSwapped（教程要求它必须搭配 CanSwap=True） -->
     <local:MyCard Title="__T_WELCOME__" Margin="0,0,0,16" CanSwap="False">
         <StackPanel Margin="25,40,23,16">

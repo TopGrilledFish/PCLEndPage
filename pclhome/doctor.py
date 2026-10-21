@@ -1121,28 +1121,6 @@ def check_static(report: Report, config: Config) -> None:
     else:
         report.warning("static/music/ 里没有音频文件（本项目不分发第三方音乐，需自行放入）")
 
-    # 纪念专栏的图是第三方内容（Light Beacon / PCL2-NewsHomepage，CC BY-NC-SA 4.0），
-    # 跟着仓库一起镜像。图片丢了卡片会开天窗，署名丢了就是许可违规，两样都查。
-    rip_files = ("lm.jpg", "pclls.png")
-    rip_dir = ROOT / "static" / "images" / "rip"
-    rip_missing = [name for name in rip_files
-                   if not (rip_dir / name).exists() or (rip_dir / name).stat().st_size < 1024]
-    if rip_missing:
-        report.warning("RIP 纪念专栏的图片没镜像到本地：" + "、".join(rip_missing))
-    else:
-        report.good("RIP 纪念专栏 " + str(len(rip_files)) + " 张图片已镜像到本地")
-
-    try:
-        home = _fake_render(config, "zh-hans")
-        missing = [need for need in ("Light-Beacon/PCL2-NewsHomepage", "CC BY-NC-SA 4.0")
-                   if need not in home]
-        if missing:
-            report.bad("主页的纪念专栏缺少来源或许可署名（CC BY-NC-SA 4.0 要求署名）：" + "、".join(missing))
-        else:
-            report.good("纪念专栏在主页上带了来源与 CC BY-NC-SA 4.0 署名")
-    except Exception as exc:
-        report.warning("纪念专栏署名检查失败：" + repr(exc))
-
 
 # ============ 线上探测 ============
 
