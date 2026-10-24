@@ -2,7 +2,7 @@
 
 这是 PCL2 主页预设的公开仓库
 
-访问地址 'https://end.g-fish.dpdns.org'
+访问地址`https://end.g-fish.dpdns.org/Custom.xaml`
 
 原作者 wlasfjdskfj
 
