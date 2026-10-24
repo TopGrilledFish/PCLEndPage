@@ -61,7 +61,7 @@ python run.py
 ```
 
 默认地址 127.0.0.1:8787  
-配置默认在config.json
+配置默认在config.json  
 每次修改需要重新运行`python -m pclhome generate`  
 自检`python -m pclhome doctor --offline`  
 如需公网部署只需放出Custom.xaml与static/  
