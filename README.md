@@ -1,12 +1,8 @@
 PCL2 主页预设
 
-这是 PCL2 主页预设的公开仓库，主页本体就在这儿，想改可以自己拉下去跑。
+这是 PCL2 主页预设的公开仓库
 
-访问地址 https://end.g-fish.dpdns.org
-
-仓库地址 https://github.com/TopGrilledFish/PCLEndPage
-
-上游仓库 https://github.com/wlasfjdskfj/pcl-homepage
+访问地址 'https://end.g-fish.dpdns.org'
 
 原作者 wlasfjdskfj
 
@@ -54,9 +50,9 @@ PCL2 主页预设
 3. 在「预设」里找本主页；找不到就选「联网更新」，下载地址填 https://end.g-fish.dpdns.org
 4. 回到启动页，完成
 
-**自己部署一份**
+**本地使用**
 
-需要 Python 3.10 以上，没有别的依赖。
+Python>=3.10
 
 ```
 git clone https://github.com/TopGrilledFish/PCLEndPage.git
@@ -64,26 +60,21 @@ cd PCLEndPage
 python run.py
 ```
 
-默认开在 127.0.0.1:8787，PCL 里填这个地址就能看到。配置照 config.example.json 复制一份 config.json 改，不建也能跑。
-
-改了主页模板要重新生成一次 Custom.xaml：`python -m pclhome generate`。出问题先跑 `python -m pclhome doctor --offline`。
-
-放公网就前面挂个 nginx 反代，注意别把项目目录当静态目录整个暴露出去，只放出 Custom.xaml 和 static/。
-
-多说一句，写这个的时候 AI 帮了不少忙，代码里有相当一部分是它和我一起改出来的。
+默认地址 127.0.0.1:8787  
+配置默认在config.json
+每次修改需要重新运行`python -m pclhome generate`  
+自检`python -m pclhome doctor --offline`  
+如需公网部署只需放出Custom.xaml与static/  
 
 **鸣谢**
 
 - PCL 启动器作者 龙腾猫跃
 - 原作者 wlasfjdskfj
-- README 的写法参考了 Light-Beacon 的 PCL2-NewsHomepage
 
 **许可**
 
-MIT。
-
-上游是 https://github.com/wlasfjdskfj/pcl-homepage。借鉴这个仓库的代码或样式时，请在文件头标注原作者，并且同样用 MIT。如果做的是 PCL 主页，还要在主页里写明出处，一般放在末尾的「特别鸣谢」里，字要看得清，也别写容易让人反感的内容。
+MIT
+上游是 https://github.com/wlasfjdskfj/pcl-homepage  
+请遵守MIT许可证  
 
 欢迎 Fork，有问题可以去我主页找联系方式。
-
-还有啥想要的可提，不加没啥软用的。
