@@ -27,6 +27,9 @@ from .store import Store
 from .weather import WeatherService
 from .xaml import build_multi_banner, build_single_banner, escape_attr, indent_block
 
+# 底标那枚「赞助主页」按钮指向的地址（爱发电）
+SPONSOR_URL = "https://afdian.com/a/llsgllsg"
+
 
 @dataclass
 class HomeData:
@@ -165,7 +168,8 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
     仓库是什么关系（不然摆两个仓库地址看着像重复）。
     """
     from .i18n import t
-    from .xaml import ICON_GEAR, ICON_HOME, divider, escape_url_attr, help_button
+    from .xaml import (ICON_GEAR, ICON_HEART, ICON_HOME, divider, escape_url_attr,
+                       help_button)
 
     if not version:
         version = t("home.footer_version_unknown", lang)
@@ -178,7 +182,8 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         return ('<TextBlock Text="' + escape_attr(text) + '" FontSize="12" '
                 'Foreground="{DynamicResource ColorBrush2}" Margin="0,0,0,6" />')
 
-    def link_button(text: str, url: str, margin: str = "", color: str = "Highlight") -> str:
+    def link_button(text: str, url: str, margin: str = "", color: str = "Highlight",
+                    logo: str = ICON_HOME) -> str:
         """开浏览器的按钮——EventType 必须是「打开网页」。
 
         教程文件里写得很清楚：「打开网页」是拿 EventData 当网址开浏览器，
@@ -187,7 +192,7 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         """
         return ('<local:MyIconTextButton' + (' Margin="' + margin + '"' if margin else "")
                 + ' Height="36" Text="' + escape_attr(text) + '" LogoScale="0.8" Logo="'
-                + ICON_HOME + '"' + (' ColorType="' + color + '"' if color else "")
+                + logo + '"' + (' ColorType="' + color + '"' if color else "")
                 + ' EventType="打开网页" EventData="' + escape_url_attr(url) + '" />')
 
     return (
@@ -209,6 +214,12 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         # 图标是齿轮——之前跟"打开仓库"一样用的房子，两个按钮长得一模一样。
         + help_button(t("home.footer_settings", lang), ICON_GEAR,
                       base + "/settings_page.json", 36, color="")
+        + "</StackPanel>"
+        # 赞助单独一行放最底下：一来四个按钮挤一行在窄屏会被裁，二来它是这张卡最后
+        # 一个动作，单独一行更像"出口"。爱发电的按钮用爱心图标，点开是资助页。
+        + '<StackPanel Orientation="Horizontal" Margin="0,10,0,0">'
+        + link_button(t("home.footer_sponsor", lang), SPONSOR_URL, "", "Highlight",
+                      logo=ICON_HEART)
         + "</StackPanel></StackPanel></local:MyCard>")
 
 
