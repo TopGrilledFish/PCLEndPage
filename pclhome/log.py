@@ -24,11 +24,16 @@ import queue
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 DEBUG, INFO, WARN, ERROR = 10, 20, 30, 40
 
 _NAMES = {DEBUG: "DEBUG", INFO: "INFO", WARN: "WARN", ERROR: "ERROR"}
+
+# 日志一律按北京时间打。服务器时区常常是 UTC（这台就是），不写死时区的话
+# 日志里的 09:48 和主页「下午好」、后台分析记录里的 17:48 对不上，看着像穿越。
+# 固定 +8：中国不实行夏令时，比查 tzdata 省事，也不会被服务器时区改来改去影响。
+BEIJING = timezone(timedelta(hours=8))
 
 # 命令行 --log-level 可覆盖
 _level = INFO
@@ -141,7 +146,7 @@ def _emit(level: int, message: str) -> None:
     global _dropped
     if level < _level:
         return
-    now = datetime.now()
+    now = datetime.now(BEIJING)
     stamp = now.strftime("%H:%M:%S") + ".%03d" % (now.microsecond // 1000)
     line = stamp + " [" + _NAMES[level] + "] " + str(message)
 
