@@ -1,31 +1,5 @@
 # -*- coding: utf-8 -*-
-"""AI 崩溃日志分析。
 
-用户在主页的输入框里粘一个日志链接，PCL 带着这个链接请求 ``/ai.json`` 与
-``/ai.xaml``，服务端在后台线程里抓日志、调 AI，结果写回主页卡片。
-
-**为什么输入框只能填链接，不能直接粘日志原文**
-
-PCL 的事件参数是这么拼出来的::
-
-    EventData="{Binding Path=Text,ElementName=ailoginput,
-                StringFormat='{}<服务器地址>/ai.json?q={0}'}"
-
-``{0}`` 是输入框原文，**PCL 不做 URL 编码**，直接塞进 URL。崩溃日志里全是换行、
-空格和 ``&``，拼出来的请求行是非法的，PCL 那边直接失败——不是服务端能救的。
-链接又短又没有空白字符，才塞得进去。单行的短文本仍可用（见 :func:`split_input`），
-但正常用法是先把日志传到 mclo.gs，再粘链接。
-
-**两种密钥**
-
-1. 站长内置密钥（``config.ai_api_key``）：每 IP 每 ``config.ai_rate_window``
-   （hour / day）``config.ai_rate_limit`` 次，额度记在 SQLite 里，按**北京时间**划格子。
-2. 用户自带密钥：粘一次存下来，该 IP 不再受限。密钥**只存在内存**里，
-   进程一重启就没了——不落盘，免得替别人保管密钥。日志里一律打码。
-
-**任务状态**落在 ``var/ai_jobs.json``：额度是持久的，结果也必须持久，
-否则服务重启后用户额度用掉了却看不到结果。
-"""
 from __future__ import annotations
 
 import json
@@ -53,8 +27,6 @@ from .xaml import (HOME_EVENT_DATA, HOME_EVENT_TYPE, ICON_AI, ICON_BACK, ICON_HO
 
 JOBS_FILE = VAR_DIR / "ai_jobs.json"
 
-# 后台「最近分析」的记录文件。任务记录（ai_jobs.json）是给访客看结果用的，
-# 只留最后一次；这个按条追加，站长能看到"谁、什么时候、用什么密钥、分析了啥"。
 AI_LOG_FILE = VAR_DIR / "ai_log.json"
 AI_LOG_MAX = 300                 # 只留最近这么多条，文件别无限长
 AI_LOG_INPUT_CHARS = 4000        # 记录里输入原文留多少字
@@ -68,26 +40,18 @@ JOB_TTL = 7 * 86400
 
 
 def system_prompt(lang: str = DEFAULT_LANG) -> str:
-    """给 AI 的系统提示词，跟着访客的语言走——英文用户不该收到中文分析。
 
-    提示词是整段存在 i18n 表里的（``ai.system_prompt``），改文案改 zh-hans.json。
-    """
     return t("ai.system_prompt", lang)
 
 
-# ============ 输入解析 ============
 
 _URL_RE = re.compile(r"^https?://\S+$", re.I)
-# 只认 mclo.gs 的网页地址。必须锚定主机名，否则会把自家的
-# https://api.mclo.gs/1/raw/<id> 匹配成「mclo.gs/1」而抓错东西。
 _MCLOGS_RE = re.compile(r"^https?://(?:www\.)?mclo\.gs/([A-Za-z0-9]+)", re.I)
 
-# 直接粘文本时截断到这个长度：URL 太长 PCL 那边发不出去
 MAX_INLINE_CHARS = 1200
 
 
 def split_input(raw: str) -> tuple[str, str]:
-    """把输入框内容分成 ``("url" | "text" | "empty", 值)``。"""
     text = (raw or "").strip()
     if not text:
         return "empty", ""
@@ -97,21 +61,15 @@ def split_input(raw: str) -> tuple[str, str]:
 
 
 def normalize_log_url(url: str) -> str:
-    """mclo.gs 的网页地址换成它的 raw 接口；其它地址原样返回。"""
     match = _MCLOGS_RE.search(url or "")
     if match:
         return "https://api.mclo.gs/1/raw/" + match.group(1)
     return url
 
 
-# ============ 配额（SQLite，按北京时间跨天）============
 
 class Quota:
-    """每个 IP 在**当前这一格**（一小时或一天）用了几次站长密钥。
 
-    额度桶就是"现在落在一小时里的哪一格 / 哪一天"，按北京时间算。窗口换掉
-    （hour ↔ day）只是换个拼桶字符串的格式，表结构不用动。
-    """
 
     def __init__(self, path: Path | None = None):
         self.path = path or STATS_DB
@@ -122,8 +80,6 @@ class Quota:
         conn = sqlite3.connect(self.path, timeout=5)
         conn.execute("PRAGMA journal_mode=WAL")
         if not self._ready:
-            # 老结构把桶叫 day（只按天）。计数只有"当前这一格的余额"这点意义，
-            # 换成小时桶之后按天的旧计数没法用，直接丢表重来最省事。
             columns = {row[1] for row in conn.execute("PRAGMA table_info(ai_usage)")}
             if columns and "bucket" not in columns:
                 print("[AI] ai_usage 是旧的按天结构，重建为按额度窗口计数")
@@ -151,7 +107,6 @@ class Quota:
             return 0
 
     def consume(self, ip: str, bucket: str, limit: int) -> bool:
-        """够额度就 +1 返回 True，不够返回 False。整段在事务里，不会超发。"""
         try:
             with self._lock:
                 conn = self._connect()
@@ -177,7 +132,6 @@ class Quota:
             return False
 
     def rows_for(self, bucket: str) -> list[dict]:
-        """当前这一格的用量明细，给后台看。"""
         try:
             with self._lock:
                 conn = self._connect()
@@ -193,7 +147,6 @@ class Quota:
             return []
 
     def reset(self, bucket: str | None = None, ip: str | None = None) -> int:
-        """删用量记录：带 bucket 只删那一格的，带 ip 只删那个 IP 的。返回删掉的行数。"""
         clauses, params = [], []
         if bucket:
             clauses.append("bucket=?")
@@ -216,7 +169,6 @@ class Quota:
             return 0
 
     def refund(self, ip: str, bucket: str) -> None:
-        """调用失败时把次数还回去（见 config.ai_refund_on_failure）。"""
         try:
             with self._lock:
                 conn = self._connect()
@@ -234,7 +186,6 @@ QUOTA = Quota()
 
 
 def beijing_bucket(window: str, ts: float | None = None) -> str:
-    """当前额度桶的键。``window`` 取 hour / day，都按北京时间算。"""
     moment = datetime.fromtimestamp(ts if ts is not None else time.time(), BEIJING)
     return moment.strftime("%Y-%m-%dT%H") if window == "hour" else moment.strftime("%Y-%m-%d")
 
@@ -243,14 +194,12 @@ def beijing_day(ts: float | None = None) -> str:
     return beijing_bucket("day", ts)
 
 
-# ============ 用户自带密钥（只在内存）============
 
 _own_keys: dict[str, dict] = {}
 _own_lock = threading.RLock()
 
 
 def mask_key(key: str) -> str:
-    """日志里只留头尾，别把明文密钥写进日志文件。"""
     key = key or ""
     if len(key) <= 10:
         return "***"
@@ -258,7 +207,6 @@ def mask_key(key: str) -> str:
 
 
 def set_own_key(ip: str, raw: str) -> bool:
-    """第一步：存密钥（不动已有的地址/协议设置）。"""
     key = (raw or "").strip()
     if not key:
         return False
@@ -271,12 +219,6 @@ def set_own_key(ip: str, raw: str) -> bool:
 
 
 def set_own_base(ip: str, raw: str, protocol: str) -> bool:
-    """第二步：存请求地址与协议。
-
-    地址留空 = 用该协议的官方地址（OpenAI → api.openai.com，Anthropic → api.anthropic.com）。
-    模型在第三步单独填，这里只取地址——万一有人按老写法填了 ``地址|模型``，
-    也只认前半段，免得两个地方都能改模型。
-    """
     base = (raw or "").split("|")[0].strip()
     with _own_lock:
         conf = _own_keys.get(ip) or {}
@@ -292,7 +234,6 @@ def set_own_base(ip: str, raw: str, protocol: str) -> bool:
 
 
 def set_own_model(ip: str, raw: str) -> bool:
-    """第三步：存模型名。留空 = 用该协议的默认模型。"""
     model = (raw or "").strip()
     with _own_lock:
         conf = _own_keys.get(ip) or {}
@@ -306,7 +247,6 @@ def set_own_model(ip: str, raw: str) -> bool:
 
 
 def describe_own_key(ip: str, lang: str = DEFAULT_LANG) -> str:
-    """给日志与界面用的一句话，带上协议与真实地址（绝不带密钥）。"""
     conf = get_own_key(ip) or {}
     if not conf:
         return t("ai.own_unset", lang)
@@ -317,7 +257,6 @@ def describe_own_key(ip: str, lang: str = DEFAULT_LANG) -> str:
 
 
 def protocol_name(protocol: str, lang: str = DEFAULT_LANG) -> str:
-    """接口协议的名字（给界面看的；PROTOCOLS 里那份中文只在日志里用）。"""
     key = "ai.protocol." + str(protocol or "")
     from .i18n import has
     return t(key, lang) if has(key, lang) else PROTOCOLS.get(protocol, ("", ""))[0]
@@ -339,7 +278,6 @@ def clear_own_key(ip: str) -> bool:
 
 
 def reset_keys(ip: str | None = None) -> int:
-    """清掉私人密钥（内存里的）。不传 ip 就全清。"""
     with _own_lock:
         if ip:
             return 1 if _own_keys.pop(ip, None) is not None else 0
@@ -349,7 +287,6 @@ def reset_keys(ip: str | None = None) -> int:
 
 
 def reset_jobs(ip: str | None = None) -> int:
-    """清掉分析记录（含结果）。不传 ip 就全清。"""
     with _jobs_lock:
         if ip:
             removed = 1 if _jobs.pop(ip, None) is not None else 0
@@ -360,7 +297,6 @@ def reset_jobs(ip: str | None = None) -> int:
     return removed
 
 
-# ============ 任务状态 ============
 
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.RLock()
