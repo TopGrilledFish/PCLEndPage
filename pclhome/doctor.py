@@ -526,8 +526,9 @@ def check_templates(report: Report, config: Config) -> None:
             report.good(name + " 已生成（" + str(path.stat().st_size) + " 字节）")
 
     # 模板里用到的 {{TOKEN}} 必须都能被填上（不允许留 {{...}} 裸奔到 PCL 那边）
+    # 壁纸地址已改成请求期占位符 __WALLPAPER_URL__（render.wallpaper_url），不在这里。
     provided = {
-        "Custom.xaml.tpl": {"BASE_URL", "WALLPAPER_URL", "SITE_ITEMS", "ACTION_BUTTONS"},
+        "Custom.xaml.tpl": {"BASE_URL", "SITE_ITEMS", "ACTION_BUTTONS"},
     }
     for name, tokens_ok in provided.items():
         path = TEMPLATES_DIR / name
@@ -763,6 +764,23 @@ def check_rendered(report: Report, config: Config) -> None:
             report.bad(label + " 里找不到 StackPanel，内容可能异常")
         else:
             report.good(label + " 结构正常")
+
+    # 横幅壁纸：以前是构建期烘死的外链（必应 th 地址），国内加载失败就是一条白带子。
+    # 现在固定检查"页面里的壁纸来源"是不是我们预期的那一种。
+    if config.wallpaper_url:
+        wallpaper_ok = config.wallpaper_url in homepage or "wallpaper" in homepage
+        wallpaper_where = "配置里指定的外链"
+    elif config.enable_wallpaper and config.wallpaper_path.exists():
+        wallpaper_ok = "/images/wallpaper.jpg?v=" in homepage
+        wallpaper_where = "本地缓存的必应壁纸（/images/wallpaper.jpg）"
+    else:
+        wallpaper_ok = "pack://application" in homepage
+        wallpaper_where = "PCL 内置图"
+    if wallpaper_ok:
+        report.good("横幅壁纸用的是" + wallpaper_where)
+    else:
+        report.bad("横幅壁纸地址不对，页面里找不到预期的壁纸来源"
+                   + ("（先跑一次 generate 下载壁纸）" if config.enable_wallpaper else ""))
 
     # XML 良构性：标签不闭合、属性没转义都会在这里暴露
     for label, body, wrap in (("主页", homepage, True),):

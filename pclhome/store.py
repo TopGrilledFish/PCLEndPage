@@ -134,17 +134,23 @@ class Stats:
                      "id INTEGER PRIMARY KEY AUTOINCREMENT, "
                      "ip TEXT NOT NULL, country TEXT, ts INTEGER NOT NULL)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_visits_ts ON visits(ts)")
+        # city 是后加的列（老库得补），存的是天气定位顺手拿到的城市名：
+        # 光有 CF-IPCountry 只能到国家一级，后台看着"中国 3867 次"没法用。
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(visits)")}
+        if "city" not in columns:
+            conn.execute("ALTER TABLE visits ADD COLUMN city TEXT")
+            conn.commit()
         self._ready = True
 
-    def record(self, ip: str, country: str = "XX") -> None:
+    def record(self, ip: str, country: str = "XX", city: str = "") -> None:
         """记一次访问；写失败只打日志，绝不影响主页返回。"""
         try:
             with self._lock:
                 conn = self._connect()
                 try:
                     self._ensure(conn)
-                    conn.execute("INSERT INTO visits (ip, country, ts) VALUES (?, ?, ?)",
-                                 (ip, country, int(time.time() * 1000)))
+                    conn.execute("INSERT INTO visits (ip, country, city, ts) VALUES (?, ?, ?, ?)",
+                                 (ip, country, str(city or ""), int(time.time() * 1000)))
                     conn.commit()
 
                     now = time.time()
@@ -183,12 +189,18 @@ class Stats:
                     countries = cur.execute(
                         "SELECT COALESCE(country,'XX') c, COUNT(*) n FROM visits WHERE ts >= ? "
                         "GROUP BY c ORDER BY n DESC LIMIT 12", (cutoff,)).fetchall()
+                    # 地区明细：国家 + 城市。city 只有天气定位成功时才有值，
+                    # 空串就只显示国家，不会出现"中国 · "这种尾巴。
+                    regions = cur.execute(
+                        "SELECT COALESCE(country,'XX') c, TRIM(COALESCE(city,'')) ct, COUNT(*) n "
+                        "FROM visits WHERE ts >= ? GROUP BY c, ct ORDER BY n DESC LIMIT 15",
+                        (cutoff,)).fetchall()
                     hosts = cur.execute(
                         "SELECT ip, COUNT(*) n, MAX(ts) last FROM visits WHERE ts >= ? "
                         "GROUP BY ip ORDER BY n DESC LIMIT 12", (cutoff,)).fetchall()
                     recent = cur.execute(
-                        "SELECT ip, COALESCE(country,'XX'), ts FROM visits WHERE ts >= ? "
-                        "ORDER BY ts DESC LIMIT 20", (cutoff,)).fetchall()
+                        "SELECT ip, COALESCE(country,'XX'), TRIM(COALESCE(city,'')), ts "
+                        "FROM visits WHERE ts >= ? ORDER BY ts DESC LIMIT 20", (cutoff,)).fetchall()
                     # 按北京时间切天：ts 是 UTC 毫秒，加 8 小时再整除一天的毫秒数
                     trend_rows = cur.execute(
                         "SELECT ((ts + 28800000) / 86400000) d, COUNT(*) n FROM visits "
@@ -212,7 +224,8 @@ class Stats:
         return {
             "total": total, "today": today, "unique": unique,
             "countries": [{"code": c, "count": n} for c, n in countries],
+            "regions": [{"code": c, "city": ct, "count": n} for c, ct, n in regions],
             "hosts": [{"ip": ip, "count": n, "last": last} for ip, n, last in hosts],
-            "recent": [{"ip": ip, "code": c, "ts": ts} for ip, c, ts in recent],
+            "recent": [{"ip": ip, "code": c, "city": ct, "ts": ts} for ip, c, ct, ts in recent],
             "trend": trend,
         }

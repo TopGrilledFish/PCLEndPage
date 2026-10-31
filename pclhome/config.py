@@ -217,6 +217,15 @@ class Config:
         """构建期写死优先；没配就用请求方推导出的 origin。"""
         return (self.base_url or origin).rstrip("/")
 
+    @property
+    def wallpaper_path(self) -> Path:
+        """必应壁纸的本地缓存文件（``var/cache/wallpaper.jpg``）。
+
+        页面里放的是 ``/images/wallpaper.jpg``，由本服务自己发；壁纸每天换，
+        但地址不变，所以外面再加一层日期参数破 PCL 的图片缓存。
+        """
+        return CACHE_DIR / "wallpaper.jpg"
+
     def uapi_key_list(self) -> list[str]:
         """uapi_key + uapi_keys 合成一张去重表，保持配置里的先后顺序。
 

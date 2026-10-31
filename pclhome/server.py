@@ -29,7 +29,7 @@ from pathlib import Path
 from . import admin as admin_module
 from . import log
 from .config import ROOT, STATIC_DIR, TEMPLATES_DIR, Config, load_config
-from .generate import generate
+from .generate import generate, refresh_wallpaper
 from .i18n import t
 from .render import build_home_data, render_homepage
 from .store import Stats, Store
@@ -54,6 +54,18 @@ def _updating_xaml(ip: str, eta: str = "", reason: str = "") -> str:
     return build_fallback_xaml(t("fallback.updating_title", lang),
                                t("fallback.updating_msg", lang),
                                eta, reason, lang=lang, maintenance=True)
+
+def _city_of(source: str) -> str:
+    """把天气卡片的定位串当城市名用：正常是「泉州市」「北京城区 · 西城区」。
+
+    定位失败时那里是一句提示（带括号、或者很长），那种内容不要写进访问统计，
+    否则后台「最近访客」里会出现一整句话。
+    """
+    text = str(source or "").strip()
+    if not text or len(text) > 24 or "（" in text or "(" in text:
+        return ""
+    return text
+
 
 # 需要"仅 PCL 客户端与真实浏览器可访问"的动态数据端点
 DATA_ENDPOINTS = {"/Custom.xaml", "/"}
@@ -139,7 +151,37 @@ class HomepageService:
         self.weather = WeatherService(self.config)
         self._templates: dict[str, tuple[float, str]] = {}
         self._lock = threading.Lock()
+        self._wallpaper_thread: threading.Thread | None = None
         self._ensure_outputs()
+        self._start_wallpaper_loop()
+
+    # ---- 壁纸：后台线程每天换一张 ----
+
+    def _start_wallpaper_loop(self) -> None:
+        """起一个后台线程盯着必应每日壁纸。
+
+        为什么不放在请求里做：抓一次壁纸要跟必应 API 来回一趟（国内还可能超时），
+        挂在请求上等于让某个倒霉访客替所有人等。线程每 30 分钟看一次缓存新不新，
+        按 ``wallpaper_cache_hours``（默认 6 小时）决定要不要真的下载。
+        """
+        if not self.config.enable_wallpaper:
+            return
+        if self._wallpaper_thread and self._wallpaper_thread.is_alive():
+            return
+
+        def loop() -> None:
+            # 启动后先等一会儿，别跟启动横幅、图标镜像抢网络
+            time.sleep(15)
+            while True:
+                try:
+                    refresh_wallpaper(self.config)
+                except Exception:                     # 线程不能死
+                    log.warn("[Wallpaper] 刷新线程异常：\n" + traceback.format_exc())
+                time.sleep(1800)
+
+        self._wallpaper_thread = threading.Thread(target=loop, name="wallpaper", daemon=True)
+        self._wallpaper_thread.start()
+        log.debug("[Wallpaper] 后台刷新线程已启动（每 30 分钟检查一次）")
 
     # ---- 模板读取（带 mtime 缓存，改模板不用重启）----
 
@@ -378,14 +420,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._note = ("已封禁的 IP 请求主页" if service.store.is_blocked(ip) else "维护模式拦截")
                 self._send(Response.xaml(blocked))
                 return
-            service.stats.record(ip, self.headers.get("CF-IPCountry") or "XX")
+            country = self.headers.get("CF-IPCountry") or "XX"
             try:
                 body, data = service.homepage(ip, origin)
             except Exception:
                 log.error("[Server] 主页组装失败：\n" + traceback.format_exc())
                 self._note = "组装失败，已返回兜底页"
+                service.stats.record(ip, country)
                 self._send(Response.xaml(_updating_xaml(ip)))
                 return
+            # 城市直接蹭天气那次 IP 定位的结果——天气卡片本来就知道访客在哪个市，
+            # 再单独查一遍 IP 库纯属浪费（用户也明确不让引入新接口）。
+            service.stats.record(ip, country, _city_of(data.weather_source))
             self._note = data.summary()
             log.debug("[Server] UA=" + (ua[:80] or "（空）") + " origin=" + origin)
             self._send(Response.xaml(body, vary_ip=True))

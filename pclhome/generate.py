@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .log import out, warn
-from .config import CACHE_DIR, PACK_FALLBACK_IMAGE, ROOT, TEMPLATES_DIR, Config, load_config
+from .config import PACK_FALLBACK_IMAGE, ROOT, TEMPLATES_DIR, Config, load_config
 from .net import download, fetch_json
 from .sites import build_site_items, mirror_icons
 from .xaml import build_action_buttons, render_template
@@ -27,7 +27,7 @@ def load_template(name: str) -> str:
 # ============ 壁纸 ============
 
 def fetch_bing_wallpaper(config: Config) -> str:
-    """必应每日壁纸；取不到就用 PCL 内置图片兜底。"""
+    """必应每日壁纸的原始地址；取不到就用 PCL 内置图片兜底。"""
     if config.wallpaper_url:
         out("[Wallpaper] 使用配置指定的壁纸")
         return config.wallpaper_url
@@ -47,33 +47,51 @@ def fetch_bing_wallpaper(config: Config) -> str:
     return PACK_FALLBACK_IMAGE
 
 
-def cache_wallpaper_locally(config: Config, url: str) -> str:
-    """把壁纸缓存到本地并返回本地地址；失败则原样返回外链。
+def refresh_wallpaper(config: Config, force: bool = False) -> bool:
+    """把必应今日壁纸抓到本地缓存，返回是否真的更新了文件。
 
-    PCL 拉取网络图片时有 7 天缓存，但外链一旦失效就会白屏。本机部署时
-    把图存一份，页面就再也不依赖必应了。
+    为什么非要存本地：以前页面里放的是 ``https://www.bing.com/th?id=…`` 外链，
+    PCL 那边一旦加载失败就是一条白带子，而且必应的 th 地址在国内时通时不通。
+    存成 ``var/cache/wallpaper.jpg`` 之后由本服务自己发，只依赖必应 API 的
+    JSON（几百字节），图片本身走我们的 nginx。
+
+    什么时候抓：调用方自己控制频率（见 ``server.HomepageService`` 的后台线程），
+    这里只按 ``wallpaper_cache_hours`` 判断缓存还新不新。
     """
-    if not url.startswith("http"):
-        return url
-    target = CACHE_DIR / "wallpaper.jpg"
     import time
-    if target.exists() and (time.time() - target.stat().st_mtime) < config.wallpaper_cache_hours * 3600:
-        out("[Wallpaper] 本地缓存仍新鲜，跳过下载")
-        return config.resolved_base_url() + "/images/wallpaper.jpg" if config.base_url else url
-    if download(url, target, timeout=20):
-        out("[Wallpaper] 已缓存到 " + str(target.relative_to(ROOT)))
-        if config.base_url:
-            return config.resolved_base_url() + "/images/wallpaper.jpg"
-    return url
+
+    if not config.enable_wallpaper and not config.wallpaper_url:
+        return False
+    target = config.wallpaper_path
+    try:
+        if not force and target.exists():
+            age = time.time() - target.stat().st_mtime
+            if age < max(1, int(config.wallpaper_cache_hours)) * 3600:
+                return False
+        url = fetch_bing_wallpaper(config)
+        if not url.startswith("http"):
+            # 必应挂了 / 用的是 pack 兜底图：保留旧图，别把能看的壁纸擦成空
+            return False
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not download(url, target, timeout=25):
+            warn("[Wallpaper] 壁纸下载失败，继续用旧图")
+            return False
+        out("[Wallpaper] 已更新本地壁纸：" + str(target.relative_to(ROOT))
+            + "（" + str(target.stat().st_size) + " 字节）")
+        return True
+    except Exception as exc:
+        warn("[Wallpaper] 刷新壁纸失败：" + str(exc))
+        return False
 
 
 # ============ 输出 ============
 
 def build_custom_xaml(config: Config, offline: bool = False) -> str:
-    wallpaper = PACK_FALLBACK_IMAGE if offline else fetch_bing_wallpaper(config)
+    # 壁纸不在构建期写进产物：页面里放的是 ``__WALLPAPER_URL__``，请求时按
+    # "本地缓存 + 当天日期"现算（见 render.wallpaper_url），这样壁纸每天换、
+    # 又不用为了换一张图重新生成整份 Custom.xaml。
     return render_template(load_template("Custom.xaml.tpl"), {
         "BASE_URL": config.resolved_base_url() or "__BASE_URL__",
-        "WALLPAPER_URL": wallpaper,
         "SITE_ITEMS": build_site_items(config),
         "ACTION_BUTTONS": build_action_buttons(config),
     })
@@ -90,6 +108,11 @@ def generate(config: Config, offline: bool = False, out_dir: Path | None = None)
     if failed:
         out("[Icons] 以下站点图标没能镜像到本地，将退回远程地址：" + "、".join(failed))
         out("[Icons] 想要稳定显示：把对应的 <slug>.png 放进 static/images/icons/（见该目录 README）")
+
+    if not offline:
+        refresh_wallpaper(config)
+    else:
+        out("[Wallpaper] 离线模式：跳过壁纸下载，页面会显示 PCL 内置图")
 
     outputs = {
         "Custom.xaml": build_custom_xaml(config, offline=offline),

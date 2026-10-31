@@ -34,7 +34,7 @@
             <!-- __FESTIVAL_BANNER__ -->
             <Border CornerRadius="12" Height="280" Margin="0,0,0,16" ClipToBounds="True">
                 <Grid>
-                    <local:MyImage Source="{{WALLPAPER_URL|url}}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Stretch="UniformToFill" />
+                    <local:MyImage Source="__WALLPAPER_URL__" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Stretch="UniformToFill" />
                     <Border>
                         <Border.Background>
                             <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">

@@ -570,6 +570,13 @@ const COUNTRY_NAMES = { CN: "中国", US: "美国", HK: "香港", TW: "台湾", 
   NL: "荷兰", IN: "印度", BR: "巴西", VN: "越南", MY: "马来西亚", TH: "泰国", XX: "未知" };
 function countryName(code) { return COUNTRY_NAMES[code] || code || "未知"; }
 
+// 地区标签：有城市就"中国 · 泉州市"，没城市（定位失败或境外只到国家）就只写国家
+function regionName(code, city) {
+  const name = countryName(code);
+  const c = String(city || "").trim();
+  return c ? name + " · " + c : name;
+}
+
 function fmtTime(ms) {
   if (!ms) return "—";
   const d = new Date(Number(ms));
@@ -622,7 +629,9 @@ RENDER.overview = function () {
       '<span class="d">' + esc(item.date.slice(5)) + "</span></div>";
   }).join("");
 
-  const countries = (stats.countries || []).map((c) => ({ name: countryName(c.code), count: c.count }));
+  // 地区用 regions（国家 + 城市）；老数据没有 city 就是纯国家名
+  const regions = (stats.regions || stats.countries || [])
+    .map((c) => ({ name: regionName(c.code, c.city), count: c.count }));
   const hosts = (stats.hosts || []).slice(0, 8);
   const recent = (stats.recent || []).slice(0, 8);
 
@@ -638,13 +647,13 @@ RENDER.overview = function () {
       card("访问走势", "柱高按 7 天内峰值缩放",
         trend.length ? '<div class="bars">' + bars + "</div>" : '<div class="empty">还没有访问记录</div>') +
       card("地区分布", "",
-        rankRows(countries, stats.total, countries.length ? countries[0].count : 1)) +
+        rankRows(regions, stats.total, regions.length ? regions[0].count : 1)) +
     "</div>" +
 
     '<div class="two">' +
       card("最近访客", "点右边可以直接封禁",
         recent.length ? '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>IP</th><th>地区</th><th>时间</th><th></th></tr></thead><tbody>' +
-          recent.map((r) => '<tr><td class="mono">' + esc(r.ip) + "</td><td>" + esc(countryName(r.code)) +
+          recent.map((r) => '<tr><td class="mono">' + esc(r.ip) + "</td><td>" + esc(regionName(r.code, r.city)) +
             '</td><td class="num" title="' + esc(fmtTime(r.ts)) + '">' + esc(relTime(r.ts)) + "</td>" +
             '<td><button class="btn ghost sm" data-act="block-ip" data-ip="' + esc(r.ip) + '">封禁</button></td></tr>').join("") +
           "</tbody></table></div>" : '<div class="empty">还没有访问记录</div>') +
@@ -776,7 +785,7 @@ RENDER.visitors = function () {
         '<textarea id="allowBulk" class="code" rows="3" data-dirty="1" placeholder="也可以直接粘贴多行 IP，然后点上面的批量添加"></textarea>') +
       card("最近访客", "", recent.length
         ? '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>IP</th><th>地区</th><th>时间</th><th></th></tr></thead><tbody>' +
-            recent.map((r) => '<tr><td class="mono">' + esc(r.ip) + "</td><td>" + esc(countryName(r.code)) +
+            recent.map((r) => '<tr><td class="mono">' + esc(r.ip) + "</td><td>" + esc(regionName(r.code, r.city)) +
               '</td><td class="num">' + esc(relTime(r.ts)) + "</td>" +
               '<td><button class="btn ghost sm" data-act="block-ip" data-ip="' + esc(r.ip) + '">封禁</button></td></tr>').join("") +
             "</tbody></table></div>"

@@ -5,8 +5,8 @@
 
 占位符两类：
 
-* ``{{TOKEN}}``  构建期替换（generate.py），如壁纸地址、功能网站列表
-* ``__TOKEN__``  请求期替换（本模块），如日期、天气、今日一言
+* ``{{TOKEN}}``  构建期替换（generate.py），如功能网站列表、动作按钮
+* ``__TOKEN__``  请求期替换（本模块），如日期、天气、今日一言、壁纸地址
 
 另外还有一种 ``<!-- __X__ -->`` 注释形态：模板里用它标记"这一整块由运行时插入"，
 例如节日横幅、天气卡片、公告。没有内容时连注释一起消失，不会留下多余空行。
@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import ai
-from .config import Config
+from .config import Config, PACK_FALLBACK_IMAGE
 from .i18n import DEFAULT_LANG
 from .lunar import build_countdown_xaml, build_festival_banner, get_festival
 from .lunartime import build_lunar_xaml, get_lunar_text
@@ -25,7 +25,8 @@ from .personalize import BeijingDate, format_quote, get_beijing_date, pick_greet
 from .saying import get_saying
 from .store import Store
 from .weather import WeatherService
-from .xaml import build_multi_banner, build_single_banner, escape_attr, indent_block
+from .xaml import (build_multi_banner, build_single_banner, escape_attr, escape_url_attr,
+                   indent_block)
 
 # 底标那枚「赞助主页」按钮指向的地址（爱发电）
 SPONSOR_URL = "https://afdian.com/a/llsgllsg"
@@ -62,6 +63,31 @@ class HomeData:
             bits.append("AI=" + self.ai_state)
         bits.append("公告=" + ("有" if self.banner else "无"))
         return " ".join(bits)
+
+
+def wallpaper_url(config: Config, base: str) -> str:
+    """横幅壁纸地址（请求期算，已转义）。
+
+    三种情况：
+
+    1. 配置里写了 ``wallpaper_url`` —— 用它的外链，一个字都不改；
+    2. 关了必应壁纸 —— 用 PCL 内置的那张 GrassPath 兜底；
+    3. 正常情况下 —— 走本服务自己缓存的 ``/images/wallpaper.jpg``，
+       后面挂当天日期。**那个日期是必需的**：PCL 按图片地址缓存（缓存期很长），
+       地址不变的话壁纸换了它也还显示旧图。
+    """
+    if config.wallpaper_url:
+        return escape_url_attr(config.wallpaper_url)
+    if not config.enable_wallpaper:
+        return escape_url_attr(PACK_FALLBACK_IMAGE)
+    try:
+        cached = config.wallpaper_path.exists()
+    except OSError:
+        cached = False
+    if base and cached:
+        stamp = get_beijing_date().date_str.replace("-", "")
+        return escape_url_attr(base.rstrip("/") + "/images/wallpaper.jpg?v=" + stamp)
+    return escape_url_attr(PACK_FALLBACK_IMAGE)
 
 
 def build_home_data(config: Config, store: Store, weather: WeatherService,
@@ -118,6 +144,8 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str,
 
     values = {
         "BASE_URL": base,
+        # 壁纸在请求期算：本地缓存的文件 + 当天日期破缓存（见 wallpaper_url）
+        "WALLPAPER_URL": wallpaper_url(config, base),
         "DATE_MONTH": t("date.month." + str(date.today.month), lang),
         "DATE_DAY": date.day_text,
         # 星期整串在这儿拼：简中是"星期一"，英文就是"Monday"，没有前缀
