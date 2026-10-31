@@ -29,6 +29,7 @@ PCL 的事件参数是这么拼出来的::
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -51,6 +52,13 @@ from .xaml import (HOME_EVENT_DATA, HOME_EVENT_TYPE, ICON_AI, ICON_BACK, ICON_HO
                    nav_row, note, url_attr)
 
 JOBS_FILE = VAR_DIR / "ai_jobs.json"
+
+# 后台「最近分析」的记录文件。任务记录（ai_jobs.json）是给访客看结果用的，
+# 只留最后一次；这个按条追加，站长能看到"谁、什么时候、用什么密钥、分析了啥"。
+AI_LOG_FILE = VAR_DIR / "ai_log.json"
+AI_LOG_MAX = 300                 # 只留最近这么多条，文件别无限长
+AI_LOG_INPUT_CHARS = 4000        # 记录里输入原文留多少字
+AI_LOG_TEXT_CHARS = 6000         # 结果/错误留多少字
 
 # 额度按这个时区跨天重置
 BEIJING = timezone(timedelta(hours=8))
@@ -409,6 +417,93 @@ def get_job(ip: str) -> dict | None:
 _load_jobs()
 
 
+# ============ 分析记录（后台「最近分析」） ============
+
+_ai_log_lock = threading.Lock()
+
+
+def _load_ai_log() -> list:
+    if not AI_LOG_FILE.exists():
+        return []
+    try:
+        data = json.loads(AI_LOG_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception as exc:
+        warn("[AI] 分析记录读取失败：" + str(exc))
+        return []
+
+
+def _save_ai_log(entries: list) -> None:
+    try:
+        tmp = AI_LOG_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+        # 里面可能有访客自带的明文密钥，只给 root 读，别让同机的其他账号顺手看到
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        tmp.replace(AI_LOG_FILE)
+    except Exception as exc:
+        warn("[AI] 分析记录写入失败：" + str(exc))
+
+
+def record_analysis(ip: str, who: str, key: str, model: str, protocol: str,
+                    kind: str, input_text: str, ok: bool, output: str,
+                    elapsed_ms: int, tokens: dict | None = None,
+                    base: str = "") -> None:
+    """记一条分析：谁、用什么密钥、往哪个地址请求、分析的是什么、成没成、花了多久。
+
+    访客自带的密钥**原样存**——站长要能看到访客填的是哪把（列表里打码，点开才
+    显示完整值）。站长自己的内置密钥不落盘，只留打码形式：它已经在 config.json
+    里了，没必要在另一个文件里再抄一份。
+    这个文件在 ``var/`` 里，跟 store.json 一样属于服务器私有数据。
+    """
+    is_own = who == "own"
+    entry = {
+        "t": int(time.time()),
+        "time": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S"),
+        "ip": ip,
+        "who": "own" if is_own else "builtin",
+        "key": str(key or "") if is_own else "",
+        "key_masked": mask_key(str(key or "")),
+        "model": str(model or ""),
+        "protocol": str(protocol or "openai"),
+        "base": str(base or config_default_base(protocol or "openai")).rstrip("/"),
+        "kind": kind,
+        "input": str(input_text or "")[:AI_LOG_INPUT_CHARS],
+        "ok": bool(ok),
+        "output": str(output or "")[:AI_LOG_TEXT_CHARS],
+        "ms": int(elapsed_ms or 0),
+        "tokens": {
+            "in": int((tokens or {}).get("in") or 0),
+            "out": int((tokens or {}).get("out") or 0),
+        },
+    }
+    with _ai_log_lock:
+        entries = _load_ai_log()
+        entries.append(entry)
+        if len(entries) > AI_LOG_MAX:
+            entries = entries[-AI_LOG_MAX:]
+        _save_ai_log(entries)
+    debug("[AI] 记录一条分析：" + ip + " " + entry["who"] + " " + str(entry["ms"]) + "ms")
+
+
+def recent_analyses(limit: int = 50) -> list:
+    """最近的分析记录，最新的在前。"""
+    with _ai_log_lock:
+        entries = _load_ai_log()
+    limit = max(1, min(int(limit or 50), AI_LOG_MAX))
+    return list(reversed(entries))[:limit]
+
+
+def clear_analyses() -> int:
+    """清空分析记录，返回删掉的条数。"""
+    with _ai_log_lock:
+        entries = _load_ai_log()
+        _save_ai_log([])
+    return len(entries)
+
+
 # ============ 抓日志 ============
 
 def fetch_log(config: Config, url: str, lang: str = DEFAULT_LANG) -> tuple[bool, str]:
@@ -528,15 +623,16 @@ def _parse_anthropic(config: Config, data: dict, lang: str = DEFAULT_LANG) -> tu
 
 
 def analyze(config: Config, log_text: str, key_conf: dict,
-            lang: str = DEFAULT_LANG) -> tuple[bool, str]:
-    """调 AI。返回 ``(是否成功, 结果或错误说明)``。
+            lang: str = DEFAULT_LANG) -> tuple[bool, str, dict]:
+    """调 AI。返回 ``(是否成功, 结果或错误说明, 用量)``。
 
     ``key_conf`` 里可以带 ``protocol``（openai / anthropic）、``base``、``model``；
     缺哪项就用 config 里的默认值。``lang`` 决定系统提示词——AI 要用访客那种语言回答。
+    第三个返回值是 ``{"in": 输入 token, "out": 输出 token, "ms": 耗时}``，给后台记录用。
     """
     key = str(key_conf.get("key") or config.ai_api_key)
     if not key:
-        return False, t("ai.err.no_key", lang)
+        return False, t("ai.err.no_key", lang), {}
     protocol = str(key_conf.get("protocol") or "openai").lower()
     if protocol not in PROTOCOLS:
         protocol = "openai"
@@ -563,19 +659,23 @@ def analyze(config: Config, log_text: str, key_conf: dict,
     started = time.perf_counter()
     data, error = _post(url, payload, headers, config, lang)
     if error:
-        return error
+        return False, error, {}
     elapsed = round((time.perf_counter() - started) * 1000)
     ok, result = parse(config, data, lang)
     if not ok:
-        return False, result
+        return False, result, {}
 
     usage = data.get("usage") or {}
+    tokens = {
+        "in": usage.get("prompt_tokens") or usage.get("input_tokens") or 0,
+        "out": usage.get("completion_tokens") or usage.get("output_tokens") or 0,
+    }
     debug("[AI] " + protocol + " 完成（" + str(elapsed) + "ms，输入 "
-          + str(usage.get("prompt_tokens") or usage.get("input_tokens") or "?")
+          + str(tokens["in"] or "?")
           + " tokens，输出 "
-          + str(usage.get("completion_tokens") or usage.get("output_tokens") or "?")
+          + str(tokens["out"] or "?")
           + " tokens）")
-    return True, result
+    return True, result, {"in": tokens["in"], "out": tokens["out"], "ms": elapsed}
 
 
 # ============ 提交任务 ============
@@ -638,28 +738,56 @@ def submit(config: Config, ip: str, raw_input: str, use_own: bool,
 
 def _worker(config: Config, ip: str, kind: str, value: str,
             key_conf: dict, use_own: bool, lang: str = DEFAULT_LANG) -> None:
-    """后台干活：抓日志 → 调 AI → 写结果。异常都变成给用户看的说明。"""
+    """后台干活：抓日志 → 调 AI → 写结果。异常都变成给用户看的说明。
+
+    每一条都往 ``var/ai_log.json`` 记一份（成功、失败、抓日志失败都记），
+    后台「最近分析」看的就是它。
+    """
+    who = "own" if use_own else "builtin"
+    key = str(key_conf.get("key") or config.ai_api_key)
+    model = str(key_conf.get("model") or config.ai_model)
+    protocol = str(key_conf.get("protocol") or "openai").lower()
+    # 这次请求实际发去哪个地址：自带密钥用他填的（没填就是该协议的官方地址），
+    # 公用密钥用 config.ai_api_base。后台要能看到这个，不然访客说「我填的是
+    # 某某中转站」时对不上账。
+    base = str(key_conf.get("base") or config.ai_api_base or "").rstrip("/")
+
+    def note_record(input_text: str, ok: bool, output: str, ms: int = 0,
+                    tokens: dict | None = None) -> None:
+        try:
+            record_analysis(ip, who, key, model, protocol, kind, input_text,
+                            ok, output, ms, tokens, base)
+        except Exception as exc:                       # 记录失败不能影响分析
+            warn("[AI] 写分析记录失败：" + str(exc))
+
+    started = time.time()
     try:
         if kind == "url":
             ok, log_text = fetch_log(config, value, lang)
             if not ok:
+                note_record(value, False, log_text)
                 _fail(config, ip, use_own, log_text, lang)
                 return
         else:
             log_text = value
 
+        input_text = value if kind == "url" else log_text
         log_text = trim_log(log_text, config.ai_max_log_chars, lang)
         debug("[AI] " + ip + " 日志 " + str(len(log_text)) + " 字，开始调 " + config.ai_model)
 
-        ok, result = analyze(config, log_text, key_conf, lang)
+        ok, result, usage = analyze(config, log_text, key_conf, lang)
+        ms = int((time.time() - started) * 1000)
         if not ok:
+            note_record(input_text, False, result, ms)
             _fail(config, ip, use_own, result, lang)
             return
 
+        note_record(input_text, True, result, usage.get("ms") or ms, usage)
         _set_job(ip, state="done", text=result, error="")
         out("[AI] " + ip + " 分析完成，结果 " + str(len(result)) + " 字")
     except Exception as exc:
         error("[AI] 任务异常：" + repr(exc))
+        note_record(value, False, repr(exc))
         _fail(config, ip, use_own, t("ai.err.crashed", lang, err=str(exc)), lang)
 
 

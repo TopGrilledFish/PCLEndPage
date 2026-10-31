@@ -411,25 +411,27 @@ def check_config(report: Report, config: Config) -> None:
         report.warning("BASE_URL 未配置，将按请求 Host 推导（反向代理后建议固定）")
 
     # uapis.cn 的密钥（每日一言/农历/天气都走这家）。**别把密钥本身打出来**，
-    # 只报配没配、以及密钥坏了会不会自动退回匿名。
+    # 只报配了几把、以及密钥坏了会不会自动换下一把 / 退回匿名。
     from . import net as net_module
     from . import uapi
     uapi.reset()
-    if not config.uapi_key:
+    key_list = uapi.keys(config)
+    if not key_list:
         report.warning("uapis.cn 密钥未配置，走匿名额度（够用，只是配额大家共享）")
-    elif uapi.auth_headers(config).get("Authorization", "").endswith(config.uapi_key.strip()):
-        report.good("uapis.cn 密钥已配好，请求会带上 Authorization 头")
+    elif uapi.auth_headers(config).get("Authorization", "").endswith(key_list[0].strip()):
+        report.good("uapis.cn 密钥已配好 " + str(len(key_list)) + " 把，请求会带上第一把")
     else:
         report.bad("uapis.cn 密钥配了但认证头没生成，接口会退回匿名额度")
 
-    # 密钥被拒（401 无效 / 402 没积分）时，得**当场匿名重试**，不然配了把坏密钥
-    # 反而比不配更糟——免费端点带着无效密钥也会被 401 拒掉。
+    # 密钥被拒（401 无效 / 402 没积分）时，得**逐把换下去、最后匿名重试**，不然配了
+    # 把坏密钥反而比不配更糟——免费端点带着无效密钥也会被 401 拒掉。
     seen = []
     real = net_module.fetch_json_ex
 
     def fake(url, timeout=6.0, retries=1, headers=None):
         seen.append(dict(headers or {}))
-        return (None, 402) if len(seen) == 1 else ({"ok": True}, 200)
+        # 带 Authorization 的一律判 402（模拟"积分用完"），匿名那次必须成功
+        return (None, 402) if "Authorization" in seen[-1] else ({"ok": True}, 200)
 
     net_module.fetch_json_ex = fake
     uapi.reset()
@@ -439,14 +441,18 @@ def check_config(report: Report, config: Config) -> None:
     finally:
         net_module.fetch_json_ex = real
         uapi.reset()
-    if len(seen) != 2 or "Authorization" not in seen[0] or "Authorization" in seen[1]:
+    auth_calls = sum(1 for item in seen if "Authorization" in item)
+    if not seen or "Authorization" in seen[-1]:
         report.bad("密钥被拒时没改成匿名重试（发了 " + str(len(seen)) + " 次请求）")
+    elif key_list and auth_calls != len(key_list):
+        report.bad("密钥被拒后没有逐把换下去（配了 " + str(len(key_list))
+                   + " 把，只试了 " + str(auth_calls) + " 把）")
     elif data != {"ok": True} or status != 200:
         report.bad("匿名重试的结果没被用上：" + repr((data, status)))
-    elif config.uapi_key and cooling <= 0:
+    elif key_list and cooling <= 0:
         report.bad("密钥被拒后没进冷却期，下个请求还会带着它挨拒")
     else:
-        report.good("密钥被拒（401/402）会自动改用匿名额度重试，并冷却 "
+        report.good("密钥被拒（401/402）会逐把换下去、最后用匿名额度重试，并冷却 "
                     + str(round(uapi.COOLDOWN_SECONDS / 60)) + " 分钟")
 
     report.good("来源守卫：" + ("开启" if config.guard_clients else "关闭")

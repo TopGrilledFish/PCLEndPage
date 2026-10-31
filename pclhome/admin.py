@@ -265,7 +265,8 @@ def _service_info(service) -> dict:
         "secrets": {
             "admin_token": _mask(config.admin_token, 3),
             "ai_api_key": _mask(config.ai_api_key),
-            "uapi_key": _mask(config.uapi_key),
+            # 多把 uapi 密钥：列出每把的打码形式，看看配了几把、哪把在用
+            "uapi_keys": "、".join(_mask(key) for key in _uapi_key_list(config)) or "",
         },
         "ai": {
             "enabled": config.enable_ai,
@@ -288,6 +289,18 @@ def _service_info(service) -> dict:
         "sessions": _session_count(),
         "store_keys": sorted(service.store.all().keys()),
     }
+
+
+def _uapi_key_list(config) -> list[str]:
+    """配置里的 uapi 密钥表（旧单值 / 新列表都认）。"""
+    getter = getattr(config, "uapi_key_list", None)
+    if callable(getter):
+        try:
+            return list(getter())
+        except Exception:
+            pass
+    key = str(getattr(config, "uapi_key", "") or "").strip()
+    return [key] if key else []
 
 
 def _pcl_version() -> str:
@@ -552,6 +565,22 @@ def handle(service, handler, path: str, query: str):
         return _json({"ok": True, "scope": scope,
                       "result": ai.reset(scope, str(body.get("ip") or ""),
                                          config.ai_window())})
+
+    if action == "ai_log":
+        """最近的分析记录：谁、什么时候、用哪把密钥、分析了什么、成没成。"""
+        params = urllib.parse.parse_qs(query or "")
+        try:
+            limit = int((params.get("limit") or ["50"])[0])
+        except ValueError:
+            limit = 50
+        entries = ai.recent_analyses(limit)
+        return _json({"ok": True, "entries": entries, "count": len(entries),
+                      "file": str(ai.AI_LOG_FILE), "max": ai.AI_LOG_MAX})
+
+    if action == "ai_log_clear":
+        removed = ai.clear_analyses()
+        info("[Admin] 清空 AI 分析记录 " + str(removed) + " 条（" + client_hint(handler) + "）")
+        return _json({"ok": True, "removed": removed})
 
     if action == "regenerate":
         try:

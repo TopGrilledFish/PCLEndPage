@@ -211,6 +211,15 @@ ADMIN_PAGE = r"""<!DOCTYPE html>
   pre.log::-webkit-scrollbar{width:10px;height:10px}
   pre.log::-webkit-scrollbar-thumb{background:#2a3444;border-radius:6px}
 
+  /* AI 分析记录 */
+  .tbl tr.clickable{cursor:pointer}
+  .tbl td.wrap{white-space:normal;min-width:200px;max-width:360px;line-height:1.5}
+  .ai-log .tbl th, .ai-log .tbl td{padding:9px 9px}
+  .ai-log .tbl td.wrap{min-width:150px;max-width:270px}
+  .ai-detail{padding:2px 0 8px}
+  .ai-detail .kv{margin:6px 0 12px}
+  .ai-detail .kv .i b{white-space:normal;word-break:break-all}
+
   /* 提示条 */
   .note{display:flex;gap:9px;padding:10px 13px;border-radius:var(--r2);font-size:12.5px;line-height:1.55;
     background:var(--soft);color:var(--ink2);border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
@@ -338,6 +347,7 @@ const SECTIONS = [
 
 const S = {
   store: {}, config: {}, info: {}, ai: {}, stats: {}, report: null,
+  aiLog: null, aiLogOpen: -1,
   section: "overview", dirty: false, loggedIn: false, busy: 0,
 };
 
@@ -587,6 +597,7 @@ function renderSection(id) {
   const render = RENDER[sec.id];
   $("#main").innerHTML = pageHead(sec.name, esc(sec.desc)) + render();
   updateTodayInputs();
+  if (sec.id === "ai") loadAiLog();
 }
 
 const RENDER = {};
@@ -804,8 +815,82 @@ RENDER.ai = function () {
       '<button class="btn ghost" data-act="ai-reset" data-scope="jobs">清空分析记录</button>' +
       '<button class="btn ghost" data-act="ai-reset" data-scope="keys">清空私人密钥</button>' +
       '<button class="btn danger" data-act="ai-reset" data-scope="all">全部重置</button>' +
-    "</div>", { tight: false });
+    "</div>", { tight: false }) +
+    '<div id="aiLogBox">' + aiLogHtml() + "</div>";
 };
+
+/* ---------- AI：最近分析记录 ---------- */
+function shortBase(base) {
+  const s = String(base || "").replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  return s || "—";
+}
+
+function aiLogHtml() {
+  const L = S.aiLog;
+  if (!L) return card("最近分析", "读取中…", '<div class="empty">正在读取分析记录…</div>');
+  const items = L.entries || [];
+  if (!items.length) {
+    return card("最近分析", (L.max || 300) + " 条上限",
+      '<div class="empty">还没有人分析过</div>' +
+      '<div class="btn-row" style="justify-content:center"><button class="btn ghost" data-act="ai-log-refresh">刷新</button></div>');
+  }
+  const rows = items.map((e, i) => {
+    const own = e.who === "own";
+    const state = e.ok ? '<span class="tag allowed">成功</span>' : '<span class="tag blocked">失败</span>';
+    const flat = String(e.input || "").replace(/\s+/g, " ").trim();
+    const head = flat.slice(0, 90);
+    const open = S.aiLogOpen === i;
+    return '<tr class="clickable" data-act="ai-log-open" data-i="' + i + '">' +
+        '<td class="mono">' + esc(String(e.time || "").slice(5)) + "</td>" +
+        '<td class="mono">' + esc(e.ip || "") + "</td>" +
+        '<td><span class="tag ' + (own ? "allowed" : "plain") + '" style="height:22px;padding:0 9px">' +
+          (own ? "访客自带" : "站长密钥") + "</span></td>" +
+        '<td class="mono">' + esc(e.key_masked || "—") + "</td>" +
+        '<td class="mono">' + esc(e.model || "") + "</td>" +
+        '<td class="mono">' + esc(shortBase(e.base)) + "</td>" +
+        '<td class="wrap">' + esc(head) + (flat.length > 90 ? "…" : "") + "</td>" +
+        "<td>" + state + "</td>" +
+        '<td class="num">' + (e.ms ? (e.ms / 1000).toFixed(1) + "s" : "—") + "</td></tr>" +
+      (open ? '<tr><td colspan="9">' + aiLogDetail(e) + "</td></tr>" : "");
+  }).join("");
+  return card("最近分析", "共 " + items.length + " 条 · 点一行看分析了什么、用的哪把密钥",
+    '<div class="tbl-wrap ai-log"><table class="tbl"><thead><tr><th>时间</th><th>IP</th><th>密钥来源</th>' +
+      "<th>密钥</th><th>模型</th><th>接口地址</th><th>分析内容</th><th>状态</th><th>耗时</th></tr></thead><tbody>" +
+      rows + "</tbody></table></div>" +
+    '<div class="btn-row" style="margin-top:12px">' +
+      '<button class="btn ghost" data-act="ai-log-refresh">刷新</button>' +
+      '<button class="btn danger" data-act="ai-log-clear">清空记录</button>' +
+    "</div>", { tight: false });
+}
+
+function aiLogDetail(e) {
+  const token = e.tokens || {};
+  const keyText = e.key || (e.who === "builtin" ? "（站长内置密钥，存在 config.json，记录里不留）" : "（空）");
+  return '<div class="ai-detail">' +
+    '<div class="kv">' +
+      '<div class="i"><span>完整密钥</span><b class="mono">' + esc(keyText) + "</b></div>" +
+      '<div class="i"><span>请求地址</span><b class="mono">' + esc(e.base || "（未记录）") + "</b></div>" +
+      '<div class="i"><span>协议 / 模型</span><b>' + esc(e.protocol || "openai") + " · " + esc(e.model || "") + "</b></div>" +
+      '<div class="i"><span>token</span><b>输入 ' + (token.in || 0) + " · 输出 " + (token.out || 0) + "</b></div>" +
+      '<div class="i"><span>提交方式</span><b>' + (e.kind === "url" ? "日志链接" : "直接粘贴") + "</b></div>" +
+    "</div>" +
+    '<div class="hint" style="margin:0 0 6px">分析了什么</div>' +
+    '<pre class="log">' + esc(e.input || "（空）") + "</pre>" +
+    '<div class="hint" style="margin:12px 0 6px">' + (e.ok ? "AI 结果" : "错误说明") + "</div>" +
+    '<pre class="log">' + esc(e.output || "（空）") + "</pre></div>";
+}
+
+async function loadAiLog() {
+  const box = $("#aiLogBox");
+  if (box) box.innerHTML = aiLogHtml();
+  try {
+    S.aiLog = await api("ai_log");
+  } catch (err) {
+    S.aiLog = { entries: [], error: String(err) };
+  }
+  const again = $("#aiLogBox");
+  if (again) again.innerHTML = aiLogHtml();
+}
 
 /* ---------- 系统 ---------- */
 RENDER.system = function () {
@@ -1093,6 +1178,26 @@ async function handleAction(act, el) {
       const res = await api("ai_reset", { scope: "all", ip });
       toast("已重置：" + JSON.stringify(res.result), "ok");
       await refresh();
+      return;
+    }
+    case "ai-log-refresh": {
+      await loadAiLog();
+      toast("已刷新", "ok");
+      return;
+    }
+    case "ai-log-open": {
+      const index = Number(el.dataset.i);
+      S.aiLogOpen = S.aiLogOpen === index ? -1 : index;
+      const box = $("#aiLogBox");
+      if (box) box.innerHTML = aiLogHtml();
+      return;
+    }
+    case "ai-log-clear": {
+      if (!(await confirmDialog({ title: "清空分析记录", body: "记录会全删，删掉之后找不回来。继续？", okText: "清空", danger: true }))) return;
+      const res = await api("ai_log_clear", {});
+      S.aiLogOpen = -1;
+      toast("已清空 " + res.removed + " 条", "ok");
+      await loadAiLog();
       return;
     }
     case "save-features": {

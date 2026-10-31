@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -109,6 +110,13 @@ DEFAULT_SITES = [
      "icon_fallback": ICON_PROXY.format(domain="forum.mczwlt.net")},
 ]
 
+def split_keys(text) -> list[str]:
+    """把 ``"a, b;c"`` 这种字符串拆成密钥列表（逗号、分号、空白、换行都算分隔）。"""
+    if not text:
+        return []
+    return [part for part in re.split(r"[,;\s]+", str(text)) if part]
+
+
 ENV_MAP = {
     "PCLHOME_BASE_URL": ("base_url", str),
     "PCLHOME_ADMIN_TOKEN": ("admin_token", str),
@@ -126,6 +134,8 @@ ENV_MAP = {
     "PCLHOME_WALLPAPER": ("enable_wallpaper", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_SAYING": ("enable_saying", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_UAPI_KEY": ("uapi_key", str),
+    # 多把密钥：逗号/分号/空格/换行分隔都认（这里是 str，切片由 Config.uapi_key_list 做）
+    "PCLHOME_UAPI_KEYS": ("uapi_keys", str),
     "PCLHOME_LUNAR": ("enable_lunar", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_TRUST_PROXY": ("trust_proxy_headers", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_GUARD": ("guard_clients", lambda v: v not in ("0", "false", "no")),
@@ -157,6 +167,9 @@ class Config:
     # 塞进 URL 的话 net.py 出错时会把整条 URL 打进日志，密钥就跟着漏出去了。
     # 带头/退匿名那套逻辑在 uapi.py，别在这儿再写一份。
     uapi_key: str = ""
+    # 第二把及以后的密钥（列表，或逗号分隔的字符串）。uapi.py 按顺序用：
+    # 某把被拒（401 无效 / 402 没积分）就只冷却那一把、换下一把，全都不行才退回匿名。
+    uapi_keys: list = field(default_factory=list)
     saying_source: str = SAYING_SOURCE   # 一言语料 slug；留空 = 不限（会出英文）
     enable_lunar: bool = True        # 日期下面的农历行走 uapis.cn（失败退回本地换算）
     lunar_api: str = LUNAR_API
@@ -203,6 +216,26 @@ class Config:
     def resolved_base_url(self, origin: str = "") -> str:
         """构建期写死优先；没配就用请求方推导出的 origin。"""
         return (self.base_url or origin).rstrip("/")
+
+    def uapi_key_list(self) -> list[str]:
+        """uapi_key + uapi_keys 合成一张去重表，保持配置里的先后顺序。
+
+        ``uapi_keys`` 允许写成列表，也允许写成 ``"a,b"`` 这种字符串（环境变量
+        只能给字符串），分隔符逗号、分号、空白、换行都认。
+        """
+        items: list = []
+        raw_keys = self.uapi_keys
+        if isinstance(raw_keys, str):
+            items.extend(split_keys(raw_keys))
+        elif raw_keys:
+            items.extend(list(raw_keys))
+        items.extend(split_keys(self.uapi_key))
+        out: list[str] = []
+        for item in items:
+            key = str(item or "").strip()
+            if key and key not in out:
+                out.append(key)
+        return out
 
     def ai_window(self) -> str:
         """AI 额度窗口的归一：只认 day，其余（含写错的）一律 hour。"""
