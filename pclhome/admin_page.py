@@ -93,6 +93,7 @@ ADMIN_PAGE = r"""<!DOCTYPE html>
 
   /* ---------- 卡片 ---------- */
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+  .card.spaced{margin-top:16px}
   .card-h{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);
     background:linear-gradient(180deg,var(--card2),transparent)}
   .card-h h3{margin:0;font-size:13.5px;font-weight:650}
@@ -103,7 +104,9 @@ ADMIN_PAGE = r"""<!DOCTYPE html>
   .hint b{color:var(--ink2);font-weight:600}
   .rows{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
   .two{display:grid;gap:16px;grid-template-columns:minmax(0,1.3fr) minmax(0,.7fr);align-items:start}
-  @media (max-width:980px){.two{grid-template-columns:1fr}}
+  .two.even{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .two.map{grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr)}
+  @media (max-width:980px){.two,.two.even,.two.map{grid-template-columns:1fr}}
 
   label{display:block;font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:6px}
   input,textarea,select{width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r2);
@@ -147,11 +150,35 @@ ADMIN_PAGE = r"""<!DOCTYPE html>
 
   /* ---------- 排行条 ---------- */
   .rank{display:grid;gap:9px}
-  .rank .r{display:grid;grid-template-columns:56px minmax(0,1fr) 44px;align-items:center;gap:10px;font-size:12.5px}
+  .rank .r{display:grid;grid-template-columns:minmax(88px,38%) minmax(0,1fr) 46px;align-items:center;gap:10px;font-size:12.5px}
   .rank .r .name{color:var(--ink2);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rank .r .track{display:block;height:7px;border-radius:99px;background:var(--card2);overflow:hidden}
   .rank .r .fill{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
   .rank .r .num{text-align:right;color:var(--ink3);font-variant-numeric:tabular-nums}
+  .subhead{font-size:11.5px;font-weight:700;color:var(--ink3);letter-spacing:.04em;margin:0 0 8px}
+  .subhead.top{margin-top:14px;padding-top:13px;border-top:1px dashed var(--line2)}
+
+  /* ---------- 中国地图 ---------- */
+  .cmap{display:block;width:100%;height:auto;max-height:520px}
+  .cmap path.cm{stroke:var(--card);stroke-width:1;fill:color-mix(in srgb,var(--line2) 60%,var(--card));transition:fill .15s}
+  .cmap path.cm.lv1{fill:color-mix(in srgb,var(--accent) 26%,var(--card))}
+  .cmap path.cm.lv2{fill:color-mix(in srgb,var(--accent) 50%,var(--card))}
+  .cmap path.cm.lv3{fill:color-mix(in srgb,var(--accent) 74%,var(--card))}
+  .cmap path.cm.lv4{fill:var(--accent)}
+  .cmap path.cm:hover{fill:var(--accent2)}
+  .cmap .inset-box{fill:none;stroke:var(--line2);stroke-width:1;stroke-dasharray:4 4}
+  .cmap .inset-line{fill:none;stroke:var(--ink2);stroke-width:1.6;stroke-dasharray:6 5}
+  .cmap .inset-isle{fill:var(--ink2);stroke:none}
+  .cmap .lab{fill:var(--ink2);font-size:15px;text-anchor:middle;pointer-events:none;font-weight:600}
+  .cmap .lab.small{font-size:13px}
+  .maplegend{display:flex;align-items:center;gap:6px;justify-content:flex-end;margin-top:6px;
+    font-size:11.5px;color:var(--ink3)}
+  .maplegend i{width:18px;height:9px;border-radius:2px;display:block;
+    background:var(--card2);border:1px solid var(--line)}
+  .maplegend i.lv1{background:color-mix(in srgb,var(--accent) 18%,var(--card2))}
+  .maplegend i.lv2{background:color-mix(in srgb,var(--accent) 38%,var(--card2))}
+  .maplegend i.lv3{background:color-mix(in srgb,var(--accent) 62%,var(--card2))}
+  .maplegend i.lv4{background:var(--accent)}
 
   /* ---------- 表格 ---------- */
   .tbl-wrap{overflow:auto}
@@ -350,6 +377,9 @@ const S = {
   aiLog: null, aiLogOpen: -1,
   section: "overview", dirty: false, loggedIn: false, busy: 0,
 };
+
+// 中国地图的路径数据（由 admin.py 在页面下发时替换成 chinamap.py 里的 JSON）
+const CHINA_MAP = __CHINA_MAP__;
 
 /* ================= 会话与请求 ================= */
 async function api(action, data, opts) {
@@ -570,11 +600,19 @@ const COUNTRY_NAMES = { CN: "中国", US: "美国", HK: "香港", TW: "台湾", 
   NL: "荷兰", IN: "印度", BR: "巴西", VN: "越南", MY: "马来西亚", TH: "泰国", XX: "未知" };
 function countryName(code) { return COUNTRY_NAMES[code] || code || "未知"; }
 
-// 地区标签：有城市就"中国 · 泉州市"，没城市（定位失败或境外只到国家）就只写国家
-function regionName(code, city) {
-  const name = countryName(code);
+// 地区标签：国内的用「省份 · 城市」（短，能读完），境外只到城市/国家就写国家和城市。
+// 省份城是分开算的，老记录没有省份会自动退化，不会出现「中国 · 」这种空尾巴。
+function regionName(code, city, province) {
   const c = String(city || "").trim();
-  return c ? name + " · " + c : name;
+  const p = String(province || "").trim();
+  const name = countryName(code);
+  if (code === "CN") {
+    if (p) return c && c !== p ? p + " · " + c : p;
+    return c || "国内 · 未定位";
+  }
+  // 港澳台和新加坡这类"城市即国家"的，别拼成「香港 · 香港」
+  if (c && c !== name && c !== p) return name + " · " + c;
+  return name;
 }
 
 function fmtTime(ms) {
@@ -610,6 +648,39 @@ function renderSection(id) {
 const RENDER = {};
 
 /* ---------- 总览 ---------- */
+// 中国地图：按省份访问量涂色。没数据直接给一句提示，别画一张全灰的图。
+function chinaMap(provinces) {
+  const counts = {};
+  let peak = 0;
+  let total = 0;
+  (provinces || []).forEach((item) => {
+    const name = String(item.name || "").trim();
+    const value = Number(item.count) || 0;
+    if (!name || !value) return;
+    counts[name] = (counts[name] || 0) + value;
+    total += value;
+    if (counts[name] > peak) peak = counts[name];
+  });
+  if (!total) return '<div class="empty">还没有省份数据（访客定位成功后才会记下省市）</div>';
+  const paths = Object.keys(CHINA_MAP.paths).map((name) => {
+    const value = counts[name] || 0;
+    const level = value ? Math.max(1, Math.min(4, Math.ceil((value / peak) * 4))) : 0;
+    return '<path class="cm lv' + level + '" d="' + CHINA_MAP.paths[name] + '">' +
+      "<title>" + esc(name) + "：" + value + " 次</title></path>";
+  }).join("");
+  const box = CHINA_MAP.box || [778, 592, 214, 266];
+  return '<svg class="cmap" viewBox="' + CHINA_MAP.viewBox + '" role="img" aria-label="中国访问分布">' + paths +
+    '<rect class="inset-box" x="' + box[0] + '" y="' + box[1] + '" width="' + box[2] +
+    '" height="' + box[3] + '" rx="8"></rect>' +
+    (CHINA_MAP.lines ? '<path class="inset-line" d="' + CHINA_MAP.lines + '"></path>' : "") +
+    (CHINA_MAP.islands ? '<path class="inset-isle" d="' + CHINA_MAP.islands + '"></path>' : "") +
+    '<text class="lab small" x="' + (box[0] + box[2] / 2) + '" y="' + (box[1] + box[3] - 8) +
+    '">南海诸岛</text>' +
+    "</svg>" +
+    '<div class="maplegend"><span>少</span><i></i><i class="lv1"></i><i class="lv2"></i>' +
+    '<i class="lv3"></i><i class="lv4"></i><span>多</span></div>';
+}
+
 RENDER.overview = function () {
   const stats = S.stats || {};
   const trend = stats.trend || [];
@@ -629,9 +700,18 @@ RENDER.overview = function () {
       '<span class="d">' + esc(item.date.slice(5)) + "</span></div>";
   }).join("");
 
-  // 地区用 regions（国家 + 城市）；老数据没有 city 就是纯国家名
-  const regions = (stats.regions || stats.countries || [])
-    .map((c) => ({ name: regionName(c.code, c.city), count: c.count }));
+  // 地区用 regions（国家 + 省份 + 城市）；国内 / 国外分开列，老数据没有省份就自动退化
+  const pickRegion = (list) => (list || []).map((c) => ({
+    name: regionName(c.code, c.city, c.province), count: c.count,
+  }));
+  const cn = pickRegion(stats.regions_cn).slice(0, 9);
+  const ab = pickRegion(stats.regions_abroad).slice(0, 7);
+  const regionHtml = (cn.length || ab.length)
+    ? (cn.length ? '<div class="subhead">国内 · ' + (stats.domestic || 0) + ' 次</div>' +
+        rankRows(cn, stats.domestic, cn[0].count) : "") +
+      (ab.length ? '<div class="subhead top">国外 · ' + (stats.foreign || 0) + ' 次</div>' +
+        rankRows(ab, stats.foreign, ab[0].count) : "")
+    : '<div class="empty">还没有数据</div>';
   const hosts = (stats.hosts || []).slice(0, 8);
   const recent = (stats.recent || []).slice(0, 8);
 
@@ -639,21 +719,25 @@ RENDER.overview = function () {
       '<div class="kpi">' +
         kpi("今日访问", stats.today || 0, today.date || "") +
         kpi("7 天访问", stats.total || 0, "按次计") +
+        kpi("国内访问", stats.domestic || 0, "含港澳台") +
+        kpi("国外访问", stats.foreign || 0, "其余地区") +
         kpi("独立访客", stats.unique || 0, "按 IP 去重") +
         kpi("封禁 IP", blockCount, blockCount ? "拒绝访问" : "空闲", blockCount ? "warn" : "") +
       "</div>", { cls: "" }) +
 
-    '<div class="two">' +
-      card("访问走势", "柱高按 7 天内峰值缩放",
-        trend.length ? '<div class="bars">' + bars + "</div>" : '<div class="empty">还没有访问记录</div>') +
-      card("地区分布", "",
-        rankRows(regions, stats.total, regions.length ? regions[0].count : 1)) +
+    card("访问走势", "柱高按 7 天内峰值缩放",
+      trend.length ? '<div class="bars">' + bars + "</div>" : '<div class="empty">还没有访问记录</div>',
+      { cls: "spaced" }) +
+
+    '<div class="two map">' +
+      card("地区分布", "国内细到省市", regionHtml) +
+      card("中国地图", "颜色越深，来的次数越多", chinaMap(stats.provinces)) +
     "</div>" +
 
     '<div class="two">' +
       card("最近访客", "点右边可以直接封禁",
         recent.length ? '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>IP</th><th>地区</th><th>时间</th><th></th></tr></thead><tbody>' +
-          recent.map((r) => '<tr><td class="mono">' + esc(r.ip) + "</td><td>" + esc(regionName(r.code, r.city)) +
+          recent.map((r) => '<tr><td class="mono">' + esc(r.ip) + "</td><td>" + esc(regionName(r.code, r.city, r.province)) +
             '</td><td class="num" title="' + esc(fmtTime(r.ts)) + '">' + esc(relTime(r.ts)) + "</td>" +
             '<td><button class="btn ghost sm" data-act="block-ip" data-ip="' + esc(r.ip) + '">封禁</button></td></tr>').join("") +
           "</tbody></table></div>" : '<div class="empty">还没有访问记录</div>') +

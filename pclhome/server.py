@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import admin as admin_module
-from . import log
+from . import geo, log
 from .config import ROOT, STATIC_DIR, TEMPLATES_DIR, Config, load_config
 from .generate import generate, refresh_wallpaper
 from .i18n import t
@@ -64,6 +64,20 @@ def _city_of(source: str) -> str:
     text = str(source or "").strip()
     if not text or len(text) > 24 or "（" in text or "(" in text:
         return ""
+    return text
+
+
+PROVINCE_SUFFIX = (
+    "维吾尔自治区", "壮族自治区", "回族自治区", "特别行政区", "自治区", "省", "市",
+)
+
+
+def _short_province(name) -> str:
+    """「浙江省」→「浙江」，和地图上的省份 key 对齐。"""
+    text = str(name or "").strip()
+    for suffix in PROVINCE_SUFFIX:
+        if text.endswith(suffix) and len(text) > len(suffix):
+            return text[: -len(suffix)]
     return text
 
 
@@ -429,9 +443,22 @@ class Handler(BaseHTTPRequestHandler):
                 service.stats.record(ip, country)
                 self._send(Response.xaml(_updating_xaml(ip)))
                 return
-            # 城市直接蹭天气那次 IP 定位的结果——天气卡片本来就知道访客在哪个市，
-            # 再单独查一遍 IP 库纯属浪费（用户也明确不让引入新接口）。
-            service.stats.record(ip, country, _city_of(data.weather_source))
+            # 城市/省份直接蹭天气那次 IP 定位的结果——天气卡片本来就知道访客在哪个市，
+            # 再单独查一遍 IP 库纯属浪费（用户也明确不让引入新接口）。geo 有缓存，
+            # 这里通常是一次内存命中；天气关了才可能真发一次请求，所以先看 enable_geo。
+            city, province = "", ""
+            if service.config.enable_geo:
+                try:
+                    info = geo.locate(ip)
+                except Exception as exc:
+                    log.debug("[Server] 定位失败：" + repr(exc))
+                    info = None
+                if info:
+                    city = str(info.get("city") or "").strip()
+                    province = _short_province(info.get("province"))
+            if not city:
+                city = _city_of(data.weather_source)
+            service.stats.record(ip, country, city, province)
             self._note = data.summary()
             log.debug("[Server] UA=" + (ua[:80] or "（空）") + " origin=" + origin)
             self._send(Response.xaml(body, vary_ip=True))

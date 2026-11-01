@@ -134,23 +134,29 @@ class Stats:
                      "id INTEGER PRIMARY KEY AUTOINCREMENT, "
                      "ip TEXT NOT NULL, country TEXT, ts INTEGER NOT NULL)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_visits_ts ON visits(ts)")
-        # city 是后加的列（老库得补），存的是天气定位顺手拿到的城市名：
-        # 光有 CF-IPCountry 只能到国家一级，后台看着"中国 3867 次"没法用。
+        # city / province 是后加的列（老库得补）：光有 CF-IPCountry 只能到国家一级，
+        # 后台看着"中国 3867 次"没法用，所以顺手记下天气定位拿到的城市和省份。
         columns = {row[1] for row in conn.execute("PRAGMA table_info(visits)")}
         if "city" not in columns:
             conn.execute("ALTER TABLE visits ADD COLUMN city TEXT")
-            conn.commit()
+        if "province" not in columns:
+            conn.execute("ALTER TABLE visits ADD COLUMN province TEXT")
+        conn.commit()
         self._ready = True
 
-    def record(self, ip: str, country: str = "XX", city: str = "") -> None:
+    def record(self, ip: str, country: str = "XX", city: str = "",
+               province: str = "") -> None:
         """记一次访问；写失败只打日志，绝不影响主页返回。"""
         try:
             with self._lock:
                 conn = self._connect()
                 try:
                     self._ensure(conn)
-                    conn.execute("INSERT INTO visits (ip, country, city, ts) VALUES (?, ?, ?, ?)",
-                                 (ip, country, str(city or ""), int(time.time() * 1000)))
+                    conn.execute(
+                        "INSERT INTO visits (ip, country, city, province, ts) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (ip, country, str(city or ""), str(province or ""),
+                         int(time.time() * 1000)))
                     conn.commit()
 
                     now = time.time()
@@ -175,8 +181,9 @@ class Stats:
         # 折线/柱状图要的是"完整的一天"：从 days-1 天前的北京时间 0 点算起
         day_start = beijing - beijing % 86400 - (days - 1) * 86400
         trend_cutoff = int((day_start - 8 * 3600) * 1000)
-        empty = {"total": 0, "today": 0, "unique": 0, "countries": [], "hosts": [],
-                 "recent": [], "trend": []}
+        empty = {"total": 0, "today": 0, "unique": 0, "domestic": 0, "foreign": 0,
+                 "countries": [], "hosts": [], "regions": [], "regions_cn": [],
+                 "regions_abroad": [], "provinces": [], "recent": [], "trend": []}
         try:
             with self._lock:
                 conn = self._connect()
@@ -189,18 +196,31 @@ class Stats:
                     countries = cur.execute(
                         "SELECT COALESCE(country,'XX') c, COUNT(*) n FROM visits WHERE ts >= ? "
                         "GROUP BY c ORDER BY n DESC LIMIT 12", (cutoff,)).fetchall()
-                    # 地区明细：国家 + 城市。city 只有天气定位成功时才有值，
-                    # 空串就只显示国家，不会出现"中国 · "这种尾巴。
+                    # 地区明细：国家 + 省份 + 城市。city 只有定位成功时才有值，
+                    # 空串就只显示国家/省份，不会出现"中国 · "这种尾巴。
                     regions = cur.execute(
-                        "SELECT COALESCE(country,'XX') c, TRIM(COALESCE(city,'')) ct, COUNT(*) n "
-                        "FROM visits WHERE ts >= ? GROUP BY c, ct ORDER BY n DESC LIMIT 15",
+                        "SELECT COALESCE(country,'XX') c, TRIM(COALESCE(city,'')) ct, "
+                        "TRIM(COALESCE(province,'')) pv, COUNT(*) n "
+                        "FROM visits WHERE ts >= ? GROUP BY c, ct, pv ORDER BY n DESC LIMIT 60",
                         (cutoff,)).fetchall()
+                    # 国内 / 国外分开算：港澳台算国内（面板上单列，方便看占比）
+                    split = cur.execute(
+                        "SELECT SUM(CASE WHEN COALESCE(country,'XX') IN (?,?,?,?) THEN 1 ELSE 0 END), "
+                        "SUM(CASE WHEN COALESCE(country,'XX') IN (?,?,?,?) THEN 0 ELSE 1 END) "
+                        "FROM visits WHERE ts >= ?",
+                        ("CN", "HK", "MO", "TW", "CN", "HK", "MO", "TW", cutoff)).fetchone()
                     hosts = cur.execute(
                         "SELECT ip, COUNT(*) n, MAX(ts) last FROM visits WHERE ts >= ? "
                         "GROUP BY ip ORDER BY n DESC LIMIT 12", (cutoff,)).fetchall()
                     recent = cur.execute(
-                        "SELECT ip, COALESCE(country,'XX'), TRIM(COALESCE(city,'')), ts "
+                        "SELECT ip, COALESCE(country,'XX'), TRIM(COALESCE(city,'')), "
+                        "TRIM(COALESCE(province,'')), ts "
                         "FROM visits WHERE ts >= ? ORDER BY ts DESC LIMIT 20", (cutoff,)).fetchall()
+                    # 省份分布：中国地图按省涂色用，只算填了省份的记录
+                    provinces = cur.execute(
+                        "SELECT TRIM(province) p, COUNT(*) n FROM visits "
+                        "WHERE ts >= ? AND COALESCE(TRIM(province),'') <> '' "
+                        "GROUP BY p ORDER BY n DESC", (cutoff,)).fetchall()
                     # 按北京时间切天：ts 是 UTC 毫秒，加 8 小时再整除一天的毫秒数
                     trend_rows = cur.execute(
                         "SELECT ((ts + 28800000) / 86400000) d, COUNT(*) n FROM visits "
@@ -221,11 +241,25 @@ class Stats:
             trend.append({"date": time.strftime("%Y-%m-%d", time.gmtime(stamp)),
                           "count": counts.get(stamp // 86400, 0)})
 
+        # 国内 / 国外分开：港澳台算国内（面板单列一栏，占比更直观）
+        HOME = ("CN", "HK", "MO", "TW")
+        domestic = int((split[0] or 0)) if split else 0
+        foreign = int((split[1] or 0)) if split else 0
+        region_rows = [{"code": c, "city": ct, "province": pv, "count": n}
+                       for c, ct, pv, n in regions]
+        regions_cn = [r for r in region_rows if r["code"] in HOME][:15]
+        regions_abroad = [r for r in region_rows if r["code"] not in HOME][:15]
+
         return {
             "total": total, "today": today, "unique": unique,
+            "domestic": domestic, "foreign": foreign,
             "countries": [{"code": c, "count": n} for c, n in countries],
-            "regions": [{"code": c, "city": ct, "count": n} for c, ct, n in regions],
+            "regions": region_rows[:15],
+            "regions_cn": regions_cn,
+            "regions_abroad": regions_abroad,
+            "provinces": [{"name": p, "count": n} for p, n in provinces],
             "hosts": [{"ip": ip, "count": n, "last": last} for ip, n, last in hosts],
-            "recent": [{"ip": ip, "code": c, "city": ct, "ts": ts} for ip, c, ct, ts in recent],
+            "recent": [{"ip": ip, "code": c, "city": ct, "province": pv, "ts": ts}
+                       for ip, c, ct, pv, ts in recent],
             "trend": trend,
         }

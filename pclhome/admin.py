@@ -31,11 +31,27 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import ai
+from . import chinamap
 from .admin_page import ADMIN_PAGE
 from .config import CACHE_DIR, CONFIG_FILE, ROOT, VAR_DIR, Config
 from .generate import generate
 from .log import info, uptime, warn
 from .weather import WeatherService
+
+# 中国地图的路径数据几十 KB，塞进 admin_page.py 会变成一个巨型字面量（既难改也没法
+# 单独替换数据），所以放 pclhome/chinamap.py，这里在下发页面时把占位符换成 JSON。
+_CHINA_MAP_JSON = json.dumps(
+    {
+        "viewBox": chinamap.VIEWBOX,
+        "paths": chinamap.PATHS,
+        "lines": chinamap.INSET_LINES,
+        "islands": chinamap.INSET_ISLANDS,
+        "box": chinamap.INSET_BOX,
+    },
+    ensure_ascii=False,
+    separators=(",", ":"),
+)
+_PAGE = ADMIN_PAGE.replace("__CHINA_MAP__", _CHINA_MAP_JSON)
 
 SESSION_COOKIE = "admin_session"
 SESSION_TTL = 8 * 3600
@@ -374,7 +390,7 @@ def handle(service, handler, path: str, query: str):
     store = service.store
 
     if path == "/admin":
-        return _html(ADMIN_PAGE)
+        return _html(_PAGE)
 
     if not path.startswith("/admin/api/"):
         return _json({"ok": False, "error": "not_found"}, 404)
