@@ -510,7 +510,7 @@ def _save_ai_log(entries: list) -> None:
 def record_analysis(ip: str, who: str, key: str, model: str, protocol: str,
                     kind: str, input_text: str, ok: bool, output: str,
                     elapsed_ms: int, tokens: dict | None = None,
-                    base: str = "") -> None:
+                    base: str = "", cost: int = 0, peak: bool = False) -> None:
     """记一条分析：谁、用什么密钥、往哪个地址请求、分析的是什么、成没成、花了多久。
 
     访客自带的密钥**原样存**——站长要能看到访客填的是哪把（列表里打码，点开才
@@ -538,6 +538,9 @@ def record_analysis(ip: str, who: str, key: str, model: str, protocol: str,
             "in": int((tokens or {}).get("in") or 0),
             "out": int((tokens or {}).get("out") or 0),
         },
+        # 这次实际扣掉的额度（含高峰倍数）——后台一眼看出「为什么掉这么快」
+        "cost": int(cost or 0),
+        "peak": bool(peak),
     }
     with _ai_log_lock:
         entries = _load_ai_log()
@@ -916,10 +919,11 @@ def _worker(config: Config, ip: str, kind: str, value: str,
     base = str(key_conf.get("base") or config.ai_api_base or "").rstrip("/")
 
     def note_record(input_text: str, ok: bool, output: str, ms: int = 0,
-                    tokens: dict | None = None) -> None:
+                    tokens: dict | None = None, cost: int = 0) -> None:
         try:
             record_analysis(ip, who, key, model, protocol, kind, input_text,
-                            ok, output, ms, tokens, base)
+                            ok, output, ms, tokens, base,
+                            cost=cost, peak=is_peak())
         except Exception as exc:                       # 记录失败不能影响分析
             warn("[AI] 写分析记录失败：" + str(exc))
 
@@ -956,7 +960,8 @@ def _worker(config: Config, ip: str, kind: str, value: str,
         _settle(config, ip, reserved, cost, use_own)
         history = _trim_history(turns + [{"role": "assistant", "content": result}])
         note_record(input_text, True, result, usage.get("ms") or ms,
-                    {"in": usage.get("in") or 0, "out": usage.get("out") or 0})
+                    {"in": usage.get("in") or 0, "out": usage.get("out") or 0},
+                    cost=int(cost))
         _set_job(ip, state="done", text=result, error="", history=history,
                  reasoning=str(usage.get("reasoning") or "")[:config.ai_reasoning_max_chars],
                  cost=int(cost), tokens={"in": usage.get("in") or 0,
