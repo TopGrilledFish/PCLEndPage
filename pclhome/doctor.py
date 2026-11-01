@@ -239,6 +239,25 @@ def check_i18n(report: Report) -> None:
     else:
         report.good("天气提示与问候语各语言条数一致")
 
+    # 其余语言包只翻「核心键」，缺的那些运行时回退英文——但核心键缺了就是
+    # 一片空白，所以逐个包核一遍；顺带确认包里写了自称（页面上要显示）
+    packs = [code for code in i18n.available_langs() if code not in i18n.LANGS]
+    problems = []
+    for code in packs:
+        table = i18n.table(code)
+        if not str(table.get("_name") or "").strip():
+            problems.append(code + " 缺 _name")
+            continue
+        missing = [key for key in i18n.CORE_KEYS if not isinstance(table.get(key), str)]
+        if missing:
+            problems.append(code + " 缺 " + str(len(missing)) + " 个核心键（"
+                            + "、".join(missing[:3]) + "）")
+    if problems:
+        report.bad("语言包不完整（" + str(len(problems)) + " 个）：" + "；".join(problems[:3]))
+    else:
+        report.good(str(len(packs)) + " 个语言包都有自称与 " + str(len(i18n.CORE_KEYS))
+                    + " 个核心键（其余键回退英文）")
+
 
 def check_hash(report: Report) -> None:
     report.section("3/9 哈希算法与上游一致性（决定「同一人当天内容固定」）")
@@ -1068,11 +1087,11 @@ def check_rendered(report: Report, config: Config) -> None:
             report.bad("界面语言页 XML 解析失败：" + "；".join(broken[:3]))
         elif not all(home_mark in body for body in pages.values()):
             report.bad("界面语言页缺「返回主页」按钮")
-        elif "Deutsch" not in searched or "日本語" in searched:
-            report.bad("界面语言页搜索「de」没搜对（应只有德语，不该带日语）")
+        elif "德语" not in searched or "日语" in searched:
+            report.bad("界面语言页搜索「de」没搜对（该有德语，不该带日语）")
         elif "没有匹配的语言" not in nothing:
             report.bad("界面语言页搜不到东西时没给出提示")
-        elif "Supported" not in english or "More languages" not in english:
+        elif "Supported" not in english or "Japanese" not in english:
             report.bad("界面语言页英文形态文案不对")
         else:
             report.good("界面语言页 " + str(len(pages)) + " 种形态 XML 良构，搜索命中/落空都有提示")

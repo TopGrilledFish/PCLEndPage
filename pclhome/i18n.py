@@ -1,23 +1,21 @@
 # -*- coding: utf-8 -*-
 """界面文案的多语言查表。
 
-三种语言：
+语言包放 ``pclhome/i18n/<代码>.json``，一个语言一份：
 
-* ``zh-hans`` 简体中文（默认，也是唯一"手写"的那份）
-* ``zh-hant`` 繁體中文
+* ``zh-hans`` 简体中文（默认，也是唯一"手写"的那份，是母版）
+* ``zh-hant`` 繁體中文（``tools/make_zh_hant.py`` 从简中生成）
 * ``en``      英文
+* 其余 70 多种语言：只翻译**核心键**（``CORE_KEYS``，见下），剩下的键在运行时
+  回退到英文（再回退到简中）。这样切过去之后主页、按钮、语言页、访问页的标题
+  都是目标语言，长篇说明性文字保持英文——比整页原样不动要实用得多。
 
-字符串表放 ``pclhome/i18n/*.json``，键是语义化的短名（``home.welcome``、
-``calc.damage.hint``），按组前缀排。**zh-hans 是母版**：其它语言缺键就回退
-到它，并且记一条 warn——这些串大多在主页关键路径上，不能因为漏翻一句就让
-整页崩掉（跟项目其它地方的容错风格一致）。
+**为什么允许"半套词条"**：一份完整词条 745 个键，七十多种语言全翻一遍是
+几万条文案，没有翻译团队做不了。与其列出来点不动，不如让核心界面真的能用，
+缺的那部分老老实实回退英文，并且 ``doctor`` 会检查每个语言包的核心键是否齐全。
 
-繁中那份不是手打的：``tools/make_zh_hant.py`` 拿转换表从 zh-hans 生成，
-再人工过一遍术语。改文案要改 zh-hans，然后重跑那个脚本。
-
-**为什么不用运行期转换**：转换表在运行期要跟着走，等于把一份字典塞进服务端
-热路径，而且简繁转换有上下文（"里"要变"裡"还是"裏"），一次生成好、人工校对
-比每次请求都猜一遍靠谱。
+其它语言缺键**不再 warn**：七十多种语言每次请求都会缺几十个键，一条条打日志
+等于把日志写满。真缺东西由体检报告兜底。
 """
 from __future__ import annotations
 
@@ -28,10 +26,46 @@ from pathlib import Path
 from .log import warn
 
 DEFAULT_LANG = "zh-hans"
+#: 有完整词条（745 个键）的三种语言；体检按这三个比键集合
 LANGS = ("zh-hans", "zh-hant", "en")
 LANG_NAMES = {"zh-hans": "简体中文", "zh-hant": "繁體中文", "en": "English"}
 
 I18N_DIR = Path(__file__).resolve().parent / "i18n"
+
+#: 每个语言包都必须有的键：主页、按钮、语言页、访问页、设置页的骨架。
+#: 缺了体检报错——这些是"切过去一眼就能看见"的地方。
+CORE_KEYS = (
+    "home.welcome",
+    "home.sites_title",
+    "home.quote_label",
+    "home.footer_title",
+    "home.footer_open_repo",
+    "home.footer_open_origin",
+    "home.footer_settings",
+    "home.footer_sponsor",
+    "home.footer_browse",
+    "home.footer_version_unknown",
+    "btn.refresh",
+    "btn.calc",
+    "btn.ai",
+    "btn.back_home",
+    "btn.back",
+    "btn.refresh_page",
+    "btn.refresh_result",
+    "btn.ok",
+    "language.title",
+    "language.current",
+    "language.current_title",
+    "language.search_button",
+    "language.supported_title",
+    "language.others_title",
+    "visit.title",
+    "visit.kpi_today",
+    "visit.map_title",
+    "visit.rank_title",
+    "visit.recent_title",
+    "settings.title",
+)
 
 # 常见写法的归一：PCL 那边、系统语言、用户手输都可能给出这些
 _ALIASES = {
@@ -42,19 +76,47 @@ _ALIASES = {
     "繁體中文": "zh-hant", "繁体中文": "zh-hant",
     "en-us": "en", "en-gb": "en", "en-ca": "en", "en-au": "en",
     "english": "en", "英文": "en", "英语": "en",
+    "jp": "ja", "kr": "ko", "cn": "zh-hans", "tw": "zh-hant", "hk": "zh-hant",
+    "mo": "zh-hant", "ua": "uk", "il": "he", "no-nb": "no", "nb": "no",
+    "nn": "no", "pt-br": "pt", "pt-pt": "pt", "es-mx": "es", "es-es": "es",
+    "fr-fr": "fr", "de-de": "de", "it-it": "it", "ru-ru": "ru", "ja-jp": "ja",
+    "ko-kr": "ko", "zh-cn-hans": "zh-hans", "in": "id", "iw": "he",
 }
 
 
+@lru_cache(maxsize=1)
+def available_langs() -> tuple:
+    """磁盘上真实存在的语言包（文件名即语言码），三语排最前面。"""
+    found = []
+    try:
+        for path in sorted(I18N_DIR.glob("*.json")):
+            code = path.stem
+            if code and not code.startswith("_"):
+                found.append(code)
+    except OSError:
+        pass
+    head = [code for code in LANGS if code in found]
+    rest = sorted(code for code in found if code not in LANGS)
+    return tuple(head + rest)
+
+
+def is_supported(code: str) -> bool:
+    """这个语言码是不是真的能切（磁盘上有语言包）。"""
+    return str(code or "") in available_langs()
+
+
 def normalize_lang(value) -> str:
-    """把各种写法归一到三种语言码之一，认不出来就回默认。"""
+    """把各种写法归一到某个真实存在的语言码，认不出来就回默认。"""
     text = str(value or "").strip().lower().replace("_", "-")
     if not text:
         return DEFAULT_LANG
-    if text in LANGS:
-        return text if text != "zh-hans" else DEFAULT_LANG
-    if text in _ALIASES:
+    if text in available_langs():
+        return text
+    if text in _ALIASES and is_supported(_ALIASES[text]):
         return _ALIASES[text]
     head = text.split("-")[0]
+    if head in available_langs():
+        return head
     if head in ("zh", "en"):
         # zh 但认不出具体形式：看有没有 hant/tw/hk 的线索，否则当简体
         return "zh-hant" if any(k in text for k in ("hant", "tw", "hk", "mo")) else (
@@ -64,7 +126,7 @@ def normalize_lang(value) -> str:
 
 @lru_cache(maxsize=8)
 def table(lang: str) -> dict:
-    """读一份字符串表；读不到就用空的（下面会回退到 zh-hans）。"""
+    """读一份字符串表；读不到就用空的（下面会回退）。"""
     path = I18N_DIR / (normalize_lang(lang) + ".json")
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -75,7 +137,36 @@ def table(lang: str) -> dict:
     return {}
 
 
-@lru_cache(maxsize=4096)
+def lang_name(lang: str) -> str:
+    """一种语言的本地写法（"日本語" / "Deutsch"），用来在页面上称呼它。"""
+    code = normalize_lang(lang)
+    if code in LANG_NAMES:
+        return LANG_NAMES[code]
+    name = table(code).get("_name")
+    return name if isinstance(name, str) and name else code
+
+
+def lang_name_zh(lang: str) -> str:
+    """中文名（语言清单里给中文用户看的那一列）。"""
+    code = normalize_lang(lang)
+    if code in LANG_NAMES:
+        return LANG_NAMES[code]
+    name = table(code).get("_name_zh")
+    return name if isinstance(name, str) and name else lang_name(code)
+
+
+def lang_name_en(lang: str) -> str:
+    """英文名（英文页面上显示用，不能夹汉字）。"""
+    code = normalize_lang(lang)
+    if code == "en":
+        return "English"
+    if code in LANG_NAMES:
+        return {"zh-hans": "Chinese (Simplified)", "zh-hant": "Chinese (Traditional)"}[code]
+    name = table(code).get("_name_en")
+    return name if isinstance(name, str) and name else lang_name(code)
+
+
+@lru_cache(maxsize=8192)
 def _lookup(key: str, lang: str):
     """查一次表。返回 None 表示这个语言里没有。"""
     value = table(lang).get(key)
@@ -83,7 +174,7 @@ def _lookup(key: str, lang: str):
 
 
 def t(key: str, /, lang: str = DEFAULT_LANG, **kw) -> str:
-    """取一句话。缺键回退 zh-hans，再缺就原样返回键名（便于体检时发现）。
+    """取一句话。缺键按 「目标语言 → 英文 → 简中」回退，都没有就原样返回键名。
 
     ``key`` 前面那个 ``/`` 是**参数位限定**：第一个参数只能按位置传。因为它是按
     关键字传的，``t("ai.key_saved", lang, key=...)`` 会撞成
@@ -94,9 +185,11 @@ def t(key: str, /, lang: str = DEFAULT_LANG, **kw) -> str:
     lang = normalize_lang(lang)
     text = _lookup(key, lang)
     if text is None and lang != DEFAULT_LANG:
-        # 只在非默认语言上回退：默认语言自己没有就是真缺了
-        warn("[i18n] " + lang + " 缺这句话，回退简中：" + key)
-        text = _lookup(key, DEFAULT_LANG)
+        # 七十多种语言每次都有几十个键缺失，回退是常态，不打日志
+        if lang != "en":
+            text = _lookup(key, "en")
+        if text is None:
+            text = _lookup(key, DEFAULT_LANG)
     if text is None:
         warn("[i18n] 连简中都没有这句话：" + key)
         return key
@@ -121,6 +214,7 @@ def reload_tables() -> None:
     """丢掉缓存，重新读盘（改完翻译不用重启服务）。"""
     table.cache_clear()
     _lookup.cache_clear()
+    available_langs.cache_clear()
 
 
 @lru_cache(maxsize=1024)
@@ -134,8 +228,10 @@ def t_list(key: str, lang: str = DEFAULT_LANG) -> list:
     lang = normalize_lang(lang)
     value = _lookup_list(key, lang)
     if value is None and lang != DEFAULT_LANG:
-        warn("[i18n] " + lang + " 缺这组句子，回退简中：" + key)
-        value = _lookup_list(key, DEFAULT_LANG)
+        if lang != "en":
+            value = _lookup_list(key, "en")
+        if value is None:
+            value = _lookup_list(key, DEFAULT_LANG)
     if value is None:
         warn("[i18n] 连简中都没有这组句子：" + key)
         return []

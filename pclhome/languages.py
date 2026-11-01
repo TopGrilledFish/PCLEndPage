@@ -3,10 +3,11 @@
 
 个性设置页里那个「语言」入口点进来就是这里：一张语言清单加一个搜索框。
 
-**真能切的只有三种**（简中 / 繁中 / 英文）——只有这三种手上有完整词条
-（见 ``i18n``）。清单里其它语言列出来备查：一套词条 744 个键，没有翻译
-就是没有，做成点了没反应的按钮更骗人，所以未支持的那些只显示名字、点不动，
-页面上也写清楚了。
+清单里每一种语言都**真能切**：``pclhome/i18n/<code>.json`` 一个文件一种语言。
+简中 / 繁中 / 英文是完整词条（七百多个键），其余每种只翻「核心键」
+（``i18n.CORE_KEYS``，主页标题、按钮、语言页、访问页这些一眼能看到的），
+剩下的键运行时回退成英文再回退简中——所以切过去不会有一大片空白，
+只是深层页面还留着英文。
 """
 from __future__ import annotations
 
@@ -14,18 +15,22 @@ import json
 from urllib.parse import parse_qs, unquote
 
 from . import palette, profiles
-from .i18n import LANGS, LANG_NAMES, t
+from .i18n import (available_langs, is_supported, lang_name, lang_name_en,
+                   lang_name_zh, t)
 from .log import warn
-from .xaml import (ICON_BACK, ICON_KEY, attr, bind_to, escape_attr,
-                   escape_url_attr, heading, help_button, input_row, nav_row, note)
+from .xaml import (ICON_BACK, ICON_LANG, ICON_SEARCH, attr, bind_to,
+                   escape_attr, escape_url_attr, heading, help_button,
+                   input_row, nav_row, note)
 
 _META = {"/language_page.json": ("language.title", "language.desc")}
 _DO = {"/language_page.xaml"}
 LANGUAGE_PATHS = set(_META) | _DO
 
-#: 清单：(语言代码, 本地写法, 中文名, 英文名)。前三个是真能切的，其余按常见度排。
+#: 清单：(语言代码, 本地写法, 中文名, 英文名)。前三个是完整词条，其余按常见度排。
 #: 别改成按字母排——中文用户找「日本語」比找 "ja" 快。
 #: 英文页面上只写英文名（``_display`` 管这个）：英文页里冒出汉字会被体检拦下。
+#: 显示名以语言包里的 ``_name`` / ``_name_zh`` / ``_name_en`` 为准（``_display``），
+#: 这里的第 2~4 列只是兜底，也是搜索时要匹配的词。
 LANGUAGES = [
     ("zh-hans", "简体中文", "简体中文", "Chinese (Simplified)"),
     ("zh-hant", "繁體中文", "繁体中文", "Chinese (Traditional)"),
@@ -104,12 +109,31 @@ LANGUAGES = [
     ("la", "Latina", "拉丁语", "Latin"),
 ]
 
-#: 语言代码 -> (本地写法, 中文名, 英文名)
+#: 语言代码 -> (本地写法, 中文名, 英文名)，静态清单那三列
 BY_CODE = {item[0]: item[1:] for item in LANGUAGES}
+
+#: 支持的按钮一行放几个（跟关于卡那排按钮同款栅格）
+_PER_ROW = 4
 
 
 def _is_en(lang: str) -> bool:
     return str(lang or "").lower().startswith("en")
+
+
+def _all_codes() -> list:
+    """全部语言代码：清单顺序在前，语言包里有但清单没列到的补在最后。"""
+    listed = [item[0] for item in LANGUAGES]
+    seen = set(listed)
+    return listed + [code for code in available_langs() if code not in seen]
+
+
+def _entry(code: str) -> tuple:
+    """(代码, 本地写法, 中文名, 英文名)：以语言包里的 ``_name*`` 为准。"""
+    fallback = BY_CODE.get(code, ("", "", ""))
+    native = lang_name(code) or fallback[0] or code
+    zh = lang_name_zh(code) or fallback[1] or native
+    en = lang_name_en(code) or fallback[2] or native
+    return (code, native, zh, en)
 
 
 def _display(code: str, lang: str) -> str:
@@ -118,10 +142,7 @@ def _display(code: str, lang: str) -> str:
     中文/繁体页用中文名，英文页用英文名——英文页里出现汉字会被
     ``doctor`` 的"英文页不许有中文"拦下来，而且老外也确实看不懂。
     """
-    entry = BY_CODE.get(code)
-    if not entry:
-        return code
-    native, zh, en = entry
+    _code, native, zh, en = _entry(code)
     if _is_en(lang):
         return en if en != native else native
     return zh if zh != native else native
@@ -143,21 +164,18 @@ def parse_query(query: str) -> dict:
 
 def search(keyword: str) -> list:
     """按代码 / 本地写法 / 中文名 / 英文名过滤；空关键词返回全部。"""
+    everything = [_entry(code) for code in _all_codes()]
     text = (keyword or "").strip().lower()
     if not text:
-        return list(LANGUAGES)
-    return [item for item in LANGUAGES
+        return everything
+    return [item for item in everything
             if text in item[0].lower() or text in item[1].lower()
             or text in item[2].lower() or text in item[3].lower()]
 
 
-def _supported(code: str) -> bool:
-    return code in LANGS
-
-
 def _current_block(lang: str, result: str) -> str:
     rows = ['<TextBlock Text="'
-            + attr(t("language.current", lang, language=LANG_NAMES.get(lang, lang)))
+            + attr(t("language.current", lang, language=_display(lang, lang)))
             + '" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,5" '
             'Foreground="{DynamicResource ColorBrush2}" />']
     if result:
@@ -167,17 +185,35 @@ def _current_block(lang: str, result: str) -> str:
             'Margin="0,10,0,0"><StackPanel>' + "".join(rows) + "</StackPanel></Border>")
 
 
-def _entry_row(item, lang: str, base: str, current: bool) -> str:
+def _entry_button(item, lang: str, base: str, column: int, current: bool) -> str:
     """一个语言按钮（只用于已支持的），当前那个打勾并点亮。"""
     code = item[0]
     label = ("✓ " if current else "") + _display(code, lang)
-    return help_button(label, ICON_KEY, base + "/language_page.json?lang=" + code, 38,
-                       margin="0,0,6,6", color="Highlight" if current else "")
+    return help_button(label, ICON_LANG, base + "/language_page.json?lang=" + code, 38,
+                       column=column, margin="0,0,6,0",
+                       color="Highlight" if current else "")
+
+
+def _entry_grid(items: list, lang: str, base: str, current: str) -> str:
+    """语言按钮铺成等宽网格：一行 ``_PER_ROW`` 个，竖排太占地方。"""
+    if not items:
+        return ""
+    rows = []
+    for start in range(0, len(items), _PER_ROW):
+        chunk = items[start:start + _PER_ROW]
+        rows.append('<Grid Margin="0,' + ("6" if start else "4") + ',0,0">'
+                    '<Grid.ColumnDefinitions>'
+                    + '<ColumnDefinition Width="1*" />' * _PER_ROW
+                    + '</Grid.ColumnDefinitions>'
+                    + "".join(_entry_button(item, lang, base, index, item[0] == current)
+                              for index, item in enumerate(chunk))
+                    + '</Grid>')
+    return "".join(rows)
 
 
 def _plain_row(item, lang: str) -> str:
     """未支持的语言：一行灰字，不做按钮——点不动的东西做成按钮是骗点击。"""
-    code, native, _zh, _en = item
+    code, native = item[0], item[1]
     name = _display(code, lang)
     # 本地写法只在跟显示名不一样时补一句，英文页那行就不带汉字了
     extra = native if (not _is_en(lang) and native != name) else code
@@ -200,25 +236,25 @@ def build_language_page(base_url: str, ip: str = "", query: str = "",
 
     wanted = (params.get("lang") or "").strip()
     if wanted:
-        if _supported(wanted):
+        if is_supported(wanted):
             if not lang:
                 profiles.PROFILES.bind(ip, lang=wanted)
             current = wanted
             result = t("language.switched", current,
-                       language=LANG_NAMES.get(current, current))
+                       language=_display(current, current))
         else:
-            label = _display(wanted, current) if wanted in BY_CODE else wanted
+            label = _display(wanted, current) if is_supported(wanted) else wanted
             result = t("language.unsupported_click", current, language=label)
 
     keyword = (params.get("q") or "").strip()
     matched = search(keyword)
-    supported = [item for item in matched if _supported(item[0])]
-    others = [item for item in matched if not _supported(item[0])]
+    supported = [item for item in matched if is_supported(item[0])]
+    others = [item for item in matched if not is_supported(item[0])]
 
     body = [heading(t("language.current_title", current), "0,20,0,0"),
             _current_block(current, result),
             input_row("langq", t("language.search_hint", current), 38, "0,14,0,0"),
-            help_button(t("language.search_button", current), ICON_KEY,
+            help_button(t("language.search_button", current), ICON_SEARCH,
                         bind_to("langq", base, "/language_page.json"), 38, margin="0,8,0,0")]
 
     if keyword:
@@ -232,10 +268,7 @@ def build_language_page(base_url: str, ip: str = "", query: str = "",
 
     if supported:
         body.append(heading(t("language.supported_title", current, n=len(supported)), "0,20,0,0"))
-        body.append('<StackPanel Margin="0,4,0,0">'
-                    + "".join(_entry_row(item, current, base, item[0] == current)
-                              for item in supported)
-                    + "</StackPanel>")
+        body.append(_entry_grid(supported, current, base, current))
 
     if others:
         body.append(heading(t("language.others_title", current, n=len(others)), "0,20,0,0"))
@@ -272,7 +305,7 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
     if path in _META:
         params = parse_query(query)
         wanted = (params.get("lang") or "").strip()
-        lang = wanted if _supported(wanted) else profiles.lang_for(ip)
+        lang = wanted if is_supported(wanted) else profiles.lang_for(ip)
         title_key, desc_key = _META[path]
         return _json_response(json.dumps(
             {"Title": t(title_key, lang), "Description": t(desc_key, lang)},
