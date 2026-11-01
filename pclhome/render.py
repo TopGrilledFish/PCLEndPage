@@ -231,8 +231,9 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
                 + ' EventType="打开网页" EventData="' + escape_url_attr(url) + '" />')
 
     def page_button(text: str, url: str, logo: str) -> str:
-        """翻 PCL 内页的按钮（「打开帮助」）。整行宽、单独一行——它是这张卡的出口。"""
-        return ('<local:MyIconTextButton HorizontalAlignment="Stretch" Height="40" Text="'
+        """翻 PCL 内页的按钮（「打开帮助」）。居中、按内容宽度——撑满整行看着像横幅，
+        和上面那排按钮也不是一个体量。"""
+        return ('<local:MyIconTextButton HorizontalAlignment="Center" Height="38" Text="'
                 + escape_attr(text) + '" LogoScale="0.85" Logo="' + logo
                 + '" EventType="打开帮助" EventData="' + escape_url_attr(url) + '" />')
 
@@ -267,11 +268,12 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         + link_button(t("home.footer_sponsor", lang), SPONSOR_URL, "", "Highlight",
                       logo=ICON_HEART, column=3)
         + "</Grid>"
-        # 最后单独一行：访问统计内页（PCL 里翻页，不开浏览器）。整行宽——它是这张卡
-        # 里唯一"进去看数据"的动作，跟上面那排链接性质不同，所以另起一行当出口。
-        + '<StackPanel Margin="0,10,0,0">'
+        # 最后单独一行：访问统计内页（PCL 里翻页，不开浏览器）。包一层 Grid 再让
+        # 按钮 Center——直接塞进 StackPanel 的话 PCL 那边按内容宽度排布，按钮会贴在
+        # 左边而不是中间（实测过）。宽度跟着文字走，不撑满整行。
+        + '<Grid Margin="0,10,0,0">'
         + page_button(t("home.footer_browse", lang), base + "/visit_page.json", ICON_CHART)
-        + "</StackPanel></StackPanel></local:MyCard>")
+        + "</Grid></StackPanel></local:MyCard>")
 
 
 # ============ 替换 ============

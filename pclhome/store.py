@@ -216,11 +216,16 @@ class Stats:
                         "SELECT ip, COALESCE(country,'XX'), TRIM(COALESCE(city,'')), "
                         "TRIM(COALESCE(province,'')), ts "
                         "FROM visits WHERE ts >= ? ORDER BY ts DESC LIMIT 20", (cutoff,)).fetchall()
-                    # 省份分布：中国地图按省涂色用，只算填了省份的记录
+                    # 省份分布：中国地图按省涂色用，只算填了省份的记录。
+                    # 限定国内（港澳台算国内）：定位接口对境外也会给省/州，
+                    # 不放行的话美国的"加州"、日本的"东京都"都会被当成省份
+                    # 排进地图排行里——地图上没这两个省，排行里却有，很怪。
                     provinces = cur.execute(
                         "SELECT TRIM(province) p, COUNT(*) n FROM visits "
                         "WHERE ts >= ? AND COALESCE(TRIM(province),'') <> '' "
-                        "GROUP BY p ORDER BY n DESC", (cutoff,)).fetchall()
+                        "AND COALESCE(country,'XX') IN (?,?,?,?) "
+                        "GROUP BY p ORDER BY n DESC",
+                        (cutoff, "CN", "HK", "MO", "TW")).fetchall()
                     # 按北京时间切天：ts 是 UTC 毫秒，加 8 小时再整除一天的毫秒数
                     trend_rows = cur.execute(
                         "SELECT ((ts + 28800000) / 86400000) d, COUNT(*) n FROM visits "

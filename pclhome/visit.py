@@ -127,7 +127,12 @@ def _levels(provinces) -> dict:
 # ============ 各个板块 ============
 
 def _kpi_card(column: int, label: str, value: str, margin: str) -> str:
-    return ('<Border Grid.Column="' + str(column) + '" Margin="' + margin + '" '
+    # Margin 传空串时属性整条不能写：WPF 的 ThicknessConverter 见到 Margin="" 会抛
+    # FormatException（"值无效。它必须包括一个、两个或四个分隔的长度"），整页 XAML 直接崩。
+    attrs = ' Grid.Column="' + str(column) + '"'
+    if margin:
+        attrs += ' Margin="' + margin + '"'
+    return ('<Border' + attrs + ' '
             'Background="{DynamicResource ColorBrush7}" CornerRadius="8" Padding="12,10,12,11">'
             "<StackPanel>"
             '<TextBlock Text="' + escape_attr(label) + '" FontSize="10" TextWrapping="Wrap" '

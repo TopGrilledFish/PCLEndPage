@@ -105,6 +105,11 @@ EXPECTED_COUNTS = {
 }
 
 # Custom.xaml 由 PCL 注入命名空间，本地校验时补上
+# 只盯"空值会抛异常"的那些属性：Thickness 系（Margin="" → FormatException）、
+# 数值系（Width="" → 转换失败）。Text="" 是合法空字符串，不在列。
+_EMPTY_ATTR_RE = re.compile(
+    r'\s(Margin|Padding|BorderThickness|CornerRadius|Width|Height|MinWidth|MinHeight'
+    r'|MaxWidth|MaxHeight|FontSize|Opacity|RadiusX|RadiusY|StrokeThickness|LineHeight)=""')
 _XAML_ROOT_NS = ('xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" '
                  'xmlns:sys="clr-namespace:System;assembly=mscorlib" '
                  'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" '
@@ -1099,6 +1104,20 @@ def check_rendered(report: Report, config: Config) -> None:
         else:
             report.good("配色角色号干净（" + str(len(bodies)) + " 个页面只用到 "
                         + "/".join(str(n) for n in sorted(pal.ROLE_BRUSH.values())) + "）")
+
+        # 空属性值：WPF 的 ThicknessConverter 见到 Margin="" 会抛 FormatException，
+        # PCL 那边整页报「加载帮助 XAML 失败：值无效。它必须包括一个、两个或四个分隔的长度」。
+        # 2026-11-01 访问浏览页的 KPI 卡就这么把整页搞崩过，这里守一道。
+        empty = []
+        for label, body in bodies:
+            names = sorted(set(_EMPTY_ATTR_RE.findall(body)))
+            if names:
+                empty.append((label, names))
+        if empty:
+            report.bad("页面里有空属性值（WPF 会抛 FormatException，PCL 整页加载失败）："
+                       + "；".join(label + " " + ",".join(names) for label, names in empty[:4]))
+        else:
+            report.good("页面没有空的属性值（Margin=\"\" 之类会让 PCL 整页报错）")
 
         # 换号本身：挑一档把四个角色换到四个不同的号，确认换得干净
         chosen = {"panel": 8, "text": 3, "muted": 5, "dim": 4}
