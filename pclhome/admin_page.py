@@ -585,6 +585,14 @@ function kpi(label, value, note, tone) {
     esc(value) + "</b><em>" + esc(note || "") + "</em></div>";
 }
 
+// token 数量级差得多：60k 比 60000 好读，1.2k 比 1234 好读。
+function shortTokens(n) {
+  const v = Number(n) || 0;
+  if (v >= 10000) return Math.round(v / 1000) + "k";
+  if (v >= 1000) return (v / 1000).toFixed(1) + "k";
+  return String(v);
+}
+
 function rankRows(items, total, max) {
   if (!items.length) return '<div class="hint">还没有数据</div>';
   return '<div class="rank">' + items.map((item) => {
@@ -767,7 +775,7 @@ RENDER.overview = function () {
         '<div class="hint">维护模式会让除白名单外的访客看到"服务器正在更新"。</div>' +
         '<div class="kv">' +
           '<div class="i"><span>运行时长</span><b>' + esc(S.info.uptime || "—") + "</b></div>" +
-          '<div class="i"><span>AI 调用</span><b>' + esc(ai.enabled ? (ai.calls || 0) + " 次" : "未开启") + "</b></div>" +
+          '<div class="i"><span>AI 调用</span><b>' + esc(ai.enabled ? (ai.calls || 0) + " 次 · " + shortTokens(ai.tokens) : "未开启") + "</b></div>" +
           '<div class="i"><span>公告</span><b>' + (bannerCount() ? bannerCount() + " 条轮播" : "未设置") + "</b></div>" +
           '<div class="i"><span>白名单</span><b>' + allowed().length + " 个 IP</b></div>" +
         "</div>") +
@@ -901,23 +909,32 @@ RENDER.ai = function () {
       '<div class="note">config.json 里把 <b>enable_ai</b> 设为 true，并填上 <b>ai_api_key</b> 后重启服务才会生效。</div>');
   }
   const rows = ai.rows || [];
-  const win = ai.window_text || (ai.window === "day" ? "每天" : "每小时");
-  const period = ai.window === "day" ? "今天" : "本小时";
+  const win = ai.window_text || "5 小时";
+  const period = "本" + win;
+  // token 数量级差得多，统一缩成「1.2k / 60k」，表格宽度才稳。
+  const fmt = (n) => {
+    const v = Number(n) || 0;
+    if (v >= 10000) return Math.round(v / 1000) + "k";
+    if (v >= 1000) return (v / 1000).toFixed(1) + "k";
+    return String(v);
+  };
+  const capped = ai.limit > 0;
+  const peak = ai.peak ? "高峰 ×" + (ai.peak_factor || 2) : "空闲 ×1";
   const table = rows.length
-    ? '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>IP</th><th>' + esc(period) + "用了</th><th>额度</th><th></th></tr></thead><tbody>" +
-        rows.map((r) => '<tr><td class="mono">' + esc(r.ip) + '</td><td class="num">' + r.used + " / " + ai.limit +
-          '</td><td><span class="tag" style="height:22px">' + (r.used >= ai.limit ? "已用完" : "可用") + "</span></td>" +
+    ? '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>IP</th><th>' + esc(period) + "token</th><th>额度</th><th></th></tr></thead><tbody>" +
+        rows.map((r) => '<tr><td class="mono">' + esc(r.ip) + '</td><td class="num">' + fmt(r.used) + " / " + (capped ? fmt(ai.limit) : "不限") +
+          '</td><td><span class="tag" style="height:22px">' + (capped && r.used >= ai.limit ? "已用完" : "可用") + "</span></td>" +
           '<td><button class="btn ghost sm" data-act="ai-reset-ip" data-ip="' + esc(r.ip) + '">重置</button></td></tr>').join("") +
         "</tbody></table></div>"
     : '<div class="empty">' + esc(period) + "还没有人用过</div>";
 
   return card("AI 分析", esc(ai.model || ""), '<div class="kpi">' +
-      kpi(period + "调用", ai.calls || 0, "共 " + rows.length + " 个 IP") +
+      kpi(period + "用量", fmt(ai.tokens || 0) + (capped ? " / " + fmt(ai.limit) : " token"), peak) +
+      kpi("调用次数", ai.calls || 0, "共 " + rows.length + " 个 IP") +
       kpi("运行中", ai.running || 0, "正在分析") +
-      kpi("留存记录", ai.jobs || 0, "分析结果") +
       kpi("私人密钥", ai.own_keys || 0, "访客自带") +
     "</div>" +
-    '<div class="hint">接口 <b>' + esc(ai.base || "") + "</b> · 每个 IP " + esc(win) + " " + ai.limit + " 次 · 时间窗 " + esc(ai.bucket || "") + "</div>" +
+    '<div class="hint">接口 <b>' + esc(ai.base || "") + "</b> · 每个 IP " + esc(win) + " " + (capped ? fmt(ai.limit) + " token" : "不限额度") + " · 当前 " + esc(peak) + " · 窗口 " + esc(ai.bucket || "") + "</div>" +
     (rows.length ? table : "") +
     '<div class="btn-row" style="margin-top:4px">' +
       '<button class="btn ghost" data-act="ai-reset" data-scope="quota">重置' + esc(period) + "用量</button>" +

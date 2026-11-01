@@ -131,6 +131,8 @@ ENV_MAP = {
     "PCLHOME_AI_MODEL": ("ai_model", str),
     "PCLHOME_AI_LIMIT": ("ai_rate_limit", int),
     "PCLHOME_AI_WINDOW": ("ai_rate_window", str),
+    "PCLHOME_AI_TOKEN_LIMIT": ("ai_token_limit", int),
+    "PCLHOME_AI_TOKEN_HOURS": ("ai_token_window_hours", float),
     "PCLHOME_WALLPAPER": ("enable_wallpaper", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_SAYING": ("enable_saying", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_UAPI_KEY": ("uapi_key", str),
@@ -187,18 +189,27 @@ class Config:
     ai_api_base: str = AI_API_BASE   # 接口地址，末尾不要带 /
     ai_api_key: str = ""             # 站长内置密钥
     ai_model: str = AI_MODEL
-    # 内置密钥的额度：每 ai_rate_window（"hour" / "day"）每 IP 几次，按北京时间算。
-    # 额度桶的键就是"当前是哪个小时/哪一天"，所以改窗口不用动数据库结构。
-    ai_rate_limit: int = 3
-    ai_rate_window: str = "hour"     # hour / day，认不出的值一律当 hour
+    # 内置密钥的额度：**按 token 算**，每 ai_token_window_hours 小时每 IP 多少 token。
+    # ai_rate_limit 退居次数兜底（防有人拿一堆小请求刷日志），0 表示不限次数。
+    # 额度桶的键就是"当前是哪个窗口"，所以改窗口长度不用动数据库结构。
+    ai_token_limit: int = 60000       # 每窗口 token 额度（高峰时段按 ai_peak_multiplier 倍计）
+    ai_token_window_hours: float = 5.0   # 窗口长度（小时）
+    ai_reserve_tokens: int = 8000     # 每次请求先预留这么多，结算时按实际用量找零
+    ai_peak_multiplier: float = 2.0   # DeepSeek 高峰时段（北京时间 8:30–次日 0:30）加权
+    ai_rate_limit: int = 20           # 次数兜底：每窗口最多几次，0 = 不限
+    ai_rate_window: str = "hour"      # 老字段，仅用于兼容旧配置和后台文案
     ai_free_ips: list = field(default_factory=list)   # 这些 IP 用内置密钥不计数
-    ai_max_log_chars: int = 40000    # 送给 AI 的日志上限（超长掐中间）
+    ai_max_log_chars: int = 24000     # 送给 AI 的日志上限（超长掐中间）
     # 回复长度上限。**不能给小**：deepseek-flash / v4-pro 都是推理模型，
     # 先花 token 思考再写答案，上限太小的话 token 全耗在思考上，答案就是空的。
     # 实测一条崩溃日志要 ~700 思考 + ~500 答案，这里留足余量。
     ai_max_tokens: int = 4000
-    ai_timeout: float = 120.0        # AI 调用超时，比普通接口长得多
-    ai_refund_on_failure: bool = True  # 抓日志/AI 调用失败时退还当天次数
+    # 推理强度：low / medium / high（deepseek 的 reasoning_effort）；空字符串 = 不发这个参数。
+    # 开 low 是为了把 token 留给答案而不是思考——崩溃日志分析不需要长考。
+    ai_reasoning_effort: str = "low"
+    ai_reasoning_max_chars: int = 2600   # 推理过程在页面上最多显示多少字
+    ai_timeout: float = 120.0         # AI 调用超时，比普通接口长得多
+    ai_refund_on_failure: bool = True  # 抓日志/AI 调用失败时退还额度
     # 结果页脚里点名的模型（公用密钥那一档）。改成厂商的宣传名即可。
     ai_display_name: str = "DeepSeek V4 Flash"
     max_retries: int = 2
@@ -253,6 +264,45 @@ class Config:
     def ai_window_text(self) -> str:
         """给日志和后台看的中文窗口名。"""
         return "每天" if self.ai_window() == "day" else "每小时"
+
+    def ai_window_seconds(self) -> int:
+        """token 额度窗口的秒数。0 或负数一律按 5 小时算，别把额度变成无限。"""
+        try:
+            hours = float(self.ai_token_window_hours or 5)
+        except (TypeError, ValueError):
+            hours = 5.0
+        if hours <= 0:
+            hours = 5.0
+        return max(600, int(hours * 3600))
+
+    def ai_window_label(self, lang: str = "") -> str:
+        """窗口长度的人话，比如「5 小时」/「5 hours」。整数就去掉小数点。
+
+        中文以外的界面统一说 hours——小语种本来就没翻这一页，
+        显示中文量词比显示英文更难看懂。
+        """
+        seconds = self.ai_window_seconds()
+        hours = seconds / 3600
+        number = (str(int(round(hours))) if abs(hours - round(hours)) < 0.01
+                  else str(round(hours, 1)))
+        if str(lang).lower().startswith("zh"):
+            return number + " 小时"
+        return number + (" hour" if abs(hours - 1) < 0.01 else " hours")
+
+    def ai_token_limit_or_zero(self) -> int:
+        """额度值：负数当 0（关掉额度），0 也当不限量。"""
+        try:
+            return max(0, int(self.ai_token_limit or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def ai_peak_factor(self) -> float:
+        """高峰时段的加权倍数，至少 1。"""
+        try:
+            factor = float(self.ai_peak_multiplier or 1)
+        except (TypeError, ValueError):
+            factor = 1.0
+        return max(1.0, factor)
 
 
 def site_slug(site: dict) -> str:

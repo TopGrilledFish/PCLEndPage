@@ -287,7 +287,10 @@ def _service_info(service) -> dict:
         "ai": {
             "enabled": config.enable_ai,
             "model": config.ai_model,
-            "rate": str(config.ai_rate_limit) + " 次 / " + config.ai_window_text(),
+            "rate": (str(config.ai_token_limit_or_zero()) + " token / "
+                     + config.ai_window_label("zh-hans")
+                     + "，高峰 " + str(int(config.ai_peak_factor())) + " 倍"
+                     if config.ai_token_limit_or_zero() > 0 else "不限额度"),
             "base": config.ai_api_base,
         },
         "paths": {
@@ -580,7 +583,7 @@ def handle(service, handler, path: str, query: str):
             return _json({"ok": False, "error": "bad_scope"}, 400)
         return _json({"ok": True, "scope": scope,
                       "result": ai.reset(scope, str(body.get("ip") or ""),
-                                         config.ai_window())})
+                                         config=config)})
 
     if action == "ai_log":
         """最近的分析记录：谁、什么时候、用哪把密钥、分析了什么、成没成。"""

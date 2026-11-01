@@ -69,7 +69,13 @@ def normalize_log_url(url: str) -> str:
 
 
 class Quota:
+    """按 IP + 时间窗口记 **token 额度** 和调用次数。
 
+    以前这里记的是「用了几次」，现在记的是「用掉多少 token」——
+    一条塞满 40KB 的日志和一条十行报错，本来就不该算同一个价。
+    ``used`` 存的是**加权后**的 token（高峰期会被乘上 ``ai_peak_multiplier``），
+    所以额度判断不需要知道当时是不是高峰。
+    """
 
     def __init__(self, path: Path | None = None):
         self.path = path or STATS_DB
@@ -84,52 +90,100 @@ class Quota:
             if columns and "bucket" not in columns:
                 print("[AI] ai_usage 是旧的按天结构，重建为按额度窗口计数")
                 conn.execute("DROP TABLE ai_usage")
+                columns = set()
             conn.execute("CREATE TABLE IF NOT EXISTS ai_usage ("
                          "ip TEXT NOT NULL, bucket TEXT NOT NULL, "
-                         "used INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL, "
+                         "used INTEGER NOT NULL DEFAULT 0, "
+                         "calls INTEGER NOT NULL DEFAULT 0, "
+                         "ts INTEGER NOT NULL, "
                          "PRIMARY KEY (ip, bucket))")
+            if columns and "calls" not in columns:
+                conn.execute("ALTER TABLE ai_usage ADD COLUMN calls INTEGER NOT NULL DEFAULT 0")
             conn.commit()
             self._ready = True
         return conn
 
     def used(self, ip: str, bucket: str) -> int:
+        """已经用掉的加权 token。"""
+        return self._read(ip, bucket)[0]
+
+    def calls(self, ip: str, bucket: str) -> int:
+        """这个窗口里已经调用过几次。"""
+        return self._read(ip, bucket)[1]
+
+    def _read(self, ip: str, bucket: str) -> tuple[int, int]:
         try:
             with self._lock:
                 conn = self._connect()
                 try:
-                    row = conn.execute("SELECT used FROM ai_usage WHERE ip=? AND bucket=?",
-                                       (ip, bucket)).fetchone()
-                    return int(row[0]) if row else 0
+                    row = conn.execute(
+                        "SELECT used, calls FROM ai_usage WHERE ip=? AND bucket=?",
+                        (ip, bucket)).fetchone()
+                    return (int(row[0]), int(row[1])) if row else (0, 0)
                 finally:
                     conn.close()
         except Exception as exc:
             warn("[AI] 读额度失败：" + str(exc))
-            return 0
+            return 0, 0
 
-    def consume(self, ip: str, bucket: str, limit: int) -> bool:
+    def reserve(self, ip: str, bucket: str, amount: int,
+                limit: int, max_calls: int = 0) -> tuple[bool, str, int]:
+        """先预扣一笔再调用（token 只有调完才知道，不预留会被并发穿透）。
+
+        返回 ``(是否放行, 拒绝原因, 实际预扣的 token)``；原因取
+        ``token`` / ``calls`` / ``error``，用来给用户挑不同的提示。
+        """
+        want = max(1, int(amount or 1))
         try:
             with self._lock:
                 conn = self._connect()
                 try:
                     conn.execute("BEGIN IMMEDIATE")
-                    row = conn.execute("SELECT used FROM ai_usage WHERE ip=? AND bucket=?",
-                                       (ip, bucket)).fetchone()
-                    used = int(row[0]) if row else 0
-                    if used >= limit:
+                    row = conn.execute(
+                        "SELECT used, calls FROM ai_usage WHERE ip=? AND bucket=?",
+                        (ip, bucket)).fetchone()
+                    used, calls = (int(row[0]), int(row[1])) if row else (0, 0)
+                    if max_calls > 0 and calls >= max_calls:
                         conn.rollback()
-                        return False
+                        return False, "calls", 0
+                    if limit > 0 and used >= limit:
+                        conn.rollback()
+                        return False, "token", 0
+                    take = want
+                    if limit > 0:
+                        # 剩余不多时只预扣剩下的，别把「最后一次」也挡在门外
+                        take = max(1, min(want, limit - used))
                     now = int(time.time())
                     conn.execute(
-                        "INSERT INTO ai_usage (ip, bucket, used, ts) VALUES (?, ?, 1, ?) "
-                        "ON CONFLICT(ip, bucket) DO UPDATE SET used = used + 1, ts = ?",
-                        (ip, bucket, now, now))
+                        "INSERT INTO ai_usage (ip, bucket, used, calls, ts) VALUES (?, ?, ?, 1, ?) "
+                        "ON CONFLICT(ip, bucket) DO UPDATE SET "
+                        "used = used + ?, calls = calls + 1, ts = ?",
+                        (ip, bucket, take, now, take, now))
                     conn.commit()
-                    return True
+                    return True, "", take
                 finally:
                     conn.close()
         except Exception as exc:
             warn("[AI] 扣额度失败：" + str(exc))
-            return False
+            return False, "error", 0
+
+    def settle(self, ip: str, bucket: str, reserved: int, actual: int) -> None:
+        """调用完按实际用量找零：``used = used - 预留 + 实际``。"""
+        delta = int(actual or 0) - int(reserved or 0)
+        if delta == 0:
+            return
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    conn.execute(
+                        "UPDATE ai_usage SET used = MAX(0, used + ?), ts = ? "
+                        "WHERE ip=? AND bucket=?", (delta, int(time.time()), ip, bucket))
+                    conn.commit()
+                finally:
+                    conn.close()
+        except Exception as exc:
+            warn("[AI] 结算额度失败：" + str(exc))
 
     def rows_for(self, bucket: str) -> list[dict]:
         try:
@@ -137,9 +191,10 @@ class Quota:
                 conn = self._connect()
                 try:
                     rows = conn.execute(
-                        "SELECT ip, used, ts FROM ai_usage WHERE bucket=? "
+                        "SELECT ip, used, calls, ts FROM ai_usage WHERE bucket=? "
                         "ORDER BY used DESC, ts DESC", (bucket,)).fetchall()
-                    return [{"ip": r[0], "used": int(r[1]), "ts": int(r[2])} for r in rows]
+                    return [{"ip": r[0], "used": int(r[1]), "calls": int(r[2]),
+                             "ts": int(r[3])} for r in rows]
                 finally:
                     conn.close()
         except Exception as exc:
@@ -168,13 +223,16 @@ class Quota:
             warn("[AI] 重置用量失败：" + str(exc))
             return 0
 
-    def refund(self, ip: str, bucket: str) -> None:
+    def refund(self, ip: str, bucket: str, amount: int = 0) -> None:
+        """整笔退回：token 归零那一部分 + 次数减一。"""
         try:
             with self._lock:
                 conn = self._connect()
                 try:
-                    conn.execute("UPDATE ai_usage SET used = used - 1 "
-                                 "WHERE ip=? AND bucket=? AND used > 0", (ip, bucket))
+                    conn.execute(
+                        "UPDATE ai_usage SET used = MAX(0, used - ?), "
+                        "calls = MAX(0, calls - 1), ts = ? WHERE ip=? AND bucket=?",
+                        (max(0, int(amount or 0)), int(time.time()), ip, bucket))
                     conn.commit()
                 finally:
                     conn.close()
@@ -192,6 +250,72 @@ def beijing_bucket(window: str, ts: float | None = None) -> str:
 
 def beijing_day(ts: float | None = None) -> str:
     return beijing_bucket("day", ts)
+
+
+BEIJING_OFFSET = 8 * 3600
+
+
+def _window_slot(config: Config, moment: float) -> tuple[int, int, int]:
+    """把时刻切成「北京时间的第几天 + 当天第几格」，返回 ``(天, 第几格, 格秒数)``。
+
+    从当天 0 点起算，窗口边界就落在 00:00 / 05:00 / 10:00 …… 这种整点上——
+    直接拿 epoch 整除 5 小时的话，边界会落在 02:00 这种鬼时间，说明不了也记不住。
+    """
+    seconds = config.ai_window_seconds()
+    local = moment + BEIJING_OFFSET          # 平移到北京时间再算，别受本机时区影响
+    day = int(local // 86400)
+    index = int((local - day * 86400) // seconds)
+    return day, index, seconds
+
+
+def token_bucket(config: Config, ts: float | None = None) -> str:
+    """token 额度窗口的桶键：「第几天-当天第几格」。
+
+    窗口长度可配（默认 5 小时），所以键由配置算出来——改配置不用动表结构。
+    """
+    moment = ts if ts is not None else time.time()
+    day, index, _ = _window_slot(config, moment)
+    return str(day) + "-" + str(index)
+
+
+def bucket_reset_at(config: Config, ts: float | None = None) -> float:
+    """当前窗口什么时候结束（时间戳），给「还剩多久恢复」用。"""
+    moment = ts if ts is not None else time.time()
+    day, index, seconds = _window_slot(config, moment)
+    end = min(day * 86400 + (index + 1) * seconds, (day + 1) * 86400)
+    return end - BEIJING_OFFSET
+
+
+def is_peak(ts: float | None = None) -> bool:
+    """DeepSeek 的高峰时段（北京时间 8:30–次日 0:30）。
+
+    官方按「空闲 / 高峰」两档计价：北京时间 00:30–08:30 是空闲（半价），
+    其余都是高峰。高峰期我们按 ``ai_peak_multiplier`` 倍记额度，
+    这样「高峰期烧得快」在额度上也是诚实的。
+    """
+    moment = datetime.fromtimestamp(ts if ts is not None else time.time(), BEIJING)
+    minutes = moment.hour * 60 + moment.minute
+    return not (30 <= minutes < 510)
+
+
+def peak_factor(config: Config, ts: float | None = None) -> float:
+    return config.ai_peak_factor() if is_peak(ts) else 1.0
+
+
+def usage_tokens(usage: dict | None, config: Config, ts: float | None = None) -> int:
+    """这次调用折算成多少额度（输入+输出，高峰再乘倍数）。"""
+    total = int((usage or {}).get("in") or 0) + int((usage or {}).get("out") or 0)
+    return int(round(total * peak_factor(config, ts)))
+
+
+def format_tokens(count: int) -> str:
+    """60000 -> 60k，1234 -> 1.2k，让页面上的数字别太长。"""
+    number = int(count or 0)
+    if number >= 10000:
+        return str(int(round(number / 1000.0))) + "k"
+    if number >= 1000:
+        return str(round(number / 1000.0, 1)) + "k"
+    return str(number)
 
 
 
@@ -558,13 +682,41 @@ def _parse_anthropic(config: Config, data: dict, lang: str = DEFAULT_LANG) -> tu
                     reason=str(data.get("stop_reason") or t("ai.none", lang)))
 
 
-def analyze(config: Config, log_text: str, key_conf: dict,
+def _reasoning_of(data: dict) -> str:
+    """把模型的思考过程捞出来。
+
+    DeepSeek / 通义这类推理模型把思考放在 ``message.reasoning_content``，
+    有的兼容接口叫 ``reasoning``，Anthropic 是 content 里 type=thinking 的块。
+    拿不到就返回空字符串——页面上就不显示那一块。
+    """
+    try:
+        message = (data.get("choices") or [{}])[0].get("message") or {}
+        for key in ("reasoning_content", "reasoning"):
+            value = message.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        blocks = data.get("content")
+        if isinstance(blocks, list):
+            parts = [str(block.get("thinking") or "")
+                     for block in blocks
+                     if isinstance(block, dict) and block.get("type") == "thinking"]
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+    except Exception:
+        pass
+    return ""
+
+
+def analyze(config: Config, messages: list[dict], key_conf: dict,
             lang: str = DEFAULT_LANG) -> tuple[bool, str, dict]:
     """调 AI。返回 ``(是否成功, 结果或错误说明, 用量)``。
 
+    ``messages`` 是**不带 system** 的对话历史（``[{"role","content"}]``）：
+    第一次是一条 user（日志），追问时后面接着上一轮的 user/assistant。
     ``key_conf`` 里可以带 ``protocol``（openai / anthropic）、``base``、``model``；
     缺哪项就用 config 里的默认值。``lang`` 决定系统提示词——AI 要用访客那种语言回答。
-    第三个返回值是 ``{"in": 输入 token, "out": 输出 token, "ms": 耗时}``，给后台记录用。
+    第三个返回值是 ``{"in", "out", "ms", "reasoning"}``，给后台记录和页面用。
     """
     key = str(key_conf.get("key") or config.ai_api_key)
     if not key:
@@ -575,20 +727,23 @@ def analyze(config: Config, log_text: str, key_conf: dict,
     base = str(key_conf.get("base") or config.ai_api_base)
     model = str(key_conf.get("model") or config.ai_model)
     url = _endpoint(base, protocol)
-    user_content = t("ai.user_prefix", lang) + "\n\n" + log_text
     prompt = system_prompt(lang)
+    turns = [m for m in (messages or []) if isinstance(m, dict) and m.get("content")]
 
     if protocol == "anthropic":
         payload = {"model": model, "max_tokens": config.ai_max_tokens,
-                   "system": prompt,
-                   "messages": [{"role": "user", "content": user_content}]}
+                   "system": prompt, "messages": turns}
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
         parse = _parse_anthropic
     else:
         payload = {"model": model, "max_tokens": config.ai_max_tokens, "temperature": 0.3,
                    "stream": False,
-                   "messages": [{"role": "system", "content": prompt},
-                                {"role": "user", "content": user_content}]}
+                   "messages": [{"role": "system", "content": prompt}] + turns}
+        # 推理强度：low 让模型少想、把 token 留给答案。认不出的值就不发这个参数，
+        # 免得某些兼容接口因为多一个字段直接 400。
+        effort = str(config.ai_reasoning_effort or "").strip().lower()
+        if effort in ("low", "medium", "high"):
+            payload["reasoning_effort"] = effort
         headers = {"Authorization": "Bearer " + key}
         parse = _parse_openai
 
@@ -611,14 +766,59 @@ def analyze(config: Config, log_text: str, key_conf: dict,
           + " tokens，输出 "
           + str(tokens["out"] or "?")
           + " tokens）")
-    return True, result, {"in": tokens["in"], "out": tokens["out"], "ms": elapsed}
+    return True, result, {"in": tokens["in"], "out": tokens["out"],
+                          "ms": elapsed, "reasoning": _reasoning_of(data)}
 
 
 # ============ 提交任务 ============
 
+# 一次分析最多留几轮对话在 job 里（追问用的上下文），太多会撑爆 ai_jobs.json
+HISTORY_MAX_TURNS = 8
+HISTORY_MAX_CHARS = 12000
+
+
+def _trim_history(history: list[dict]) -> list[dict]:
+    """只留最近几轮、总字数也别失控。追问是加分项，不能把磁盘写满。"""
+    turns = [m for m in (history or []) if isinstance(m, dict) and m.get("content")]
+    turns = turns[-HISTORY_MAX_TURNS * 2:]
+    total, kept = 0, []
+    for message in reversed(turns):
+        length = len(str(message.get("content") or ""))
+        if total + length > HISTORY_MAX_CHARS and kept:
+            break
+        kept.append(message)
+        total += length
+    return list(reversed(kept))
+
+
+def _quota_state(config: Config, ip: str, lang: str = DEFAULT_LANG) -> dict:
+    """页面/后台用：这个 IP 在当前窗口的额度状况（不计数的一律返回 unlimited）。"""
+    limit = config.ai_token_limit_or_zero()
+    bucket = token_bucket(config)
+    used = QUOTA.used(ip, bucket)
+    calls = QUOTA.calls(ip, bucket)
+    return {
+        "bucket": bucket,
+        "limit": limit,
+        "used": used,
+        "calls": calls,
+        "left": max(0, limit - used) if limit > 0 else 0,
+        "unlimited": limit <= 0,
+        "percent": (min(100.0, used * 100.0 / limit) if limit > 0 else 0.0),
+        "reset_at": bucket_reset_at(config),
+        "window": config.ai_window_label(lang),
+        "peak": is_peak(),
+        "factor": peak_factor(config),
+    }
+
+
 def submit(config: Config, ip: str, raw_input: str, use_own: bool,
-           lang: str = DEFAULT_LANG) -> tuple[bool, str]:
+           lang: str = DEFAULT_LANG, follow: bool = False) -> tuple[bool, str]:
     """校验 + 扣额度 + 起后台线程。返回 ``(是否受理, 给用户看的说明)``。
+
+    ``follow=True`` 是「对上一个结果追问」：不再抓日志，把上一轮的对话历史
+    接上新问题一起发。追问同样占额度——它比首轮便宜（不用重发整份日志），
+    但也不是白送的。
 
     ``lang`` 一并交给后台线程：结果文字是按**提交时**的语言生成的，
     存进任务记录后就不再变（用户中途换语言不会把已有结果变成另一种文字）。
@@ -630,10 +830,20 @@ def submit(config: Config, ip: str, raw_input: str, use_own: bool,
     if job and job.get("state") == "running":
         return False, t("ai.err.busy", lang)
 
-    kind, value = split_input(raw_input)
-    if kind == "empty":
-        return False, t("ai.err.empty_input", lang)
-    display = value if kind == "url" else t("ai.inline_note", lang, n=len(value))
+    if follow:
+        history = _trim_history((job or {}).get("history") or [])
+        if not history or (job or {}).get("state") != "done":
+            return False, t("ai.err.no_follow", lang)
+        question = (raw_input or "").strip()
+        if not question:
+            return False, t("ai.err.follow_empty", lang)
+        kind, value = "follow", question[:MAX_INLINE_CHARS]
+        display = t("ai.follow_note", lang, n=len(value))
+    else:
+        kind, value = split_input(raw_input)
+        if kind == "empty":
+            return False, t("ai.err.empty_input", lang)
+        display = value if kind == "url" else t("ai.inline_note", lang, n=len(value))
 
     # who 存的是机器可读的标记（own / builtin），显示时才按语言翻——
     # 以前存的是「私人密钥」这种中文，页脚判断直接拿它比字符串。
@@ -653,27 +863,44 @@ def submit(config: Config, ip: str, raw_input: str, use_own: bool,
         if not key_conf["key"]:
             return False, t("ai.err.no_site_key", lang)
 
-    # 私人密钥不占额度；用公用密钥才扣
-    window = config.ai_window()
-    remaining = None
-    if not use_own and ip not in (config.ai_free_ips or []):
-        bucket = beijing_bucket(window)
-        if not QUOTA.consume(ip, bucket, config.ai_rate_limit):
-            return False, t("ai.err.quota_out." + window, lang, n=config.ai_rate_limit)
-        remaining = max(0, config.ai_rate_limit - QUOTA.used(ip, bucket))
+    # 私人密钥不占额度；用公用密钥才扣。token 只能事后知道，所以先预留一笔。
+    bucket = token_bucket(config)
+    reserved = 0
+    counted = not use_own and ip not in (config.ai_free_ips or [])
+    if counted:
+        limit = config.ai_token_limit_or_zero()
+        allowed, reason, reserved = QUOTA.reserve(
+            ip, bucket, config.ai_reserve_tokens, limit, config.ai_rate_limit)
+        if not allowed:
+            state = _quota_state(config, ip, lang)
+            if reason == "calls":
+                return False, t("ai.err.calls_out", lang,
+                                n=config.ai_rate_limit, window=state["window"])
+            return False, t("ai.err.quota_out", lang,
+                            used=format_tokens(state["used"]),
+                            limit=format_tokens(state["limit"]),
+                            window=state["window"])
+        state = _quota_state(config, ip, lang)
+        remaining = state["left"]
+    else:
+        state = _quota_state(config, ip, lang)
+        remaining = None
 
-    out("[AI] " + ip + " 提交分析（" + who + "，" + display + "）")
+    out("[AI] " + ip + " 提交" + ("追问" if follow else "分析")
+        + "（" + who + "，" + display + "）")
     _set_job(ip, state="running", text="", query=display, who=who, lang=lang,
-             remaining=remaining, started=time.time())
+             remaining=remaining, started=time.time(),
+             reasoning="", cost=0, reserved=reserved, follow=follow)
 
     threading.Thread(target=_worker,
-                     args=(config, ip, kind, value, key_conf, use_own, lang),
+                     args=(config, ip, kind, value, key_conf, use_own, lang, reserved, follow),
                      name="ai-" + ip, daemon=True).start()
-    return True, t("ai.submitted", lang)
+    return True, t("ai.follow_submitted" if follow else "ai.submitted", lang)
 
 
 def _worker(config: Config, ip: str, kind: str, value: str,
-            key_conf: dict, use_own: bool, lang: str = DEFAULT_LANG) -> None:
+            key_conf: dict, use_own: bool, lang: str = DEFAULT_LANG,
+            reserved: int = 0, follow: bool = False) -> None:
     """后台干活：抓日志 → 调 AI → 写结果。异常都变成给用户看的说明。
 
     每一条都往 ``var/ai_log.json`` 记一份（成功、失败、抓日志失败都记），
@@ -698,43 +925,67 @@ def _worker(config: Config, ip: str, kind: str, value: str,
 
     started = time.time()
     try:
-        if kind == "url":
-            ok, log_text = fetch_log(config, value, lang)
-            if not ok:
-                note_record(value, False, log_text)
-                _fail(config, ip, use_own, log_text, lang)
-                return
+        previous = _trim_history((get_job(ip) or {}).get("history") or [])
+        if follow:
+            turns = previous + [{"role": "user", "content": value}]
+            input_text = value
+            debug("[AI] " + ip + " 追问：" + value[:80])
         else:
-            log_text = value
+            if kind == "url":
+                ok, log_text = fetch_log(config, value, lang)
+                if not ok:
+                    note_record(value, False, log_text)
+                    _fail(config, ip, use_own, log_text, lang, reserved)
+                    return
+            else:
+                log_text = value
+            input_text = value if kind == "url" else log_text
+            log_text = trim_log(log_text, config.ai_max_log_chars, lang)
+            debug("[AI] " + ip + " 日志 " + str(len(log_text)) + " 字，开始调 " + config.ai_model)
+            turns = [{"role": "user",
+                      "content": t("ai.user_prefix", lang) + "\n\n" + log_text}]
 
-        input_text = value if kind == "url" else log_text
-        log_text = trim_log(log_text, config.ai_max_log_chars, lang)
-        debug("[AI] " + ip + " 日志 " + str(len(log_text)) + " 字，开始调 " + config.ai_model)
-
-        ok, result, usage = analyze(config, log_text, key_conf, lang)
+        ok, result, usage = analyze(config, turns, key_conf, lang)
         ms = int((time.time() - started) * 1000)
         if not ok:
             note_record(input_text, False, result, ms)
-            _fail(config, ip, use_own, result, lang)
+            _fail(config, ip, use_own, result, lang, reserved)
             return
 
-        note_record(input_text, True, result, usage.get("ms") or ms, usage)
-        _set_job(ip, state="done", text=result, error="")
-        out("[AI] " + ip + " 分析完成，结果 " + str(len(result)) + " 字")
+        cost = usage_tokens(usage, config)
+        _settle(config, ip, reserved, cost, use_own)
+        history = _trim_history(turns + [{"role": "assistant", "content": result}])
+        note_record(input_text, True, result, usage.get("ms") or ms,
+                    {"in": usage.get("in") or 0, "out": usage.get("out") or 0})
+        _set_job(ip, state="done", text=result, error="", history=history,
+                 reasoning=str(usage.get("reasoning") or "")[:config.ai_reasoning_max_chars],
+                 cost=int(cost), tokens={"in": usage.get("in") or 0,
+                                         "out": usage.get("out") or 0},
+                 remaining=(None if use_own or ip in (config.ai_free_ips or [])
+                            else _quota_state(config, ip, lang)["left"]))
+        out("[AI] " + ip + " 分析完成，结果 " + str(len(result)) + " 字，"
+            + str(cost) + " 额度")
     except Exception as exc:
         error("[AI] 任务异常：" + repr(exc))
         note_record(value, False, repr(exc))
-        _fail(config, ip, use_own, t("ai.err.crashed", lang, err=str(exc)), lang)
+        _fail(config, ip, use_own, t("ai.err.crashed", lang, err=str(exc)), lang, reserved)
+
+
+def _settle(config: Config, ip: str, reserved: int, actual: int, use_own: bool) -> None:
+    """按实际用量结算：预留多了退回，少了补扣。"""
+    if use_own or ip in (config.ai_free_ips or []):
+        return
+    QUOTA.settle(ip, token_bucket(config), reserved, actual)
 
 
 def _fail(config: Config, ip: str, use_own: bool, message: str,
-          lang: str = DEFAULT_LANG) -> None:
-    """失败：把额度还回去（可配置），并把原因写给用户看。"""
+          lang: str = DEFAULT_LANG, reserved: int = 0) -> None:
+    """失败：把预留的额度整笔还回去（可配置），并把原因写给用户看。"""
     if not use_own and config.ai_refund_on_failure and ip not in (config.ai_free_ips or []):
-        QUOTA.refund(ip, beijing_bucket(config.ai_window()))
+        QUOTA.refund(ip, token_bucket(config), reserved)
         message += "\n" + t("ai.refunded", lang)
     warn("[AI] " + ip + " 分析失败：" + message.splitlines()[0][:160])
-    _set_job(ip, state="error", text=message, error=message)
+    _set_job(ip, state="error", text=message, error=message, reasoning="", cost=0)
 
 
 # ============ 页面构建 ============
@@ -747,15 +998,19 @@ _bind = bind_to
 
 
 def _status_line(config: Config, ip: str, lang: str = DEFAULT_LANG) -> str:
-    """页面上那行「现在用的是哪个密钥、还剩几次」。"""
+    """页面上那行「现在用的是哪个密钥、额度还剩多少」。"""
     if get_own_key(ip):
         return t("ai.status_own", lang, desc=describe_own_key(ip, lang))
     if ip in (config.ai_free_ips or []):
         return t("ai.status_free", lang)
-    left = max(0, config.ai_rate_limit - QUOTA.used(ip, beijing_bucket(config.ai_window())))
-    if left <= 0:
-        return t("ai.status_out." + config.ai_window(), lang)
-    return t("ai.status_left." + config.ai_window(), lang, left=left)
+    state = _quota_state(config, ip, lang)
+    if state["unlimited"]:
+        return t("ai.status_unlimited", lang)
+    if state["left"] <= 0:
+        return t("ai.status_out", lang, window=state["window"],
+                 at=_reset_text(config, lang))
+    return t("ai.status_left", lang, left=format_tokens(state["left"]),
+             window=state["window"], at=_reset_text(config, lang))
 
 
 # 页面零件统一从 xaml.py 取（计算器页共用同一套），这里起回短名字。
@@ -793,18 +1048,112 @@ def _result_block(config: Config, job: dict | None, lang: str = DEFAULT_LANG) ->
     else:
         footer = t("ai.footer", lang, name=config.ai_display_name)
 
-    return (
-        '<StackPanel Margin="0,14,0,0">'
-        '<TextBlock Text="' + escape_attr(t("ai.result_ok" if done else "ai.result_fail", lang))
-        + '" FontSize="14" '
-        'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" Margin="0,0,0,8" />'
-        '<Border Background="{DynamicResource ColorBrush7}" CornerRadius="8" Padding="16,14">'
-        '<TextBlock Text="' + _attr(str(job.get("text") or "")) + '" FontSize="13" '
-        'LineHeight="24" TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush1}" />'
-        "</Border>"
-        '<TextBlock Text="' + _attr(footer) + '" FontSize="11" Margin="0,10,0,0" '
-        'HorizontalAlignment="Right" Foreground="{DynamicResource ColorBrush3}" />'
-        "</StackPanel>")
+    if not done:
+        return (
+            '<StackPanel Margin="0,14,0,0">'
+            '<TextBlock Text="' + escape_attr(t("ai.result_fail", lang)) + '" FontSize="14" '
+            'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" Margin="0,0,0,8" />'
+            '<Border Background="{DynamicResource ColorBrush7}" CornerRadius="8" Padding="16,14">'
+            '<TextBlock Text="' + _attr(str(job.get("text") or "")) + '" FontSize="13" '
+            'LineHeight="24" TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush1}" />'
+            "</Border>"
+            '<TextBlock Text="' + _attr(footer) + '" FontSize="11" Margin="0,10,0,0" '
+            'HorizontalAlignment="Right" Foreground="{DynamicResource ColorBrush3}" />'
+            "</StackPanel>")
+
+    # ---- 成功：对话式展示（首轮 + 追问）----
+    parts = ['<StackPanel Margin="0,14,0,0">',
+             '<TextBlock Text="' + escape_attr(t("ai.result_ok", lang)) + '" FontSize="14" '
+             'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" Margin="0,0,0,8" />']
+    history = job.get("history") or []
+    # history 里最后一条 assistant 就是本次回答；前面的是之前的轮次。
+    # 全部平铺出来，用户往回翻能看到自己问过什么。
+    if history:
+        for message in history:
+            role = str(message.get("role") or "")
+            content = str(message.get("content") or "")
+            if not content:
+                continue
+            if role == "assistant":
+                parts.append(
+                    '<Border Background="{DynamicResource ColorBrush7}" CornerRadius="8" '
+                    'Padding="16,14" Margin="0,0,0,8">'
+                    '<TextBlock Text="' + _attr(content) + '" FontSize="13" '
+                    'LineHeight="24" TextWrapping="Wrap" '
+                    'Foreground="{DynamicResource ColorBrush1}" /></Border>')
+            else:
+                parts.append(
+                    '<TextBlock Text="' + _attr(t("ai.you_asked", lang, q=content[:400]))
+                    + '" FontSize="11" LineHeight="18" TextWrapping="Wrap" Margin="0,0,0,6" '
+                    'Foreground="{DynamicResource ColorBrush3}" />')
+    else:
+        # 老记录没有 history（改造前存的），退回只显示最后那段文字
+        parts.append(
+            '<Border Background="{DynamicResource ColorBrush7}" CornerRadius="8" '
+            'Padding="16,14"><TextBlock Text="' + _attr(str(job.get("text") or ""))
+            + '" FontSize="13" LineHeight="24" TextWrapping="Wrap" '
+            'Foreground="{DynamicResource ColorBrush1}" /></Border>')
+
+    reasoning = str(job.get("reasoning") or "")
+    if reasoning:
+        parts.append(
+            '<local:MyCard Title="' + escape_attr(t("ai.reasoning_title", lang)) + '" '
+            'CanSwap="True" Margin="0,10,0,0">'
+            '<StackPanel Margin="18,26,16,14">'
+            '<TextBlock Text="' + _attr(reasoning) + '" FontSize="11" LineHeight="18" '
+            'TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush2}" '
+            'Opacity="0.85" /></StackPanel></local:MyCard>')
+
+    cost = int(job.get("cost") or 0)
+    if cost > 0:
+        parts.append('<TextBlock Text="' + _attr(t("ai.cost_line", lang,
+                                                  n=format_tokens(cost))) + '" '
+                     'FontSize="11" Margin="0,8,0,0" '
+                     'Foreground="{DynamicResource ColorBrush3}" />')
+    parts.append('<TextBlock Text="' + _attr(footer) + '" FontSize="11" Margin="0,8,0,0" '
+                 'HorizontalAlignment="Right" Foreground="{DynamicResource ColorBrush3}" />')
+    parts.append("</StackPanel>")
+    return "".join(parts)
+
+
+def _reset_text(config: Config, lang: str = DEFAULT_LANG) -> str:
+    """窗口还剩多久重置，写成「16:30」这种人话。"""
+    moment = datetime.fromtimestamp(bucket_reset_at(config), BEIJING)
+    return moment.strftime("%H:%M")
+
+
+def _quota_bar(config: Config, ip: str, lang: str = DEFAULT_LANG) -> str:
+    """5 小时额度进度条：上面一行字，下面一条轨道。
+
+    轨道用两列 star 宽度按比例分——跟访问页省份排行的做法一致，
+    不依赖 ProgressBar（那玩意在 PCL 的配色里不一定好看）。
+    """
+    state = _quota_state(config, ip, lang)
+    if state["unlimited"]:
+        return _note(t("ai.quota_unlimited", lang, window=state["window"]))
+    percent = state["percent"]
+    fill = 100 - max(0, min(100, int(round(percent))))
+    # 用量极少时也留一点宽度，不然看起来像空的
+    left_cols = max(0, 100 - fill)
+    right_cols = max(1, fill) if left_cols < 100 else 1
+    left_cols = max(1, left_cols) if percent < 1 and state["used"] > 0 else left_cols
+    bar = (
+        '<Grid Margin="0,6,0,0">'
+        '<Grid.ColumnDefinitions><ColumnDefinition Width="' + str(left_cols)
+        + '*" /><ColumnDefinition Width="' + str(right_cols) + '*" /></Grid.ColumnDefinitions>'
+        '<Border Grid.Column="0" Height="7" CornerRadius="3.5" '
+        'Background="{DynamicResource ColorBrush1}" Opacity="0.62" />'
+        '<Border Grid.Column="1" Height="7" CornerRadius="3.5" '
+        'Background="{DynamicResource ColorBrush7}" /></Grid>')
+    label = t("ai.quota_line", lang,
+              used=format_tokens(state["used"]),
+              limit=format_tokens(state["limit"]),
+              percent=str(int(round(percent))),
+              window=state["window"],
+              at=_reset_text(config, lang))
+    return ('<TextBlock Text="' + _attr(label) + '" FontSize="11" LineHeight="18" '
+            'TextWrapping="Wrap" Margin="0,10,0,0" '
+            'Foreground="{DynamicResource ColorBrush1}" />' + bar)
 
 
 def build_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_LANG) -> str:
@@ -844,23 +1193,51 @@ def build_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_LANG)
                          46, column=1, margin="5,0,0,0"),
             "0,10,0,0")
 
-        # 次数和窗口都跟着配置走。写死「一次」「每天」的话，站长一改配置
+        # 额度和窗口都跟着配置走。写死「多少次」「每天」的话，站长一改配置
         # 这行就开始骗人了。
-        + _note(t("ai.limit." + config.ai_window(), lang,
-                  times=t("ai.times_once" if config.ai_rate_limit == 1 else "ai.times_n",
-                          lang, n=config.ai_rate_limit)))
+        + _note(t("ai.limit", lang,
+                  limit=format_tokens(config.ai_token_limit_or_zero()),
+                  window=config.ai_window_label(lang),
+                  factor=str(int(config.ai_peak_factor()))))
 
         + _divider("0,20,0,12")
 
         + '<TextBlock Text="' + _attr(_status_line(config, ip, lang)) + '" FontSize="12" '
         'FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" />'
 
+        + _quota_bar(config, ip, lang)
+
         + _result_block(config, job, lang)
+
+        # 追问：只有上一次跑成功了才显示，否则用户会对着空对话框打字
+        + (_follow_block(config, ip, base, job, lang)
+           if (job or {}).get("state") == "done" else "")
 
         + _nav_row(refresh_url=base + "/ai_page.json", lang=lang)
 
         + "</StackPanel>"
         "</local:MyCard>")
+
+
+def _follow_block(config: Config, ip: str, base: str, job: dict | None,
+                  lang: str = DEFAULT_LANG) -> str:
+    """结果下面的「接着问」输入框。
+
+    追问带上一轮的完整对话，所以不用把日志再粘一遍；额度照扣，
+    但比首轮便宜（日志只在第一轮发一次）。
+    """
+    return (
+        '<local:MyCard Title="' + escape_attr(t("ai.follow_title", lang)) + '" '
+        'CanSwap="True" Margin="0,14,0,0">'
+        '<StackPanel Margin="18,26,16,14">'
+        '<TextBlock Text="' + escape_attr(t("ai.follow_hint", lang)) + '" '
+        'FontSize="11" LineHeight="18" TextWrapping="Wrap" Margin="0,0,0,8" '
+        'Foreground="{DynamicResource ColorBrush3}" />'
+        + _input_row("aifollowinput", t("ai.follow_placeholder", lang), 38)
+        + _help_button(t("ai.follow_send", lang), ICON_AI,
+                       _bind("aifollowinput", base, "/ai_follow.json"),
+                       40, margin="0,8,0,0")
+        + "</StackPanel></local:MyCard>")
 
 
 def build_own_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_LANG) -> str:
@@ -942,8 +1319,7 @@ def admin_state(config: Config) -> dict:
     """后台「AI 日志分析」那块要显示的东西。"""
     if not config.enable_ai:
         return {"enabled": False}
-    window = config.ai_window()
-    bucket = beijing_bucket(window)
+    bucket = token_bucket(config)
     rows = QUOTA.rows_for(bucket)
     with _jobs_lock:
         jobs = len(_jobs)
@@ -955,27 +1331,34 @@ def admin_state(config: Config) -> dict:
         "model": config.ai_model,
         "base": config.ai_api_base,
         "display_name": config.ai_display_name,
-        "limit": config.ai_rate_limit,
-        "window": window,
-        "window_text": config.ai_window_text(),
+        "limit": config.ai_token_limit_or_zero(),
+        "window": config.ai_window_label("zh-hans"),
+        "window_text": config.ai_window_label("zh-hans"),
+        "window_seconds": config.ai_window_seconds(),
+        "peak": is_peak(),
+        "peak_factor": config.ai_peak_factor(),
         "bucket": bucket,
         "rows": rows,
-        "calls": sum(r["used"] for r in rows),
+        "calls": sum(int(r.get("calls") or 0) for r in rows),
+        "tokens": sum(int(r.get("used") or 0) for r in rows),
         "jobs": jobs,
         "running": running,
         "own_keys": keys,
     }
 
 
-def reset(scope: str = "all", ip: str = "", window: str = "hour") -> dict:
+def reset(scope: str = "all", ip: str = "", window: str = "hour",
+          config: Config | None = None) -> dict:
     """后台重置。scope 取 quota / jobs / keys / all；给了 ip 就只动这个 IP。
 
     不传 ip 时只清**当前这一格**的（历史留着好看趋势）；传了 ip 就把那个 IP 清干净。
+    ``window`` 是老参数，留着兼容老调用；新代码走 ``config`` 算格子。
     """
     ip = (ip or "").strip() or None
+    bucket = token_bucket(config) if config is not None else beijing_bucket(window)
     done = {}
     if scope in ("quota", "all"):
-        done["quota"] = QUOTA.reset(None if ip else beijing_bucket(window), ip)
+        done["quota"] = QUOTA.reset(None if ip else bucket, ip)
     if scope in ("jobs", "all"):
         done["jobs"] = reset_jobs(ip)
     if scope in ("keys", "all"):
@@ -1040,6 +1423,7 @@ _META = {
     "/ai_own_page.json": ("ai.own_key", "ai.meta.own_page"),
     "/ai.json": ("ai.title", "ai.meta.builtin"),
     "/ai_own.json": ("ai.title", "ai.meta.own"),
+    "/ai_follow.json": ("ai.follow_title", "ai.meta.follow"),
     "/ai_key.json": ("ai.meta.save_key_title", "ai.meta.save_key"),
     "/ai_base_openai.json": ("ai.meta.base_openai_title", "ai.meta.base_openai"),
     "/ai_base_anthropic.json": ("ai.meta.base_anthropic_title", "ai.meta.base_anthropic"),
@@ -1047,7 +1431,7 @@ _META = {
     "/ai_clear.json": ("ai.meta.clear_title", "ai.meta.clear"),
 }
 _DO = {"/ai_page.xaml": "page", "/ai_own_page.xaml": "own_page",
-       "/ai.xaml": "builtin", "/ai_own.xaml": "own",
+       "/ai.xaml": "builtin", "/ai_own.xaml": "own", "/ai_follow.xaml": "follow",
        "/ai_key.xaml": "savekey", "/ai_base_openai.xaml": "base_openai",
        "/ai_base_anthropic.xaml": "base_anthropic", "/ai_model.xaml": "savemodel",
        "/ai_clear.xaml": "clearkey"}
@@ -1138,7 +1522,8 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
             t("ai.popup.cleared_msg" if had else "ai.popup.nothing_msg", lang),
             back=own_url, home=True, lang=lang), ip))
 
-    ok, message = submit(config, ip, params.get("q", ""), use_own=(action == "own"), lang=lang)
+    ok, message = submit(config, ip, params.get("q", ""), use_own=(action == "own"),
+                         lang=lang, follow=(action == "follow"))
     return _xaml_response(_styled(build_popup(
         t("ai.popup.started" if ok else "ai.popup.not_started", lang), message,
         "Blue" if ok else "Yellow",

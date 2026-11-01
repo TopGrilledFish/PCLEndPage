@@ -496,9 +496,12 @@ def check_config(report: Report, config: Config) -> None:
     if not config.enable_ai:
         report.good("AI 日志分析：关闭")
     elif config.ai_api_key:
+        limit = config.ai_token_limit_or_zero()
+        quota_text = (str(limit) + " token / " + config.ai_window_label("zh-hans")
+                      + "（高峰 " + str(int(config.ai_peak_factor())) + " 倍）"
+                      if limit > 0 else "不限额度")
         report.good("AI 日志分析：" + config.ai_model + " @ " + config.ai_api_base
-                    + "，内置密钥已配置，每 IP " + config.ai_window_text() + " "
-                    + str(config.ai_rate_limit) + " 次")
+                    + "，内置密钥已配置，每 IP " + quota_text)
     else:
         report.warning("AI 日志分析已开启但没有内置密钥，访客只能用自带密钥")
 
@@ -594,7 +597,8 @@ def _ai_pages(config: Config) -> list:
     """
     ip = "203.0.113.7"
     real = ai.submit
-    ai.submit = lambda config, ip, raw, use_own, lang="zh-hans": (True, ai.t("ai.submitted", lang))
+    ai.submit = lambda config, ip, raw, use_own, lang="zh-hans", follow=False: (
+        True, ai.t("ai.follow_submitted" if follow else "ai.submitted", lang))
     pages = []
     try:
         stages = [("AI 未开启", _AiService(config), False)]
