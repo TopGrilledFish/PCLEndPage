@@ -196,8 +196,8 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
     仓库是什么关系（不然摆两个仓库地址看着像重复）。
     """
     from .i18n import t
-    from .xaml import (ICON_GEAR, ICON_HEART, ICON_HOME, divider, escape_url_attr,
-                       help_button)
+    from .xaml import (ICON_CHART, ICON_GEAR, ICON_HEART, ICON_HOME, divider,
+                       escape_url_attr, help_button)
 
     if not version:
         version = t("home.footer_version_unknown", lang)
@@ -211,17 +211,30 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
                 'Foreground="{DynamicResource ColorBrush2}" Margin="0,0,0,6" />')
 
     def link_button(text: str, url: str, margin: str = "", color: str = "Highlight",
-                    logo: str = ICON_HOME) -> str:
+                    logo: str = ICON_HOME, column=None) -> str:
         """开浏览器的按钮——EventType 必须是「打开网页」。
 
         教程文件里写得很清楚：「打开网页」是拿 EventData 当网址开浏览器，
         「打开帮助」是让 PCL 去拉那个 .json/.xaml 翻成内页。两者不能混——
         个性设置那个按钮要是写成「打开网页」，就会傻乎乎地把 .json 丢给浏览器。
         """
-        return ('<local:MyIconTextButton' + (' Margin="' + margin + '"' if margin else "")
-                + ' Height="36" Text="' + escape_attr(text) + '" LogoScale="0.8" Logo="'
-                + logo + '"' + (' ColorType="' + color + '"' if color else "")
+        attrs = ""
+        if column is not None:
+            attrs += ' Grid.Column="' + str(column) + '"'
+        if margin:
+            attrs += ' Margin="' + margin + '"'
+        if color:
+            attrs += ' ColorType="' + color + '"'
+        return ('<local:MyIconTextButton' + attrs
+                + ' HorizontalAlignment="Stretch" Height="36" Text="' + escape_attr(text)
+                + '" LogoScale="0.8" Logo="' + logo + '"'
                 + ' EventType="打开网页" EventData="' + escape_url_attr(url) + '" />')
+
+    def page_button(text: str, url: str, logo: str) -> str:
+        """翻 PCL 内页的按钮（「打开帮助」）。整行宽、单独一行——它是这张卡的出口。"""
+        return ('<local:MyIconTextButton HorizontalAlignment="Stretch" Height="40" Text="'
+                + escape_attr(text) + '" LogoScale="0.85" Logo="' + logo
+                + '" EventType="打开帮助" EventData="' + escape_url_attr(url) + '" />')
 
     return (
         '<local:MyCard Title="' + escape_attr(t("home.footer_title", lang))
@@ -233,21 +246,31 @@ def build_footer_card(config: Config, lang: str, base: str, version: str) -> str
         + divider("0,10,0,12")
         + line(t("home.footer_origin_author", lang))
         + line(t("home.footer_origin_repo", lang))
-        + '<StackPanel Orientation="Horizontal" Margin="0,10,0,0">'
+        # 四个入口并排一行：仓库 / 原仓库 / 个性设置 / 赞助。用 Grid 四等宽列而不是
+        # StackPanel——横排 StackPanel 是"按内容宽度排队"，窄屏上第四个直接被裁掉；
+        # 等宽列至少能一起挤，按钮里的文字自己会省略。
+        + '<Grid Margin="0,10,0,0"><Grid.ColumnDefinitions>'
+        + '<ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" />'
+        + '<ColumnDefinition Width="1*" /><ColumnDefinition Width="1*" />'
+        + "</Grid.ColumnDefinitions>"
         + link_button(t("home.footer_open_repo", lang),
-                      "https://github.com/TopGrilledFish/PCLEndPage", "0,0,8,0")
+                      "https://github.com/TopGrilledFish/PCLEndPage", "0,0,6,0", column=0)
         # 原项目这枚不点亮：一列按钮里只有一个高亮，视线才落得到"自己的仓库"上
-        + link_button(t("home.footer_open_origin", lang), origin_url, "0,0,8,0", color="")
+        + link_button(t("home.footer_open_origin", lang), origin_url, "0,0,6,0",
+                      color="", column=1)
         # 个性设置走「打开帮助」，在 PCL 里翻页，不是开浏览器。
         # 图标是齿轮——之前跟"打开仓库"一样用的房子，两个按钮长得一模一样。
         + help_button(t("home.footer_settings", lang), ICON_GEAR,
-                      base + "/settings_page.json", 36, color="")
-        + "</StackPanel>"
-        # 赞助单独一行放最底下：一来四个按钮挤一行在窄屏会被裁，二来它是这张卡最后
-        # 一个动作，单独一行更像"出口"。爱发电的按钮用爱心图标，点开是资助页。
-        + '<StackPanel Orientation="Horizontal" Margin="0,10,0,0">'
+                      base + "/settings_page.json", 36, column=2, margin="0,0,6,0", color="")
+        # 赞助放到这一行最右边：它跟前面三个一样是个"入口"，原先单独占一行是为了
+        # 好看，现在四个入口并排反而更像一排动作；爱心图标保留。
         + link_button(t("home.footer_sponsor", lang), SPONSOR_URL, "", "Highlight",
-                      logo=ICON_HEART)
+                      logo=ICON_HEART, column=3)
+        + "</Grid>"
+        # 最后单独一行：访问统计内页（PCL 里翻页，不开浏览器）。整行宽——它是这张卡
+        # 里唯一"进去看数据"的动作，跟上面那排链接性质不同，所以另起一行当出口。
+        + '<StackPanel Margin="0,10,0,0">'
+        + page_button(t("home.footer_browse", lang), base + "/visit_page.json", ICON_CHART)
         + "</StackPanel></StackPanel></local:MyCard>")
 
 

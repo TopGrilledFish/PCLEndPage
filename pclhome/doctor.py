@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import ai
 from . import calc
+from . import visit
 from .config import ROOT, TEMPLATES_DIR, Config, load_config
 from .data import calendar as cal_data
 from .data import play, text
@@ -701,6 +702,10 @@ def _english_pages(config: Config) -> list:
     pages = [("主页", _fake_render(config, "en")),
              ("计算器列表", calc.build_landing("http://localhost", "en")),
              ("AI 页", ai.build_page(ai_config, ip, "http://localhost", "en"))]
+    # 访问浏览页只放"没有数据"那一种：有数据时会带上省份/城市原文，那些名字来自
+    # 定位接口（本来就是中文），跟后台一样不翻译，混进来会误报。
+    pages.append(("访问浏览（空）",
+                  visit.build_visit_page(visit.empty_summary(), "http://localhost", ip, "en")))
     for stage, key in (("没存密钥", ""), ("存了密钥", "sk-doctor-1234")):
         if key:
             ai.set_own_key(ip, key)
@@ -742,6 +747,40 @@ def _settings_pages() -> list:
                                       "http://localhost", ip, query)))
         finally:
             profiles_module.PROFILES = real
+    return pages
+
+
+def _visit_pages() -> list:
+    """访问浏览页的两种形态 × 三种语言，``[(名字, XAML)]``。
+
+    **用临时 SQLite**：先真 ``record()`` 几条再 ``summary()``，这样"记一笔 → 汇总 →
+    画进页面"整条链都过一遍，又不会往 ``var/stats.db`` 里塞体检数据。
+    空数据那种是给新站看的——一条记录都没有时页面也得能开，且不该画地图。
+    """
+    import tempfile
+    from . import store as store_module
+    from . import visit as visit_module
+
+    pages = []
+    with tempfile.TemporaryDirectory() as tmp:
+        stats = store_module.Stats(Path(tmp) / "stats.db")
+        empty = stats.summary(store_module.STATS_KEEP_DAYS)
+        for lang in ("zh-hans", "zh-hant", "en"):
+            pages.append(("访问浏览/空/" + lang,
+                          visit_module.build_visit_page(empty, "http://localhost",
+                                                       "203.0.113.7", lang)))
+        # 三条国内（含一个只有省没有市的）+ 一条境外：够把地图分级、省份排行、
+        # 地区分布、最近来访四个板块都撑起来。
+        for ip, country, city, province in (("203.0.113.7", "CN", "杭州", "浙江"),
+                                            ("203.0.113.8", "CN", "广州", "广东"),
+                                            ("203.0.113.9", "CN", "", "北京"),
+                                            ("203.0.113.10", "US", "Los Angeles", "")):
+            stats.record(ip, country, city, province)
+        filled = stats.summary(store_module.STATS_KEEP_DAYS)
+        for lang in ("zh-hans", "zh-hant", "en"):
+            pages.append(("访问浏览/有数据/" + lang,
+                          visit_module.build_visit_page(filled, "http://localhost",
+                                                       "203.0.113.7", lang)))
     return pages
 
 
@@ -914,6 +953,7 @@ def check_rendered(report: Report, config: Config) -> None:
                   calc.build_calc_page(item, "", "http://localhost", "zh-hans"))
                  for item in calc.CALCS]
         rows += _settings_pages()
+        rows += _visit_pages()
         bad = [label for label, body in rows if mark not in body]
         if bad:
             report.bad("「返回主页」不是切回启动器主页：" + "、".join(bad[:6]))
@@ -950,6 +990,34 @@ def check_rendered(report: Report, config: Config) -> None:
             report.good("设置页 " + str(len(pages)) + " 种形态 XML 良构，导出带复制按钮，有温度单位按钮")
     except Exception as exc:
         report.bad("设置页构建失败：" + repr(exc))
+
+    # 访问浏览页：新站（一条记录都没有）和跑过一阵的两种形态都得能开。
+    # 地图是 Canvas + 逐省 Path（后台那张是 HTML+SVG，PCL 里没法用），
+    # 这条同时守住"别哪天顺手改成 PCL 解析不了的东西"和"空数据别硬画地图"。
+    try:
+        pages = _visit_pages()
+        broken = []
+        for label, body in pages:
+            try:
+                ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root ' + _XAML_ROOT_NS
+                              + ">" + body + "</root>")
+            except ET.ParseError as exc:
+                broken.append(label + "：" + str(exc))
+        empty_pages = [body for label, body in pages if "/空/" in label]
+        filled_pages = [body for label, body in pages if "/有数据/" in label]
+        if broken:
+            report.bad("访问浏览页 XML 解析失败：" + "；".join(broken[:3]))
+        elif any("<Canvas" in body for body in empty_pages):
+            report.bad("访问浏览页：没有省份数据时不该画地图，只该提示一句")
+        elif not all("<Canvas" in body and body.count("<Path") >= 30 for body in filled_pages):
+            report.bad("访问浏览页：有数据时地图没画全（缺 Canvas 或省份 Path 不足 30 个）")
+        elif not all("visit_page.xaml" in body for body in filled_pages):
+            report.bad("访问浏览页：底部没有指向自己的「刷新」链接")
+        else:
+            report.good("访问浏览页 " + str(len(pages)) + " 种形态 XML 良构，"
+                        "空数据不画地图、有数据画 " + str(filled_pages[0].count("<Path")) + " 条省份路径")
+    except Exception as exc:
+        report.bad("访问浏览页构建失败：" + repr(exc))
 
     # 公式抽查：这几个都有标准答案，改坏了这里会红
     known = [("damage", "8,5", "11"), ("damage", "8,5,0,0,2,0,1", "26.73"),
@@ -1021,6 +1089,7 @@ def check_rendered(report: Report, config: Config) -> None:
         bodies = list(_english_pages(config))
         bodies.append(("主页", _fake_render(config, "zh-hans")))
         bodies.extend(_settings_pages())
+        bodies.extend(_visit_pages())
 
         stray = [(label, pal.stray_brushes(body)) for label, body in bodies
                  if pal.stray_brushes(body)]
