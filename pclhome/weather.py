@@ -50,7 +50,11 @@ def classify_weather(text: str | None) -> str | None:
 
 def _pick_tip(temp: int, desc: str, lang: str) -> str:
     """按气温与天气挑一句应景建议。接口给的中文描述永远用来判断类别，
-    只有**显示**的那句话跟着语言走。"""
+    只有**显示**的那句话跟着语言走。
+
+    只翻了核心键的语言包没有 ``weather.tips.<类别>`` 这几组，用
+    ``weather.tip_plain`` 一句通用的，别掉回英文。
+    """
     if temp >= 30:
         kind = "hot"
     elif temp <= 0:
@@ -67,6 +71,11 @@ def _pick_tip(temp: int, desc: str, lang: str) -> str:
         kind = "fog"
     else:
         kind = "clear"
+    if has("weather.tips." + kind + ".0", lang):
+        pool = t_list("weather.tips." + kind, lang)
+        return random.choice(pool) if pool else ""
+    if has("weather.tip_plain", lang):
+        return t("weather.tip_plain", lang)
     pool = t_list("weather.tips." + kind, lang)
     return random.choice(pool) if pool else ""
 

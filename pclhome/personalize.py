@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 from .data.text import GREETING_SUBS
-from .i18n import DEFAULT_LANG, t_list
+from .i18n import DEFAULT_LANG, has, t, t_list
 
 BEIJING = timezone(timedelta(hours=8))
 _WEEKDAYS = ("日", "一", "二", "三", "四", "五", "六")
@@ -103,11 +103,19 @@ def pick_greeting_sub(ip: str, date_str: str, period: str,
 
     下标按**中文那份的长度**算（``deterministic_index`` 是上游 JS 的复刻，
     改长度会换算法），取译文时再取模兜住长度不一致的情况。
+
+    只翻了核心键的语言包没有 ``greeting.sub.<period>`` 这一组，这时用
+    ``greeting.sub_plain`` 那一句通用话，而不是掉回英文——否则日文页面上
+    会突然冒出一句英文，看着非常割裂。
     """
     base = GREETING_SUBS.get(period) or GREETING_SUBS["morning"]
-    pool = t_list("greeting.sub." + period, lang) or base
     index = deterministic_index(ip, date_str, "greeting_" + period, len(base))
-    return pool[index % len(pool)]
+    if has("greeting.sub." + period + ".0", lang):
+        pool = t_list("greeting.sub." + period, lang) or base
+        return pool[index % len(pool)]
+    if has("greeting.sub_plain", lang):
+        return t("greeting.sub_plain", lang)
+    return base[index % len(base)]
 
 
 def format_quote(template: str, ctx: BeijingDate) -> str:

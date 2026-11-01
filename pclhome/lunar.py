@@ -137,8 +137,16 @@ def solar_to_lunar(target: date) -> tuple[int, int, int, bool]:
 
 
 def festival_name(key: str, fallback: str, lang: str) -> str:
-    """内置节日的名字/祝词按语言取；后台自定义的节日没有词条，原样用配置里的。"""
-    return t(key, lang) if has(key, lang) else fallback
+    """内置节日的名字/祝词按语言取；后台自定义的节日没有词条，原样用配置里的。
+
+    只翻了核心键的语言包没有节日词条，这时先退到英文（"Singles' Day" 总比
+    一屏日文里蹦出「光棍节」好认），英文也没有才用配置里的原文。
+    """
+    if has(key, lang):
+        return t(key, lang)
+    if has(key, "en"):
+        return t(key, "en")
+    return fallback
 
 
 def qingming_day(year: int) -> int:

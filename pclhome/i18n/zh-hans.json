@@ -842,5 +842,9 @@
   "language.clear_search": "清空搜索",
   "language.supported_title": "已支持（{n} 种）",
   "language.others_title": "更多语言（{n} 种）",
-  "language.others_hint": "这些还没有翻译，先列出来备查；真要加，得先补齐全部词条。"
+  "language.others_hint": "这些还没有翻译，先列出来备查；真要加，得先补齐全部词条。",
+  "lunar.date": "{month}{day}",
+  "lunar.day_n": "{n}日",
+  "greeting.sub_plain": "今天也别太用力，过得舒服最重要。",
+  "weather.tip_plain": "天气合适的话，出门走走挺好。"
 }

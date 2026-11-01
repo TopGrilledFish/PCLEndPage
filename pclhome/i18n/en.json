@@ -857,5 +857,7 @@
   "language.clear_search": "Clear search",
   "language.supported_title": "Supported ({n})",
   "language.others_title": "More languages ({n})",
-  "language.others_hint": "These have no translation yet and are listed for reference."
+  "language.others_hint": "These have no translation yet and are listed for reference.",
+  "greeting.sub_plain": "Don't push too hard today — enjoying it matters more.",
+  "weather.tip_plain": "If the weather's nice, a short walk is worth it."
 }
