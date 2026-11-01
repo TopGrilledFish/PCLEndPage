@@ -39,6 +39,7 @@ from . import calc
 from . import palette
 from . import profiles
 from . import settings
+from . import languages
 from . import visit
 from .xaml import build_fallback_xaml
 
@@ -400,6 +401,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(Response(404, b"Not Found", "text/plain; charset=utf-8"))
                 return
             self._note = "个性设置：" + path
+            self._send(response)
+            return
+
+        if path in languages.LANGUAGE_PATHS:
+            if service.config.guard_clients and not is_trusted_client(ua, referer):
+                self._force_warn = True
+                self._note = "来源守卫拦截（界面语言）：UA=" + (ua[:60] or "（空）")
+                self._send(Response.xaml(_bot_xaml(self._log_ip)))
+                return
+            response = languages.handle(service, path, parsed.query, self._log_ip, self._origin())
+            if response is None:
+                self._send(Response(404, b"Not Found", content_type="text/plain; charset=utf-8"))
+                return
+            self._note = "界面语言：" + path
             self._send(response)
             return
 

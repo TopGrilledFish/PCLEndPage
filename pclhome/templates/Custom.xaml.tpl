@@ -44,7 +44,9 @@
                             </LinearGradientBrush>
                         </Border.Background>
                     </Border>
-                    <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,16,0,0" Background="#59000000" CornerRadius="12" Padding="12,10,16,10">
+                    <!-- MaxWidth + Wrap：英文问候语比中文长一截，不封顶就会顶到
+                         右上角那个倒计时胶囊底下（两个都是浮在图片上的 Border）。 -->
+                    <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,16,0,0" MaxWidth="430" Background="#59000000" CornerRadius="12" Padding="12,10,16,10">
                         <StackPanel>
                             <StackPanel Orientation="Horizontal">
                                 <Border Width="26" Height="26" CornerRadius="13" Background="{DynamicResource ColorBrush1}" Margin="0,0,8,0" VerticalAlignment="Center">
@@ -53,9 +55,9 @@
                                 <!-- 问候语两侧的标点也是文案：中文是全角「，」「！」，英文是半角。
                                      逗号并在 GREETING 那个令牌里（两个令牌占位符挨着写会被
                                      替换器当成一个），句末那个单独一个令牌。 -->
-                                <TextBlock Text="__GREETING__{user}__T_GREETING_CLOSE__" FontSize="15" FontWeight="Bold" Foreground="White" VerticalAlignment="Center" />
+                                <TextBlock Text="__GREETING__{user}__T_GREETING_CLOSE__" FontSize="15" FontWeight="Bold" Foreground="White" VerticalAlignment="Center" TextWrapping="Wrap" />
                             </StackPanel>
-                            <TextBlock Text="__GREETING_SUB__" FontSize="11" Foreground="#D9FFFFFF" Margin="0,3,0,0" />
+                            <TextBlock Text="__GREETING_SUB__" FontSize="11" Foreground="#D9FFFFFF" Margin="0,3,0,0" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
                     <!-- __COUNTDOWN_BODY__ -->

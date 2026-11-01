@@ -595,10 +595,21 @@ function rankRows(items, total, max) {
   }).join("") + "</div>";
 }
 
-const COUNTRY_NAMES = { CN: "中国", US: "美国", HK: "香港", TW: "台湾", JP: "日本", SG: "新加坡",
-  DE: "德国", GB: "英国", FR: "法国", RU: "俄罗斯", KR: "韩国", CA: "加拿大", AU: "澳大利亚",
-  NL: "荷兰", IN: "印度", BR: "巴西", VN: "越南", MY: "马来西亚", TH: "泰国", XX: "未知" };
+const COUNTRY_NAMES = { CN: "中国", US: "美国", HK: "中国香港", MO: "中国澳门", TW: "中国台湾",
+  JP: "日本", SG: "新加坡", DE: "德国", GB: "英国", FR: "法国", RU: "俄罗斯", KR: "韩国",
+  CA: "加拿大", AU: "澳大利亚", NL: "荷兰", IN: "印度", BR: "巴西", VN: "越南",
+  MY: "马来西亚", TH: "泰国", ID: "印度尼西亚", PH: "菲律宾", PK: "巴基斯坦", ES: "西班牙",
+  IT: "意大利", SE: "瑞典", CH: "瑞士", PL: "波兰", TR: "土耳其", AE: "阿联酋",
+  MX: "墨西哥", AR: "阿根廷", ZA: "南非", NZ: "新西兰", XX: "未知" };
 function countryName(code) { return COUNTRY_NAMES[code] || code || "未知"; }
+
+// 港澳台的名字里已经带「中国」，定位接口给的省市名常常就是地名本身，
+// 同名（或就在这片地名里）就不再拼一遍，避免「中国香港 · 香港」。
+const SELF_NAMES = {
+  HK: ["香港", "香港岛", "九龙", "新界"],
+  MO: ["澳门", "澳门半岛", "氹仔", "路环"],
+  TW: ["台湾", "台湾省"]
+};
 
 // 地区标签：国内的用「省份 · 城市」（短，能读完），境外只到城市/国家就写国家和城市。
 // 省份城是分开算的，老记录没有省份会自动退化，不会出现「中国 · 」这种空尾巴。
@@ -610,7 +621,12 @@ function regionName(code, city, province) {
     if (p) return c && c !== p ? p + " · " + c : p;
     return c || "国内 · 未定位";
   }
-  // 港澳台和新加坡这类"城市即国家"的，别拼成「香港 · 香港」
+  if (SELF_NAMES[code]) {
+    const tail = c || p;
+    if (!tail || SELF_NAMES[code].includes(tail)) return name;
+    return name + " · " + tail;
+  }
+  // 新加坡这类"城市即国家"的，别拼成「新加坡 · 新加坡」
   if (c && c !== name && c !== p) return name + " · " + c;
   return name;
 }

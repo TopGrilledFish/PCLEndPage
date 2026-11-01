@@ -92,13 +92,14 @@ def _state_block(record, ip: str, lang: str) -> str:
             'Margin="0,10,0,0"><StackPanel>' + body + "</StackPanel></Border>")
 
 
-def _lang_buttons(base: str, lang: str) -> str:
-    cells = []
-    for code in LANGS:
-        label = t("lang." + code, lang)
-        cells.append(help_button(label, ICON_KEY, base + "/settings_page.json?lang=" + code,
-                                 38, margin="0,0,6,6", color=""))
-    return '<StackPanel Orientation="Horizontal" Margin="0,8,0,0">' + "".join(cells) + "</StackPanel>"
+def _lang_entry(base: str, lang: str) -> str:
+    """语言入口：三种语言挪去单独一页，这儿只留一个按钮。
+
+    以前这里直接摆三个按钮，现在要放几十种语言加搜索，塞在设置页里会把
+    配色、温度、个性码几块全挤到下面去，翻半天找不到。
+    """
+    return help_button(t("settings.lang_open", lang), ICON_KEY,
+                       base + "/language_page.json", 38, margin="0,8,0,0")
 
 
 def _unit_buttons(base: str, lang: str, current: str) -> str:
@@ -217,7 +218,7 @@ def build_settings_page(base_url: str, ip: str, query: str) -> str:
 
     body.append(heading(t("settings.lang_title", lang), "0,20,0,0"))
     body.append(note(t("settings.lang_hint", lang), "0,6,0,0"))
-    body.append(_lang_buttons(base, lang))
+    body.append(_lang_entry(base, lang))
 
     body.append(heading(t("settings.unit_title", lang), "0,20,0,0"))
     body.append(note(t("settings.unit_hint", lang), "0,6,0,0"))

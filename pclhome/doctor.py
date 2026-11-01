@@ -711,6 +711,10 @@ def _english_pages(config: Config) -> list:
     # 定位接口（本来就是中文），跟后台一样不翻译，混进来会误报。
     pages.append(("访问浏览（空）",
                   visit.build_visit_page(visit.empty_summary(), "http://localhost", ip, "en")))
+    # 界面语言页的英文形态：语言名全走英文名，不该混进汉字
+    from . import languages as languages_module
+    pages.append(("界面语言（英文）",
+                  languages_module.build_language_page("http://localhost", ip, "", "en")))
     for stage, key in (("没存密钥", ""), ("存了密钥", "sk-doctor-1234")):
         if key:
             ai.set_own_key(ip, key)
@@ -786,6 +790,28 @@ def _visit_pages() -> list:
             pages.append(("访问浏览/有数据/" + lang,
                           visit_module.build_visit_page(filled, "http://localhost",
                                                        "203.0.113.7", lang)))
+    return pages
+
+
+def _language_pages() -> list:
+    """界面语言页的几种形态，``[(名字, XAML)]``。
+
+    三种语言各画一遍，再加"搜到了"和"没搜到"两种搜索结果页。``lang`` 是直接
+    传进去的，不碰 ``profiles`` 里的真记录——体检不该改用户的语言设置。
+    """
+    from . import languages as languages_module
+
+    pages = []
+    for lang in ("zh-hans", "zh-hant", "en"):
+        pages.append(("界面语言/全部/" + lang,
+                      languages_module.build_language_page("http://localhost",
+                                                           "203.0.113.7", "", lang)))
+    pages.append(("界面语言/搜索/de",
+                  languages_module.build_language_page("http://localhost", "203.0.113.7",
+                                                      "q=de", "zh-hans")))
+    pages.append(("界面语言/搜索/没结果",
+                  languages_module.build_language_page("http://localhost", "203.0.113.7",
+                                                      "q=zzzz", "zh-hans")))
     return pages
 
 
@@ -1024,6 +1050,35 @@ def check_rendered(report: Report, config: Config) -> None:
     except Exception as exc:
         report.bad("访问浏览页构建失败：" + repr(exc))
 
+    # 界面语言页：三种语言各一遍，外加「搜到了」和「没搜到」。
+    try:
+        pages = dict(_language_pages())
+        broken = []
+        for label, body in pages.items():
+            try:
+                ET.fromstring('<?xml version="1.0" encoding="utf-8"?><root ' + _XAML_ROOT_NS
+                              + ">" + body + "</root>")
+            except ET.ParseError as exc:
+                broken.append(label + "：" + str(exc))
+        home_mark = ('EventType="' + HOME_EVENT_TYPE + '" EventData="' + HOME_EVENT_DATA + '"')
+        searched = pages["界面语言/搜索/de"]
+        nothing = pages["界面语言/搜索/没结果"]
+        english = pages["界面语言/全部/en"]
+        if broken:
+            report.bad("界面语言页 XML 解析失败：" + "；".join(broken[:3]))
+        elif not all(home_mark in body for body in pages.values()):
+            report.bad("界面语言页缺「返回主页」按钮")
+        elif "Deutsch" not in searched or "日本語" in searched:
+            report.bad("界面语言页搜索「de」没搜对（应只有德语，不该带日语）")
+        elif "没有匹配的语言" not in nothing:
+            report.bad("界面语言页搜不到东西时没给出提示")
+        elif "Supported" not in english or "More languages" not in english:
+            report.bad("界面语言页英文形态文案不对")
+        else:
+            report.good("界面语言页 " + str(len(pages)) + " 种形态 XML 良构，搜索命中/落空都有提示")
+    except Exception as exc:
+        report.bad("界面语言页构建失败：" + repr(exc))
+
     # 公式抽查：这几个都有标准答案，改坏了这里会红
     known = [("damage", "8,5", "11"), ("damage", "8,5,0,0,2,0,1", "26.73"),
              ("stronghold", "0,0,0", "-204, -1692"),
@@ -1095,6 +1150,7 @@ def check_rendered(report: Report, config: Config) -> None:
         bodies.append(("主页", _fake_render(config, "zh-hans")))
         bodies.extend(_settings_pages())
         bodies.extend(_visit_pages())
+        bodies.extend(_language_pages())
 
         stray = [(label, pal.stray_brushes(body)) for label, body in bodies
                  if pal.stray_brushes(body)]

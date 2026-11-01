@@ -38,17 +38,79 @@ DAYS = STATS_KEEP_DAYS
 
 # 没数据 / 四个分级：等级越高越深。后台 lv1-4 是 accent 的 26/50/74/100%，
 # 这边换不成百分比（画刷是资源），所以用「画刷 + 透明度」凑出同样的层次。
+# 全部压在最深的那支画刷上，靠透明度拉开差距——混用 ColorBrush3（次要文字色）
+# 会让低档几乎是白的，地图看着像没上色。
 LEVEL_STYLE = {
-    0: ('ColorBrush7', "0.45"),
-    1: ('ColorBrush3', "0.35"),
-    2: ('ColorBrush3', "0.72"),
-    3: ('ColorBrush1', "0.55"),
-    4: ('ColorBrush1', "0.88"),
+    0: ('ColorBrush7', "0.55"),
+    1: ('ColorBrush1', "0.22"),
+    2: ('ColorBrush1', "0.42"),
+    3: ('ColorBrush1', "0.64"),
+    4: ('ColorBrush1', "0.90"),
+}
+
+# 港澳台：名字里已经带「中国」，定位接口给的省/市名往往就是地名本身，
+# 直接拼会变成「中国香港 · 香港」这种重复，遇到同名就省掉尾巴。
+_SELF_NAME = {
+    "HK": ("香港", "香港岛", "九龙", "新界"),
+    "MO": ("澳门", "澳门半岛", "氹仔", "路环"),
+    "TW": ("台湾", "台湾省"),
 }
 
 # 省份后缀，跟 server._short_province 同一套；chinamap 的键是简称
 _PROVINCE_SUFFIX = ("维吾尔自治区", "壮族自治区", "回族自治区", "特别行政区",
                     "自治区", "省", "市")
+
+#: 省份简称 -> 英文名。定位接口给的地名是中文，英文页面上「广东 · 广州市」这种
+#: 混排没法看，而城市名没有统一英译，所以英文下只翻到省市能查到的那些，
+#: 查不到就退回上一级（省份或国家），不硬拼一串中文。
+PROVINCE_EN = {
+    "北京": "Beijing", "天津": "Tianjin", "上海": "Shanghai", "重庆": "Chongqing",
+    "河北": "Hebei", "山西": "Shanxi", "辽宁": "Liaoning", "吉林": "Jilin",
+    "黑龙江": "Heilongjiang", "江苏": "Jiangsu", "浙江": "Zhejiang", "安徽": "Anhui",
+    "福建": "Fujian", "江西": "Jiangxi", "山东": "Shandong", "河南": "Henan",
+    "湖北": "Hubei", "湖南": "Hunan", "广东": "Guangdong", "海南": "Hainan",
+    "四川": "Sichuan", "贵州": "Guizhou", "云南": "Yunnan", "陕西": "Shaanxi",
+    "甘肃": "Gansu", "青海": "Qinghai", "台湾": "Taiwan", "内蒙古": "Inner Mongolia",
+    "广西": "Guangxi", "西藏": "Tibet", "宁夏": "Ningxia", "新疆": "Xinjiang",
+    "香港": "Hong Kong", "澳门": "Macao",
+}
+
+#: 常见城市 -> 英文名。宁可少放也别放错：查不到的城市在英文页面上会被
+#: 省/国家顶掉，不会把中文甩给老外。
+CITY_EN = {
+    "北京": "Beijing", "上海": "Shanghai", "广州": "Guangzhou", "深圳": "Shenzhen",
+    "杭州": "Hangzhou", "南京": "Nanjing", "苏州": "Suzhou", "成都": "Chengdu",
+    "武汉": "Wuhan", "西安": "Xi'an", "天津": "Tianjin", "重庆": "Chongqing",
+    "郑州": "Zhengzhou", "长沙": "Changsha", "东莞": "Dongguan", "佛山": "Foshan",
+    "宁波": "Ningbo", "青岛": "Qingdao", "厦门": "Xiamen", "福州": "Fuzhou",
+    "合肥": "Hefei", "昆明": "Kunming", "济南": "Jinan", "沈阳": "Shenyang",
+    "大连": "Dalian", "哈尔滨": "Harbin", "温州": "Wenzhou", "无锡": "Wuxi",
+    "石家庄": "Shijiazhuang", "南昌": "Nanchang", "太原": "Taiyuan", "南宁": "Nanning",
+    "贵阳": "Guiyang", "兰州": "Lanzhou", "海口": "Haikou", "三亚": "Sanya",
+    "乌鲁木齐": "Urumqi", "呼和浩特": "Hohhot", "银川": "Yinchuan", "西宁": "Xining",
+    "拉萨": "Lhasa", "珠海": "Zhuhai", "中山": "Zhongshan", "惠州": "Huizhou",
+    "常州": "Changzhou", "徐州": "Xuzhou", "南通": "Nantong", "绍兴": "Shaoxing",
+    "嘉兴": "Jiaxing", "金华": "Jinhua", "台州": "Taizhou", "泉州": "Quanzhou",
+    "烟台": "Yantai", "潍坊": "Weifang", "洛阳": "Luoyang", "唐山": "Tangshan",
+    "香港": "Hong Kong", "澳门": "Macao", "台北": "Taipei", "高雄": "Kaohsiung",
+    "洛杉矶": "Los Angeles", "纽约": "New York", "旧金山": "San Francisco",
+    "西雅图": "Seattle", "芝加哥": "Chicago", "达拉斯": "Dallas", "休斯敦": "Houston",
+    "东京": "Tokyo", "大阪": "Osaka", "首尔": "Seoul", "新加坡": "Singapore",
+    "曼谷": "Bangkok", "吉隆坡": "Kuala Lumpur", "雅加达": "Jakarta",
+    "伦敦": "London", "巴黎": "Paris", "柏林": "Berlin", "法兰克福": "Frankfurt",
+    "阿姆斯特丹": "Amsterdam", "莫斯科": "Moscow", "悉尼": "Sydney",
+    "墨尔本": "Melbourne", "多伦多": "Toronto", "温哥华": "Vancouver",
+}
+
+
+def _is_en(lang: str) -> bool:
+    return str(lang or "").lower().startswith("en")
+
+
+def _place_en(name: str) -> str:
+    """中文地名 -> 英文；查不到返回空串（让调用方退回上一级）。"""
+    short = _short(name)
+    return PROVINCE_EN.get(short) or CITY_EN.get(short) or ""
 
 
 def empty_summary() -> dict:
@@ -74,6 +136,26 @@ def _region_text(code: str, city: str, province: str, lang: str) -> str:
     city = (city or "").strip()
     province = (province or "").strip()
     country = t("visit.country." + code, lang) if _has_country(code, lang) else code
+    if _is_en(lang):
+        # 英文页面：省市查得到英文就拼，查不到就只留一级，不把中文甩给用户
+        province_en = _place_en(province) if province else ""
+        city_en = _place_en(city) if city else ""
+        if code in ("CN", "HK", "MO", "TW"):
+            if province_en and city_en and city_en != province_en:
+                return province_en + " · " + city_en
+            return province_en or city_en or country
+        if city_en:
+            return country + " · " + city_en
+        if province_en:
+            return country + " · " + province_en
+        return country
+    if code in _SELF_NAME:
+        # 港澳台在国内口径里，名字已经带「中国」前缀（中国香港…）；定位给的省市名
+        # 常常就是地名本身，同名就别再拼一遍。
+        tail = city or province
+        if not tail or tail in _SELF_NAME[code]:
+            return country
+        return country + " · " + tail
     if code == "CN":
         if province:
             return province if not city or city == province else province + " · " + city
@@ -230,13 +312,14 @@ def _build_rank(summary, lang: str) -> str:
     parts = []
     for index, (name, count) in enumerate(rows):
         fill = max(8, int(round(count / float(peak) * 100)))
+        label = (_place_en(str(name)) or str(name)) if _is_en(lang) else str(name)
         # 轨道拆两列：左列宽度就是占比，右列吃掉剩下的——比算绝对像素稳，
         # 卡片宽度随窗口变时条子跟着伸缩。
         parts.append(
             '<Grid Margin="0,' + ("8" if index else "10") + ',0,0">'
             '<Grid.ColumnDefinitions><ColumnDefinition Width="70" />'
             '<ColumnDefinition Width="1*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>'
-            '<TextBlock Grid.Column="0" Text="' + escape_attr(str(name)) + '" FontSize="12" '
+            '<TextBlock Grid.Column="0" Text="' + escape_attr(str(label)) + '" FontSize="12" '
             'VerticalAlignment="Center" Foreground="{DynamicResource ColorBrush2}" />'
             '<Grid Grid.Column="1" Height="10" Margin="8,0,10,0" VerticalAlignment="Center">'
             '<Grid.ColumnDefinitions><ColumnDefinition Width="' + str(fill) + '*" />'
