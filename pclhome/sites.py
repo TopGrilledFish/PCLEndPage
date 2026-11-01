@@ -129,18 +129,28 @@ def build_site_items(config: Config, lang: str = "", base: str = "") -> str:
 
     lang = lang or DEFAULT_LANG
     base = base or config.resolved_base_url() or "__BASE_URL__"
+
+    def pick(key: str, fallback: str) -> str:
+        """先按当前语言取；没有就退英文，再没有才用配置里的原文。
+
+        站点是第三方品牌站，名字和一句话介绍属于配置数据；只翻了核心键的
+        语言包没有 ``site.*`` 时，掉回中文会让日语页面里冒出一串中文，所以
+        中间加一层英文（"Microsoft's search engine" 总比「微软的搜索引擎」好认）。
+        """
+        if has(key, lang):
+            return t(key, lang)
+        if has(key, "en"):
+            return t(key, "en")
+        return fallback
+
     blocks = []
     for site in config.sites:
         slug = site_slug(site)
         logo = icon_url(config, site)
         if logo.startswith("/"):
             logo = base + logo
-        # 站点名与描述来自 config，属于配置数据；i18n 表里按 slug 给覆盖，
-        # 没给就原样用配置里的（用户自己加的站点不必翻）
-        name = t("site." + slug + ".name", lang) if has("site." + slug + ".name", lang) \
-            else site.get("name", "")
-        info = t("site." + slug + ".info", lang) if has("site." + slug + ".info", lang) \
-            else site.get("info", "")
+        name = pick("site." + slug + ".name", site.get("name", ""))
+        info = pick("site." + slug + ".info", site.get("info", ""))
         blocks.append(render_template(ITEM_TEMPLATE, {
             "LOGO": logo,
             "TITLE": name,
