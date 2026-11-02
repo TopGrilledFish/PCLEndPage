@@ -1,13 +1,10 @@
 # -*- coding: utf-8 -*-
 """界面语言选择页（PCL 内页）。
 
-个性设置页里那个「语言」入口点进来就是这里：一张语言清单加一个搜索框。
+个性设置页里那个「语言」入口点进来就是这里。
 
-清单里每一种语言都**真能切**：``pclhome/i18n/<code>.json`` 一个文件一种语言。
-简中 / 繁中 / 英文是完整词条（七百多个键），其余每种只翻「核心键」
-（``i18n.CORE_KEYS``，主页标题、按钮、语言页、访问页这些一眼能看到的），
-剩下的键运行时回退成英文再回退简中——所以切过去不会有一大片空白，
-只是深层页面还留着英文。
+只有简体中文 / 繁体中文 / 英文三种：``pclhome/i18n/<code>.json`` 一个文件一种
+语言，都是完整的七百多个键，切过去整页（含计算器、AI 页、访问页）都跟着变。
 """
 from __future__ import annotations
 
@@ -15,116 +12,30 @@ import json
 from urllib.parse import parse_qs, unquote
 
 from . import palette, profiles
-from .i18n import (available_langs, is_supported, lang_name, lang_name_en,
-                   lang_name_zh, t)
+from .i18n import is_supported, lang_name, lang_name_en, lang_name_zh, t
 from .log import warn
-from .xaml import (ICON_BACK, ICON_LANG, ICON_SEARCH, attr, bind_to,
-                   escape_attr, escape_url_attr, heading, help_button,
-                   input_row, nav_row, note)
+from .xaml import (ICON_LANG, attr, escape_attr, escape_url_attr, heading,
+                   help_button, nav_row, note)
 
 _META = {"/language_page.json": ("language.title", "language.desc")}
 _DO = {"/language_page.xaml"}
 LANGUAGE_PATHS = set(_META) | _DO
 
-#: 清单：(语言代码, 本地写法, 中文名, 英文名)。前三个是完整词条，其余按常见度排。
-#: 别改成按字母排——中文用户找「日本語」比找 "ja" 快。
-#: 英文页面上只写英文名（``_display`` 管这个）：英文页里冒出汉字会被体检拦下。
+#: 清单：(语言代码, 本地写法, 中文名, 英文名)。
 #: 显示名以语言包里的 ``_name`` / ``_name_zh`` / ``_name_en`` 为准（``_display``），
-#: 这里的第 2~4 列只是兜底，也是搜索时要匹配的词。
+#: 这里第 2~4 列是兜底。英文页面上只写英文名——英文页冒出汉字会被体检拦下。
 LANGUAGES = [
     ("zh-hans", "简体中文", "简体中文", "Chinese (Simplified)"),
     ("zh-hant", "繁體中文", "繁体中文", "Chinese (Traditional)"),
     ("en", "English", "英语", "English"),
-    ("ja", "日本語", "日语", "Japanese"),
-    ("ko", "한국어", "韩语", "Korean"),
-    ("ru", "Русский", "俄语", "Russian"),
-    ("de", "Deutsch", "德语", "German"),
-    ("fr", "Français", "法语", "French"),
-    ("es", "Español", "西班牙语", "Spanish"),
-    ("pt", "Português", "葡萄牙语", "Portuguese"),
-    ("it", "Italiano", "意大利语", "Italian"),
-    ("nl", "Nederlands", "荷兰语", "Dutch"),
-    ("pl", "Polski", "波兰语", "Polish"),
-    ("sv", "Svenska", "瑞典语", "Swedish"),
-    ("no", "Norsk", "挪威语", "Norwegian"),
-    ("da", "Dansk", "丹麦语", "Danish"),
-    ("fi", "Suomi", "芬兰语", "Finnish"),
-    ("is", "Íslenska", "冰岛语", "Icelandic"),
-    ("cs", "Čeština", "捷克语", "Czech"),
-    ("sk", "Slovenčina", "斯洛伐克语", "Slovak"),
-    ("hu", "Magyar", "匈牙利语", "Hungarian"),
-    ("ro", "Română", "罗马尼亚语", "Romanian"),
-    ("bg", "Български", "保加利亚语", "Bulgarian"),
-    ("el", "Ελληνικά", "希腊语", "Greek"),
-    ("tr", "Türkçe", "土耳其语", "Turkish"),
-    ("uk", "Українська", "乌克兰语", "Ukrainian"),
-    ("be", "Беларуская", "白俄罗斯语", "Belarusian"),
-    ("sr", "Српски", "塞尔维亚语", "Serbian"),
-    ("hr", "Hrvatski", "克罗地亚语", "Croatian"),
-    ("sl", "Slovenščina", "斯洛文尼亚语", "Slovenian"),
-    ("bs", "Bosanski", "波斯尼亚语", "Bosnian"),
-    ("mk", "Македонски", "马其顿语", "Macedonian"),
-    ("sq", "Shqip", "阿尔巴尼亚语", "Albanian"),
-    ("lt", "Lietuvių", "立陶宛语", "Lithuanian"),
-    ("lv", "Latviešu", "拉脱维亚语", "Latvian"),
-    ("et", "Eesti", "爱沙尼亚语", "Estonian"),
-    ("ca", "Català", "加泰罗尼亚语", "Catalan"),
-    ("gl", "Galego", "加利西亚语", "Galician"),
-    ("eu", "Euskara", "巴斯克语", "Basque"),
-    ("cy", "Cymraeg", "威尔士语", "Welsh"),
-    ("ga", "Gaeilge", "爱尔兰语", "Irish"),
-    ("mt", "Malti", "马耳他语", "Maltese"),
-    ("ar", "العربية", "阿拉伯语", "Arabic"),
-    ("he", "עברית", "希伯来语", "Hebrew"),
-    ("fa", "فارسی", "波斯语", "Persian"),
-    ("ur", "اردو", "乌尔都语", "Urdu"),
-    ("hi", "हिन्दी", "印地语", "Hindi"),
-    ("bn", "বাংলা", "孟加拉语", "Bengali"),
-    ("ta", "தமிழ்", "泰米尔语", "Tamil"),
-    ("te", "తెలుగు", "泰卢固语", "Telugu"),
-    ("gu", "ગુજરાતી", "古吉拉特语", "Gujarati"),
-    ("kn", "ಕನ್ನಡ", "卡纳达语", "Kannada"),
-    ("ml", "മലയാളം", "马拉雅拉姆语", "Malayalam"),
-    ("mr", "मराठी", "马拉地语", "Marathi"),
-    ("ne", "नेपाली", "尼泊尔语", "Nepali"),
-    ("si", "සිංහල", "僧伽罗语", "Sinhala"),
-    ("th", "ไทย", "泰语", "Thai"),
-    ("vi", "Tiếng Việt", "越南语", "Vietnamese"),
-    ("id", "Bahasa Indonesia", "印度尼西亚语", "Indonesian"),
-    ("ms", "Bahasa Melayu", "马来语", "Malay"),
-    ("fil", "Filipino", "菲律宾语", "Filipino"),
-    ("km", "ខ្មែរ", "高棉语", "Khmer"),
-    ("lo", "ລາວ", "老挝语", "Lao"),
-    ("my", "မြန်မာ", "缅甸语", "Burmese"),
-    ("mn", "Монгол", "蒙古语", "Mongolian"),
-    ("kk", "Қазақша", "哈萨克语", "Kazakh"),
-    ("uz", "Oʻzbekcha", "乌兹别克语", "Uzbek"),
-    ("az", "Azərbaycan", "阿塞拜疆语", "Azerbaijani"),
-    ("ka", "ქართული", "格鲁吉亚语", "Georgian"),
-    ("hy", "Հայերեն", "亚美尼亚语", "Armenian"),
-    ("sw", "Kiswahili", "斯瓦希里语", "Swahili"),
-    ("af", "Afrikaans", "南非荷兰语", "Afrikaans"),
-    ("am", "አማርኛ", "阿姆哈拉语", "Amharic"),
-    ("eo", "Esperanto", "世界语", "Esperanto"),
-    ("la", "Latina", "拉丁语", "Latin"),
 ]
 
-#: 语言代码 -> (本地写法, 中文名, 英文名)，静态清单那三列
+#: 语言代码 -> (本地写法, 中文名, 英文名)
 BY_CODE = {item[0]: item[1:] for item in LANGUAGES}
-
-#: 支持的按钮一行放几个（跟关于卡那排按钮同款栅格）
-_PER_ROW = 4
 
 
 def _is_en(lang: str) -> bool:
     return str(lang or "").lower().startswith("en")
-
-
-def _all_codes() -> list:
-    """全部语言代码：清单顺序在前，语言包里有但清单没列到的补在最后。"""
-    listed = [item[0] for item in LANGUAGES]
-    seen = set(listed)
-    return listed + [code for code in available_langs() if code not in seen]
 
 
 def _entry(code: str) -> tuple:
@@ -162,17 +73,6 @@ def parse_query(query: str) -> dict:
         return out
 
 
-def search(keyword: str) -> list:
-    """按代码 / 本地写法 / 中文名 / 英文名过滤；空关键词返回全部。"""
-    everything = [_entry(code) for code in _all_codes()]
-    text = (keyword or "").strip().lower()
-    if not text:
-        return everything
-    return [item for item in everything
-            if text in item[0].lower() or text in item[1].lower()
-            or text in item[2].lower() or text in item[3].lower()]
-
-
 def _current_block(lang: str, result: str) -> str:
     rows = ['<TextBlock Text="'
             + attr(t("language.current", lang, language=_display(lang, lang)))
@@ -186,7 +86,7 @@ def _current_block(lang: str, result: str) -> str:
 
 
 def _entry_button(item, lang: str, base: str, column: int, current: bool) -> str:
-    """一个语言按钮（只用于已支持的），当前那个打勾并点亮。"""
+    """一个语言按钮，当前那个打勾并点亮。"""
     code = item[0]
     label = ("✓ " if current else "") + _display(code, lang)
     return help_button(label, ICON_LANG, base + "/language_page.json?lang=" + code, 38,
@@ -195,35 +95,15 @@ def _entry_button(item, lang: str, base: str, column: int, current: bool) -> str
 
 
 def _entry_grid(items: list, lang: str, base: str, current: str) -> str:
-    """语言按钮铺成等宽网格：一行 ``_PER_ROW`` 个，竖排太占地方。"""
+    """三种语言并排一行，竖排太占地方。"""
     if not items:
         return ""
-    rows = []
-    for start in range(0, len(items), _PER_ROW):
-        chunk = items[start:start + _PER_ROW]
-        rows.append('<Grid Margin="0,' + ("6" if start else "4") + ',0,0">'
-                    '<Grid.ColumnDefinitions>'
-                    + '<ColumnDefinition Width="1*" />' * _PER_ROW
-                    + '</Grid.ColumnDefinitions>'
-                    + "".join(_entry_button(item, lang, base, index, item[0] == current)
-                              for index, item in enumerate(chunk))
-                    + '</Grid>')
-    return "".join(rows)
-
-
-def _plain_row(item, lang: str) -> str:
-    """未支持的语言：一行灰字，不做按钮——点不动的东西做成按钮是骗点击。"""
-    code, native = item[0], item[1]
-    name = _display(code, lang)
-    # 本地写法只在跟显示名不一样时补一句，英文页那行就不带汉字了
-    extra = native if (not _is_en(lang) and native != name) else code
     return ('<Grid Margin="0,4,0,0"><Grid.ColumnDefinitions>'
-            '<ColumnDefinition Width="1*" /><ColumnDefinition Width="Auto" />'
-            '</Grid.ColumnDefinitions>'
-            '<TextBlock Grid.Column="0" Text="' + attr(name) + '" FontSize="12" '
-            'Foreground="{DynamicResource ColorBrush3}" />'
-            '<TextBlock Grid.Column="1" Text="' + attr(extra) + '" FontSize="11" Margin="10,0,0,0" '
-            'Foreground="{DynamicResource ColorBrush3}" /></Grid>')
+            + '<ColumnDefinition Width="1*" />' * len(items)
+            + "</Grid.ColumnDefinitions>"
+            + "".join(_entry_button(item, lang, base, index, item[0] == current)
+                      for index, item in enumerate(items))
+            + "</Grid>")
 
 
 def build_language_page(base_url: str, ip: str = "", query: str = "",
@@ -243,37 +123,14 @@ def build_language_page(base_url: str, ip: str = "", query: str = "",
             result = t("language.switched", current,
                        language=_display(current, current))
         else:
-            label = _display(wanted, current) if is_supported(wanted) else wanted
-            result = t("language.unsupported_click", current, language=label)
+            result = t("language.unsupported_click", current, language=wanted)
 
-    keyword = (params.get("q") or "").strip()
-    matched = search(keyword)
-    supported = [item for item in matched if is_supported(item[0])]
-    others = [item for item in matched if not is_supported(item[0])]
+    supported = [(item[0],) for item in LANGUAGES if is_supported(item[0])]
 
     body = [heading(t("language.current_title", current), "0,20,0,0"),
             _current_block(current, result),
-            input_row("langq", t("language.search_hint", current), 38, "0,14,0,0"),
-            help_button(t("language.search_button", current), ICON_SEARCH,
-                        bind_to("langq", base, "/language_page.json"), 38, margin="0,8,0,0")]
-
-    if keyword:
-        body.append('<local:MyHint Theme="Blue" Margin="0,12,0,0" Text="'
-                    + attr(t("language.search_result", current, q=keyword, n=len(matched)))
-                    + '" />')
-        body.append(help_button(t("language.clear_search", current), ICON_BACK,
-                                base + "/language_page.json", 34, margin="0,8,0,0", color=""))
-        if not matched:
-            body.append(note(t("language.search_empty", current), "0,10,0,0"))
-
-    if supported:
-        body.append(heading(t("language.supported_title", current, n=len(supported)), "0,20,0,0"))
-        body.append(_entry_grid(supported, current, base, current))
-
-    if others:
-        body.append(heading(t("language.others_title", current, n=len(others)), "0,20,0,0"))
-        body.append(note(t("language.others_hint", current), "0,6,0,0"))
-        body.append("".join(_plain_row(item, current) for item in others))
+            heading(t("language.supported_title", current, n=len(supported)), "0,20,0,0"),
+            _entry_grid(supported, current, base, current)]
 
     return (
         '<local:MyCard Title="' + escape_attr(t("language.title", current))

@@ -409,8 +409,6 @@ def build_visit_page(summary: dict, base_url: str = "", ip: str = "",
     summary = summary or empty_summary()
 
     body = [_build_kpis(summary, lang, days), divider("0,22,0,4")]
-    body.append(heading(t("visit.map_title", lang), "0,6,0,0"))
-    body.append(note(t("visit.map_hint", lang, days=days)))
     body.append(_build_map(summary, lang))
     body.append(divider("0,22,0,4"))
     body.append(heading(t("visit.rank_title", lang), "0,6,0,0"))
@@ -421,9 +419,6 @@ def build_visit_page(summary: dict, base_url: str = "", ip: str = "",
     body.append(_build_trend(summary, lang))
     body.append(heading(t("visit.recent_title", lang)))
     body.append(_build_recent(summary, lang))
-    body.append(divider("0,20,0,4"))
-    body.append(note(t("visit.privacy", lang, days=days)))
-    body.append(note(t("visit.refresh_hint", lang), "0,6,0,0"))
 
     return ('<local:MyCard Title="' + escape_attr(t("visit.title", lang))
             + '" CanSwap="False"><StackPanel Margin="25,40,23,20">'

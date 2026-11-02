@@ -1,21 +1,14 @@
 # -*- coding: utf-8 -*-
 """界面文案的多语言查表。
 
-语言包放 ``pclhome/i18n/<代码>.json``，一个语言一份：
+语言包放 ``pclhome/i18n/<代码>.json``，一个语言一份，键集合要一致：
 
 * ``zh-hans`` 简体中文（默认，也是唯一"手写"的那份，是母版）
 * ``zh-hant`` 繁體中文（``tools/make_zh_hant.py`` 从简中生成）
 * ``en``      英文
-* 其余 70 多种语言：只翻译**核心键**（``CORE_KEYS``，见下），剩下的键在运行时
-  回退到英文（再回退到简中）。这样切过去之后主页、按钮、语言页、访问页的标题
-  都是目标语言，长篇说明性文字保持英文——比整页原样不动要实用得多。
 
-**为什么允许"半套词条"**：一份完整词条 745 个键，七十多种语言全翻一遍是
-几万条文案，没有翻译团队做不了。与其列出来点不动，不如让核心界面真的能用，
-缺的那部分老老实实回退英文，并且 ``doctor`` 会检查每个语言包的核心键是否齐全。
-
-其它语言缺键**不再 warn**：七十多种语言每次请求都会缺几十个键，一条条打日志
-等于把日志写满。真缺东西由体检报告兜底。
+缺的键运行时回退到 ``en`` 再回退 ``zh-hans``（静默，不打日志），所以三份词条哪怕
+一时没对齐也不会把页面顶出空白——真缺东西由 ``doctor`` 的键集合比对兜底。
 """
 from __future__ import annotations
 
@@ -31,116 +24,6 @@ LANGS = ("zh-hans", "zh-hant", "en")
 LANG_NAMES = {"zh-hans": "简体中文", "zh-hant": "繁體中文", "en": "English"}
 
 I18N_DIR = Path(__file__).resolve().parent / "i18n"
-
-#: 每个语言包都必须有的键：主页、按钮、语言页、访问页、设置页的骨架。
-#: 缺了体检报错——这些是"切过去一眼就能看见"的地方。
-CORE_KEYS = (
-    "home.welcome",
-    "home.sites_title",
-    "home.quote_label",
-    "home.footer_title",
-    "home.footer_open_repo",
-    "home.footer_open_origin",
-    "home.footer_settings",
-    "home.footer_sponsor",
-    "home.footer_browse",
-    "home.footer_version_unknown",
-    "btn.refresh",
-    "btn.calc",
-    "btn.ai",
-    "btn.back_home",
-    "btn.back",
-    "btn.refresh_page",
-    "btn.refresh_result",
-    "btn.ok",
-    "language.title",
-    "language.current",
-    "language.current_title",
-    "language.search_button",
-    "language.supported_title",
-    "language.others_title",
-    "visit.title",
-    "visit.kpi_today",
-    "visit.map_title",
-    "visit.rank_title",
-    "visit.recent_title",
-    "settings.title",
-    # 首屏横幅：问候、日期、农历、天气摘要、剩下几枚按钮。
-    # 这些是"每天都会变、眼睛第一眼落在上面"的文字，翻不了就等于没切语言。
-    "greeting.dawn",
-    "greeting.morning",
-    "greeting.noon",
-    "greeting.afternoon",
-    "greeting.evening",
-    "greeting.night",
-    "date.month.1",
-    "date.month.2",
-    "date.month.3",
-    "date.month.4",
-    "date.month.5",
-    "date.month.6",
-    "date.month.7",
-    "date.month.8",
-    "date.month.9",
-    "date.month.10",
-    "date.month.11",
-    "date.month.12",
-    "date.month_suffix",
-    "date.day_suffix",
-    "date.weekday_prefix",
-    "date.weekday.0",
-    "date.weekday.1",
-    "date.weekday.2",
-    "date.weekday.3",
-    "date.weekday.4",
-    "date.weekday.5",
-    "date.weekday.6",
-    "lunar.prefix",
-    "lunar.leap",
-    "weather.updated_at",
-    "weather.humidity",
-    "weather.wind_level",
-    "weather.here",
-    "weather.wind_dir.n",
-    "weather.wind_dir.ne",
-    "weather.wind_dir.e",
-    "weather.wind_dir.se",
-    "weather.wind_dir.s",
-    "weather.wind_dir.sw",
-    "weather.wind_dir.w",
-    "weather.wind_dir.nw",
-    "btn.memory",
-    "btn.settings",
-    "home.footer_author",
-    "home.footer_repo",
-    "home.footer_version",
-    "home.footer_origin_author",
-    "home.footer_origin_repo",
-    "lunar.date",
-    "lunar.day_n",
-    "lunar.month.1",
-    "lunar.month.2",
-    "lunar.month.3",
-    "lunar.month.4",
-    "lunar.month.5",
-    "lunar.month.6",
-    "lunar.month.7",
-    "lunar.month.8",
-    "lunar.month.9",
-    "lunar.month.10",
-    "lunar.month.11",
-    "lunar.month.12",
-    "lunar.countdown_left",
-    "lunar.countdown_one",
-    "lunar.countdown_today",
-    "lunar.festival_today",
-    "weather.unavailable",
-    "weather.unavailable_reason",
-    "weather.reason.off",
-    "weather.reason.not_found",
-    "greeting.sub_plain",
-    "weather.tip_plain",
-)
 
 # 常见写法的归一：PCL 那边、系统语言、用户手输都可能给出这些
 _ALIASES = {

@@ -239,25 +239,6 @@ def check_i18n(report: Report) -> None:
     else:
         report.good("天气提示与问候语各语言条数一致")
 
-    # 其余语言包只翻「核心键」，缺的那些运行时回退英文——但核心键缺了就是
-    # 一片空白，所以逐个包核一遍；顺带确认包里写了自称（页面上要显示）
-    packs = [code for code in i18n.available_langs() if code not in i18n.LANGS]
-    problems = []
-    for code in packs:
-        table = i18n.table(code)
-        if not str(table.get("_name") or "").strip():
-            problems.append(code + " 缺 _name")
-            continue
-        missing = [key for key in i18n.CORE_KEYS if not isinstance(table.get(key), str)]
-        if missing:
-            problems.append(code + " 缺 " + str(len(missing)) + " 个核心键（"
-                            + "、".join(missing[:3]) + "）")
-    if problems:
-        report.bad("语言包不完整（" + str(len(problems)) + " 个）：" + "；".join(problems[:3]))
-    else:
-        report.good(str(len(packs)) + " 个语言包都有自称与 " + str(len(i18n.CORE_KEYS))
-                    + " 个核心键（其余键回退英文）")
-
 
 def check_hash(report: Report) -> None:
     report.section("3/9 哈希算法与上游一致性（决定「同一人当天内容固定」）")
@@ -819,22 +800,19 @@ def _visit_pages() -> list:
 def _language_pages() -> list:
     """界面语言页的几种形态，``[(名字, XAML)]``。
 
-    三种语言各画一遍，再加"搜到了"和"没搜到"两种搜索结果页。``lang`` 是直接
+    三种语言各画一遍，再加一个"刚切过来"的形态（切换提示那行）。``lang`` 是直接
     传进去的，不碰 ``profiles`` 里的真记录——体检不该改用户的语言设置。
     """
     from . import languages as languages_module
 
     pages = []
     for lang in ("zh-hans", "zh-hant", "en"):
-        pages.append(("界面语言/全部/" + lang,
+        pages.append(("界面语言/" + lang,
                       languages_module.build_language_page("http://localhost",
                                                            "203.0.113.7", "", lang)))
-    pages.append(("界面语言/搜索/de",
+    pages.append(("界面语言/切换后",
                   languages_module.build_language_page("http://localhost", "203.0.113.7",
-                                                      "q=de", "zh-hans")))
-    pages.append(("界面语言/搜索/没结果",
-                  languages_module.build_language_page("http://localhost", "203.0.113.7",
-                                                      "q=zzzz", "zh-hans")))
+                                                      "lang=zh-hant", "zh-hans")))
     return pages
 
 
@@ -1073,7 +1051,7 @@ def check_rendered(report: Report, config: Config) -> None:
     except Exception as exc:
         report.bad("访问浏览页构建失败：" + repr(exc))
 
-    # 界面语言页：三种语言各一遍，外加「搜到了」和「没搜到」。
+    # 界面语言页：三种语言各一遍，外加切换后的提示。
     try:
         pages = dict(_language_pages())
         broken = []
@@ -1084,21 +1062,18 @@ def check_rendered(report: Report, config: Config) -> None:
             except ET.ParseError as exc:
                 broken.append(label + "：" + str(exc))
         home_mark = ('EventType="' + HOME_EVENT_TYPE + '" EventData="' + HOME_EVENT_DATA + '"')
-        searched = pages["界面语言/搜索/de"]
-        nothing = pages["界面语言/搜索/没结果"]
-        english = pages["界面语言/全部/en"]
+        english = pages["界面语言/en"]
+        switched = pages["界面语言/切换后"]
         if broken:
             report.bad("界面语言页 XML 解析失败：" + "；".join(broken[:3]))
         elif not all(home_mark in body for body in pages.values()):
             report.bad("界面语言页缺「返回主页」按钮")
-        elif "德语" not in searched or "日语" in searched:
-            report.bad("界面语言页搜索「de」没搜对（该有德语，不该带日语）")
-        elif "没有匹配的语言" not in nothing:
-            report.bad("界面语言页搜不到东西时没给出提示")
-        elif "Supported" not in english or "Japanese" not in english:
+        elif "Supported" not in english or "Chinese (Traditional)" not in english:
             report.bad("界面语言页英文形态文案不对")
+        elif not ("已切换" in switched or "已切換" in switched):
+            report.bad("界面语言页切换后没给出提示")
         else:
-            report.good("界面语言页 " + str(len(pages)) + " 种形态 XML 良构，搜索命中/落空都有提示")
+            report.good("界面语言页 " + str(len(pages)) + " 种形态 XML 良构，三种语言都在")
     except Exception as exc:
         report.bad("界面语言页构建失败：" + repr(exc))
 

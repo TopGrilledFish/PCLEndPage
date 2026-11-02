@@ -52,8 +52,8 @@ WEATHER_API = "https://uapis.cn/api/v1/misc/weather"
 LUNAR_API = "https://uapis.cn/api/v1/misc/lunartime"
 
 # AI 日志分析：OpenAI 兼容接口，默认 DeepSeek 官方。
-# 站长密钥（ai_api_key）每 IP 每个 ai_rate_window（hour / day）限 ai_rate_limit 次；
-# 访客也可以填自己的密钥绕过限制。
+# 站长密钥（ai_api_key）按 token 计额度（ai_token_limit / ai_token_window_hours）；
+# 访客也可以填自己的密钥绕过额度。
 AI_API_BASE = "https://api.deepseek.com/v1"
 # V4 Flash。**别用 deepseek-v4-pro**：同一个问题它思考量是 flash 的三倍多
 # （实测 567 token vs 182），费用也高三倍左右。
@@ -130,7 +130,6 @@ ENV_MAP = {
     "PCLHOME_AI_BASE": ("ai_api_base", str),
     "PCLHOME_AI_MODEL": ("ai_model", str),
     "PCLHOME_AI_LIMIT": ("ai_rate_limit", int),
-    "PCLHOME_AI_WINDOW": ("ai_rate_window", str),
     "PCLHOME_AI_TOKEN_LIMIT": ("ai_token_limit", int),
     "PCLHOME_AI_TOKEN_HOURS": ("ai_token_window_hours", float),
     "PCLHOME_WALLPAPER": ("enable_wallpaper", lambda v: v not in ("0", "false", "no")),
@@ -197,7 +196,6 @@ class Config:
     ai_reserve_tokens: int = 8000     # 每次请求先预留这么多，结算时按实际用量找零
     ai_peak_multiplier: float = 2.0   # DeepSeek 高峰时段（北京时间 8:30–次日 0:30）加权
     ai_rate_limit: int = 20           # 次数兜底：每窗口最多几次，0 = 不限
-    ai_rate_window: str = "hour"      # 老字段，仅用于兼容旧配置和后台文案
     ai_free_ips: list = field(default_factory=list)   # 这些 IP 用内置密钥不计数
     ai_max_log_chars: int = 24000     # 送给 AI 的日志上限（超长掐中间）
     # 回复长度上限。**不能给小**：deepseek-flash / v4-pro 都是推理模型，
@@ -256,14 +254,6 @@ class Config:
             if key and key not in out:
                 out.append(key)
         return out
-
-    def ai_window(self) -> str:
-        """AI 额度窗口的归一：只认 day，其余（含写错的）一律 hour。"""
-        return "day" if str(self.ai_rate_window or "").strip().lower() == "day" else "hour"
-
-    def ai_window_text(self) -> str:
-        """给日志和后台看的中文窗口名。"""
-        return "每天" if self.ai_window() == "day" else "每小时"
 
     def ai_window_seconds(self) -> int:
         """token 额度窗口的秒数。0 或负数一律按 5 小时算，别把额度变成无限。"""
@@ -343,14 +333,7 @@ def load_config(path: Path | None = None) -> Config:
         for key, value in data.items():
             if key.startswith("_"):
                 continue
-            if key == "ai_daily_limit":
-                # 老配置项：本来的意思是"每天 N 次"，就照这个意思接着用，
-                # 别把它当成每小时——那会悄悄把额度放宽 24 倍。
-                kwargs.setdefault("ai_rate_limit", value)
-                kwargs.setdefault("ai_rate_window", "day")
-                print("[Config] ai_daily_limit 已改名：请改用 ai_rate_limit + "
-                      "ai_rate_window（这次按 ai_rate_window=day 处理）")
-            elif key in fields:
+            if key in fields:
                 kwargs[key] = value
             else:
                 print("[Config] 忽略未知配置项：" + key)
