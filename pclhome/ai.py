@@ -48,7 +48,9 @@ def system_prompt(lang: str = DEFAULT_LANG) -> str:
 _URL_RE = re.compile(r"^https?://\S+$", re.I)
 _MCLOGS_RE = re.compile(r"^https?://(?:www\.)?mclo\.gs/([A-Za-z0-9]+)", re.I)
 
-MAX_INLINE_CHARS = 1200
+# 内联粘贴的日志能收多长。超过 ai_max_log_chars 的部分由 trim_log 掐中间并
+# 在正文里写明省略了多少字——**不要在这里静默截断**，用户会以为 AI 看全了。
+MAX_INLINE_CHARS = 40000
 
 
 def split_input(raw: str) -> tuple[str, str]:
@@ -665,6 +667,9 @@ def _parse_openai(config: Config, data: dict, lang: str = DEFAULT_LANG) -> tuple
         return False, t("ai.err.unparsable", lang,
                         body=json.dumps(data, ensure_ascii=False)[:280])
     if text:
+        # 有内容但被 max_tokens 掐断了：得让用户知道答案不全，否则他会以为 AI 就看这么多
+        if finish == "length":
+            text += "\n\n" + t("ai.err.cut_note", lang, n=config.ai_max_tokens)
         return True, text
     # deepseek-flash / v4-pro 都是推理模型：先花 token 想，再写答案。
     # max_tokens 给少了，token 全用在思考上，content 就是空的、finish_reason=length。
@@ -677,9 +682,12 @@ def _parse_anthropic(config: Config, data: dict, lang: str = DEFAULT_LANG) -> tu
     text = "".join(str(block.get("text") or "")
                    for block in (data.get("content") or [])
                    if isinstance(block, dict) and block.get("type") == "text").strip()
+    stop = str(data.get("stop_reason") or "")
     if text:
+        if stop == "max_tokens":
+            text += "\n\n" + t("ai.err.cut_note", lang, n=config.ai_max_tokens)
         return True, text
-    if str(data.get("stop_reason") or "") == "max_tokens":
+    if stop == "max_tokens":
         return _too_long(config, lang)
     return False, t("ai.err.empty_stop", lang,
                     reason=str(data.get("stop_reason") or t("ai.none", lang)))

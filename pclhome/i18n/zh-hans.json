@@ -862,5 +862,6 @@
   "ai.you_asked": "你问：{q}",
   "ai.reasoning_title": "思考过程",
   "ai.cost_line": "本次约用 {n} token",
-  "ai.meta.follow": "接着上一次的结果继续问"
+  "ai.meta.follow": "接着上一次的结果继续问",
+  "ai.err.cut_note": "（输出到了长度上限，答案可能不完整；把 config.json 里的 ai_max_tokens 调大可以放宽）"
 }

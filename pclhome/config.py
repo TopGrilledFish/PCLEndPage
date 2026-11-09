@@ -201,7 +201,7 @@ class Config:
     # 回复长度上限。**不能给小**：deepseek-flash / v4-pro 都是推理模型，
     # 先花 token 思考再写答案，上限太小的话 token 全耗在思考上，答案就是空的。
     # 实测一条崩溃日志要 ~700 思考 + ~500 答案，这里留足余量。
-    ai_max_tokens: int = 4000
+    ai_max_tokens: int = 6000
     # 推理强度：low / medium / high（deepseek 的 reasoning_effort）；空字符串 = 不发这个参数。
     # 开 low 是为了把 token 留给答案而不是思考——崩溃日志分析不需要长考。
     ai_reasoning_effort: str = "low"

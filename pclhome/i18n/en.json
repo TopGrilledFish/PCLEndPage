@@ -875,5 +875,6 @@
   "ai.you_asked": "You asked: {q}",
   "ai.reasoning_title": "Reasoning",
   "ai.cost_line": "About {n} tokens used",
-  "ai.meta.follow": "Continue from the previous answer"
+  "ai.meta.follow": "Continue from the previous answer",
+  "ai.err.cut_note": "(Output hit the length limit, so the answer may be incomplete; raise ai_max_tokens in config.json to allow more.)"
 }
