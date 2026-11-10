@@ -62,12 +62,12 @@
                     </Border>
                     <!-- __COUNTDOWN_BODY__ -->
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                            <TextBlock Text="__DATE_MONTH__" FontSize="52" FontWeight="Bold" Foreground="White" />
-                            <TextBlock Text="__T_MONTH_SUFFIX__" FontSize="15" VerticalAlignment="Bottom" Margin="0,0,4,16" Foreground="#D9FFFFFF" />
-                            <TextBlock Text="__DATE_DAY__" FontSize="52" FontWeight="Bold" Foreground="White" />
-                            <TextBlock Text="__T_DAY_SUFFIX__" FontSize="15" VerticalAlignment="Bottom" Margin="0,0,4,16" Foreground="#D9FFFFFF" />
-                        </StackPanel>
+                        <!-- 日期大字。两种渲染方式：
+                             服务端版（/Custom.xaml）拆成「11 月 1 日」的四段文字；
+                             标记版（/mark/Custom.xaml）交给 PCL 的日期替换标记，
+                             加载时才填当天日期——即使读到的是昨天缓存的 XAML，日期也是今天的。
+                             见 render.py 的 _date_main_server / _date_main_marker。 -->
+                        <!-- __DATE_MAIN__ -->
                         <TextBlock Text="__T_WEEKDAY__" HorizontalAlignment="Center" FontSize="13" FontWeight="Bold" Foreground="#FFFFFF" Margin="0,10,0,0" />
                         <!-- 农历（uapis.cn 的 lunartime；接口不可用时退回本地换算，都没有则整行消失） -->
                         <!-- __LUNAR__ -->

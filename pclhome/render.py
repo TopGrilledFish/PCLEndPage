@@ -125,13 +125,54 @@ def build_home_data(config: Config, store: Store, weather: WeatherService,
     )
 
 
+def _date_main_server(lang: str, date) -> str:
+    """服务端版日期大字：「11 月 1 日」拆成四段的原始排版。
+
+    单独抽出来是因为标记版要把这一整块换掉——见 ``_date_main_marker``。
+    """
+    from .i18n import t
+    from .xaml import escape_attr
+
+    month = escape_attr(t("date.month." + str(date.today.month), lang))
+    month_suffix = escape_attr(t("date.month_suffix", lang))
+    day = escape_attr(str(date.day_text))
+    day_suffix = escape_attr(t("date.day_suffix", lang))
+    return (
+        '<StackPanel Orientation="Horizontal" HorizontalAlignment="Center">'
+        '<TextBlock Text="' + month + '" FontSize="52" FontWeight="Bold" Foreground="White" />'
+        '<TextBlock Text="' + month_suffix + '" FontSize="15" VerticalAlignment="Bottom"'
+        ' Margin="0,0,4,16" Foreground="#D9FFFFFF" />'
+        '<TextBlock Text="' + day + '" FontSize="52" FontWeight="Bold" Foreground="White" />'
+        '<TextBlock Text="' + day_suffix + '" FontSize="15" VerticalAlignment="Bottom"'
+        ' Margin="0,0,4,16" Foreground="#D9FFFFFF" />'
+        '</StackPanel>'
+    )
+
+
+def _date_main_marker(lang: str) -> str:
+    """标记版日期大字：交给 PCL 的 ``{date}`` 替换标记，加载时才填当天。
+
+    PCL 是先替换标记、再交给 XamlReader 解析的，所以即使它渲染的是昨天缓存下来的
+    这份 XAML，日期也会变成今天——这就是「打开就是昨天」那个问题的解法。
+
+    **前面那个 ``&#160;`` 不能省**：WPF 里属性值以 ``{`` 开头会被当成 markup
+    extension 解析（``Text="{date}"`` 会报「未知的扩展 date」）。顶一个不换行空格
+    之后就不在开头了，PCL 替换完是「\\xa0日期」，居中显示看不出区别。
+    """
+    return ('<TextBlock Text="&#160;{date}" FontSize="44" FontWeight="Bold"'
+            ' Foreground="White" HorizontalAlignment="Center" />')
+
+
 def render_homepage(template: str, data: HomeData, config: Config, origin: str,
-                    lang: str = DEFAULT_LANG) -> str:
+                    lang: str = DEFAULT_LANG, date_mode: str = "server") -> str:
     """把主页模板渲染成最终 XAML。
 
     ``lang`` 是这个访客选的语言。模板里那几处静态文字（卡片标题、"月/日"、
     "星期"、"每日一言"）都写成了 ``__T_xxx__`` 令牌，在这儿按语言填——
     以前它们是构建期烘死在 Custom.xaml 里的，那样换不了语言。
+
+    ``date_mode`` 决定日期大字怎么画：``"server"`` 是拆开的「11 月 1 日」，
+    ``"marker"`` 交给 PCL 的 ``{date}`` 替换标记（打开即当天，见 _date_main_marker）。
     """
     from . import version
     from .i18n import DEFAULT_LANG as _D, t
@@ -148,6 +189,8 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str,
         "WALLPAPER_URL": wallpaper_url(config, base),
         "DATE_MONTH": t("date.month." + str(date.today.month), lang),
         "DATE_DAY": date.day_text,
+        "DATE_MAIN": (_date_main_marker(lang) if date_mode == "marker"
+                      else _date_main_server(lang, date)),
         # 星期整串在这儿拼：简中是"星期一"，英文就是"Monday"，没有前缀
         "T_WEEKDAY": escape_attr(t("date.weekday_prefix", lang)
                                  + t("date.weekday." + str((date.today.weekday() + 1) % 7), lang)),

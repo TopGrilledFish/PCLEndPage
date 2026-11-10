@@ -87,6 +87,19 @@ def _short_province(name) -> str:
 DATA_ENDPOINTS = {"/Custom.xaml", "/"}
 VERSION_PATHS = {"/Custom.xaml.version", "/Custom.xaml.ini", "/version"}
 
+# 标记版主页。和 /Custom.xaml 是同一套模板、同一份数据，只有「日期大字」不同：
+# 这边交给 PCL 的 {date} 替换标记，加载时才填当天，所以即使 PCL 渲染的是昨天
+# 缓存下来的那份 XAML，日期也是今天的（PCL 下载完不会重绘，见维护报告 §2）。
+# 在 PCL 里把联网主页地址改成 https://<域名>/mark 就能用这一版，/Custom.xaml 原样保留。
+MARK_PREFIX = "/mark"
+MARK_PATHS = {
+    MARK_PREFIX,
+    MARK_PREFIX + "/",
+    MARK_PREFIX + "/Custom.xaml",
+    MARK_PREFIX + "/Custom.xaml.ini",
+    MARK_PREFIX + "/Custom.xaml.version",
+}
+
 BASE_SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -225,17 +238,21 @@ class HomepageService:
 
     # ---- 主页 ----
 
-    def homepage(self, ip: str, origin: str):
+    def homepage(self, ip: str, origin: str, marker: bool = False):
         """返回 ``(渲染好的 XAML, HomeData)``——后者给日志用。
 
         语言和温度单位按访客 IP 从个性设置里取（``profiles.lang_for`` /
         ``unit_for``），没记录就是简中 + 摄氏度。这两步都是纯内存查表，不会让主页变慢。
+
+        ``marker=True`` 是标记版：日期大字交给 PCL 的 ``{date}``，打开即当天
+        （见 ``render._date_main_marker``）。两个版本共用同一套模板与数据。
         """
         lang = profiles.lang_for(ip)
         unit = profiles.PROFILES.unit_for(ip)
         data = build_home_data(self.config, self.store, self.weather, ip, origin, lang, unit)
         text = render_homepage(self.static_template("Custom.xaml"), data, self.config,
-                               origin, lang)
+                               origin, lang,
+                               date_mode="marker" if marker else "server")
         return palette.apply(text, profiles.PROFILES.palette_for(ip)), data
 
     # ---- 拦截：封禁 / 维护 ----
@@ -430,6 +447,54 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._note = "访问浏览：" + path
             self._send(response)
+            return
+
+        if path in MARK_PATHS:
+            if service.config.guard_clients and not is_trusted_client(ua, referer):
+                self._force_warn = True
+                self._note = "来源守卫拦截（标记版主页）：UA=" + (ua[:60] or "（空）")
+                self._send(Response.xaml(_bot_xaml(self._log_ip)))
+                return
+            if path.endswith(".ini") or path.endswith(".version"):
+                self._note = "标记版版本号（时间戳，逼 PCL 重新拉）"
+                self._send(Response.text(str(int(time.time() * 1000)), headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0, s-maxage=0",
+                    "Pragma": "no-cache", "Expires": "0", **BASE_SECURITY_HEADERS,
+                }))
+                return
+            marker_ip = self._log_ip
+            blocked = service.guard_block(marker_ip)
+            if blocked:
+                self._force_warn = True
+                self._note = ("已封禁的 IP 请求标记版主页" if service.store.is_blocked(marker_ip)
+                              else "维护模式拦截（标记版）")
+                self._send(Response.xaml(blocked))
+                return
+            try:
+                body, data = service.homepage(marker_ip, self._origin(), marker=True)
+            except Exception:
+                log.error("[Server] 标记版主页组装失败：\n" + traceback.format_exc())
+                self._note = "标记版组装失败，已返回兜底页"
+                self._send(Response.xaml(_updating_xaml(marker_ip)))
+                return
+            # 也记一笔访问：有人切到标记版之后，/Custom.xaml 就不再来流量了，
+            # 不记的话访问统计会凭空断掉。两个版本同时用才会重复计。
+            country = self.headers.get("CF-IPCountry") or "XX"
+            city, province = "", ""
+            if service.config.enable_geo:
+                try:
+                    info = geo.locate(marker_ip)
+                except Exception as exc:
+                    log.debug("[Server] 定位失败：" + repr(exc))
+                    info = None
+                if info:
+                    city = str(info.get("city") or "").strip()
+                    province = _short_province(info.get("province"))
+            if not city:
+                city = _city_of(data.weather_source)
+            service.stats.record(marker_ip, country, city, province)
+            self._note = "标记版主页：" + data.summary()
+            self._send(Response.xaml(body, vary_ip=True))
             return
 
         if self.command not in ("GET", "HEAD"):
