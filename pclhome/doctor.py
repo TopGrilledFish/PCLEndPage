@@ -110,6 +110,11 @@ EXPECTED_COUNTS = {
 _EMPTY_ATTR_RE = re.compile(
     r'\s(Margin|Padding|BorderThickness|CornerRadius|Width|Height|MinWidth|MinHeight'
     r'|MaxWidth|MaxHeight|FontSize|Opacity|RadiusX|RadiusY|StrokeThickness|LineHeight)=""')
+
+# 「打开帮助」的 EventData 必须指向一份 .json，PCL 拿它取标题/描述，再把 .json
+# 换成 .xaml 拉正文。写成 .xaml 会直接弹「联网帮助页面须指向一个帮助 JSON 文件」。
+# 2026-11-10 访问浏览页的「刷新结果」就是这么炸的。
+_HELP_EVENT_RE = re.compile(r'EventType="打开帮助" EventData="([^"]*)"')
 _XAML_ROOT_NS = ('xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" '
                  'xmlns:sys="clr-namespace:System;assembly=mscorlib" '
                  'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" '
@@ -1043,8 +1048,8 @@ def check_rendered(report: Report, config: Config) -> None:
             report.bad("访问浏览页：没有省份数据时不该画地图，只该提示一句")
         elif not all("<Canvas" in body and body.count("<Path") >= 30 for body in filled_pages):
             report.bad("访问浏览页：有数据时地图没画全（缺 Canvas 或省份 Path 不足 30 个）")
-        elif not all("visit_page.xaml" in body for body in filled_pages):
-            report.bad("访问浏览页：底部没有指向自己的「刷新」链接")
+        elif not all("visit_page.json" in body for body in filled_pages):
+            report.bad("访问浏览页：底部没有指向自己的「刷新」链接（必须是 .json，PCL 只认 json）")
         else:
             report.good("访问浏览页 " + str(len(pages)) + " 种形态 XML 良构，"
                         "空数据不画地图、有数据画 " + str(filled_pages[0].count("<Path")) + " 条省份路径")
@@ -1172,6 +1177,20 @@ def check_rendered(report: Report, config: Config) -> None:
                        + "；".join(label + " " + ",".join(names) for label, names in empty[:4]))
         else:
             report.good("页面没有空的属性值（Margin=\"\" 之类会让 PCL 整页报错）")
+
+        # 「打开帮助」的 EventData 必须是 .json，否则 PCL 弹
+        # 「联网帮助页面须指向一个帮助 JSON 文件，并在同路径下包含相应 XAML 文件」。
+        bad_help = []
+        for label, body in bodies:
+            for url in _HELP_EVENT_RE.findall(body):
+                tail = url.split("?", 1)[0]
+                if not tail.endswith(".json"):
+                    bad_help.append((label, url))
+        if bad_help:
+            report.bad("「打开帮助」指向了非 .json 的地址（PCL 会直接弹错误，页面打不开）："
+                       + "；".join(label + " → " + url for label, url in bad_help[:4]))
+        else:
+            report.good("「打开帮助」按钮全部指向 .json（PCL 靠它取标题，再换成 .xaml 拉正文）")
 
         # 换号本身：挑一档把四个角色换到四个不同的号，确认换得干净
         chosen = {"panel": 8, "text": 3, "muted": 5, "dim": 4}

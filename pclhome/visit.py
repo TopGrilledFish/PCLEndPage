@@ -427,7 +427,7 @@ def build_visit_page(summary: dict, base_url: str = "", ip: str = "",
             'HorizontalAlignment="Center" />'
             + note(t("visit.desc", lang, days=days), "0,10,0,0")
             + "".join(body)
-            + nav_row(refresh_url=(base_url or "") + "/visit_page.xaml", lang=lang)
+            + nav_row(refresh_url=(base_url or "") + "/visit_page.json", lang=lang)
             + "</StackPanel></local:MyCard>")
 
 
