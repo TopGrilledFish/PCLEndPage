@@ -95,10 +95,44 @@ MARK_PREFIX = "/mark"
 MARK_PATHS = {
     MARK_PREFIX,
     MARK_PREFIX + "/",
+    MARK_PREFIX + "/version",
     MARK_PREFIX + "/Custom.xaml",
     MARK_PREFIX + "/Custom.xaml.ini",
     MARK_PREFIX + "/Custom.xaml.version",
 }
+
+
+def mark_version() -> str:
+    """标记版的版本号：取构建产物的修改时间。
+
+    标记版里的日期是 `{date}` 字面量，服务器每天吐出来的字节完全一样。
+    版本号必须跟着内容走，不能用当前时间——否则 PCL 每次启动都判定
+    「有新版本」重下 15 KB，白白浪费。重新 generate 之后文件时间变了，
+    版本号自然跟着变，客户端下一次启动就会拉新的。
+    """
+    try:
+        return str(int((ROOT / "Custom.xaml").stat().st_mtime * 1000))
+    except OSError:
+        return str(int(time.time() * 1000))
+
+
+# 带日期的路径：<域名>/2026/11/10、/2026/11/10/version 之类。
+# PCL 的「联网更新」地址支持 {date} 替换标记，地址写成 https://<域名>/{date}
+# 之后，每天的 URL 都不一样；PCL 的主页缓存按 URL 分键，跨天第一次打开就会
+# 走"全新下载"并重新实例化，不会再翻出前一天的缓存页（见维护报告 §2）。
+DATED_RE = re.compile(
+    r"^/(\d{4})/(\d{1,2})/(\d{1,2})"
+    r"(?:/(version|Custom\.xaml|Custom\.xaml\.ini|Custom\.xaml\.version))?/?$"
+)
+
+
+def dated_version(match) -> str:
+    """按日期的版本号：同一天内固定，换天就变。"""
+    try:
+        year, month, day = (int(match.group(i)) for i in (1, 2, 3))
+    except (TypeError, ValueError):
+        return str(int(time.time() * 1000))
+    return "%04d%02d%02d" % (year, month, day)
 
 BASE_SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -374,6 +408,23 @@ class Handler(BaseHTTPRequestHandler):
         ua = self.headers.get("User-Agent") or ""
         referer = self.headers.get("Referer") or ""
 
+        # 带日期的路径：<域名>/2026/11/10、/2026/11/10/version 之类。
+        # PCL 的「联网更新」地址支持 {date} 替换标记，把地址写成
+        # https://<域名>/{date} 之后，每天的 URL 都不一样；PCL 的主页缓存按
+        # URL 分键，于是跨天第一次打开会走"全新下载"，不会再翻出前一天的缓存页
+        # （见维护报告 §2）。版本号用日期本身，同一天内重复启动仍然吃缓存。
+        dated = DATED_RE.match(path)
+        if dated:
+            tail = dated.group(4) or ""
+            if tail in ("version", "Custom.xaml.ini", "Custom.xaml.version"):
+                self._note = "按日期的主页版本号（同一天内固定）"
+                self._send(Response.text(dated_version(dated), headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0, s-maxage=0",
+                    "Pragma": "no-cache", "Expires": "0", **BASE_SECURITY_HEADERS,
+                }))
+                return
+            path = "/Custom.xaml"
+
         if path.startswith("/admin"):
             self._note = "后台"
             self._send(admin_module.handle(service, self, path, parsed.query))
@@ -455,9 +506,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._note = "来源守卫拦截（标记版主页）：UA=" + (ua[:60] or "（空）")
                 self._send(Response.xaml(_bot_xaml(self._log_ip)))
                 return
-            if path.endswith(".ini") or path.endswith(".version"):
-                self._note = "标记版版本号（时间戳，逼 PCL 重新拉）"
-                self._send(Response.text(str(int(time.time() * 1000)), headers={
+            if path.endswith(".ini") or path.endswith(".version") or path == MARK_PREFIX + "/version":
+                self._note = "标记版版本号（跟构建时间走，内容没变就不重复下载）"
+                self._send(Response.text(mark_version(), headers={
                     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0, s-maxage=0",
                     "Pragma": "no-cache", "Expires": "0", **BASE_SECURITY_HEADERS,
                 }))
