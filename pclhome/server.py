@@ -4,10 +4,15 @@
 路由与上游 _middleware.js 一一对应：
 
     /Custom.xaml、/            主页：按 IP + 北京时间个性化后返回
-    /Custom.xaml.version       每次返回新时间戳，逼 PCL 重新拉主页
-    /Custom.xaml.ini、/version 同上（兼容 PCL 的不同请求姿势）
+    /YYYY/M/D(/version)        带日期的同一份主页（PCL 地址写 {date} 时用）
+    /Custom.xaml.version、/version
+                               版本号，每次返回新时间戳，逼 PCL 重新拉主页
     /images/…、/music/…      静态资源
     /admin、/admin/api/…       管理后台（见 admin.py）
+
+注：`/Custom.xaml.ini` 这条 2026-11-11 删掉了——它是 PCL「首页预设」模式
+才会请求的旧姿势，现在统一走 `{date}` 地址（请求 `/YYYY/M/D/version`），
+留着只会让人以为版本检查还有两套。
 
 任何组装异常都回退成"服务器正在更新"兜底页，保证 PCL 不会拿到空白页。
 """
@@ -85,7 +90,7 @@ def _short_province(name) -> str:
 
 # 需要"仅 PCL 客户端与真实浏览器可访问"的动态数据端点
 DATA_ENDPOINTS = {"/Custom.xaml", "/"}
-VERSION_PATHS = {"/Custom.xaml.version", "/Custom.xaml.ini", "/version"}
+VERSION_PATHS = {"/Custom.xaml.version", "/version"}
 
 # 标记版主页。和 /Custom.xaml 是同一套模板、同一份数据，只有「日期大字」不同：
 # 这边交给 PCL 的 {date} 替换标记，加载时才填当天，所以即使 PCL 渲染的是昨天
@@ -97,7 +102,6 @@ MARK_PATHS = {
     MARK_PREFIX + "/",
     MARK_PREFIX + "/version",
     MARK_PREFIX + "/Custom.xaml",
-    MARK_PREFIX + "/Custom.xaml.ini",
     MARK_PREFIX + "/Custom.xaml.version",
 }
 
@@ -122,7 +126,7 @@ def mark_version() -> str:
 # 走"全新下载"并重新实例化，不会再翻出前一天的缓存页（见维护报告 §2）。
 DATED_RE = re.compile(
     r"^/(\d{4})/(\d{1,2})/(\d{1,2})"
-    r"(?:/(version|Custom\.xaml|Custom\.xaml\.ini|Custom\.xaml\.version))?/?$"
+    r"(?:/(version|Custom\.xaml|Custom\.xaml\.version))?/?$"
 )
 
 
@@ -416,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
         dated = DATED_RE.match(path)
         if dated:
             tail = dated.group(4) or ""
-            if tail in ("version", "Custom.xaml.ini", "Custom.xaml.version"):
+            if tail in ("version", "Custom.xaml.version"):
                 self._note = "按日期的主页版本号（同一天内固定）"
                 self._send(Response.text(dated_version(dated), headers={
                     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0, s-maxage=0",
