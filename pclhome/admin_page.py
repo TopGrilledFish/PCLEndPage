@@ -1002,6 +1002,9 @@ function aiLogDetail(e) {
     "</div>" +
     '<div class="hint" style="margin:0 0 6px">分析了什么</div>' +
     '<pre class="log">' + esc(e.input || "（空）") + "</pre>" +
+    (String(e.reasoning || "").trim() ?
+      '<div class="hint" style="margin:12px 0 6px">思考过程（模型自述，仅供参考）</div>' +
+      '<pre class="log" style="opacity:.72">' + esc(e.reasoning) + "</pre>" : "") +
     '<div class="hint" style="margin:12px 0 6px">' + (e.ok ? "AI 结果" : "错误说明") + "</div>" +
     '<pre class="log">' + esc(e.output || "（空）") + "</pre></div>";
 }

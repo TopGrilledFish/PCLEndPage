@@ -197,7 +197,7 @@ class Config:
     ai_peak_multiplier: float = 2.0   # DeepSeek 高峰时段（北京时间 8:30–次日 0:30）加权
     ai_rate_limit: int = 20           # 次数兜底：每窗口最多几次，0 = 不限
     ai_free_ips: list = field(default_factory=list)   # 这些 IP 用内置密钥不计数
-    ai_max_log_chars: int = 24000     # 送给 AI 的日志上限（超长掐中间）
+    ai_max_log_chars: int = 40000     # 送给 AI 的日志上限（超长按重要程度取舍，见 smart_trim_log）
     # 回复长度上限。**不能给小**：deepseek-flash / v4-pro 都是推理模型，
     # 先花 token 思考再写答案，上限太小的话 token 全耗在思考上，答案就是空的。
     # 实测一条崩溃日志要 ~700 思考 + ~500 答案，这里留足余量。

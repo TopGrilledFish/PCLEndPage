@@ -31,6 +31,7 @@ AI_LOG_FILE = VAR_DIR / "ai_log.json"
 AI_LOG_MAX = 300                 # 只留最近这么多条，文件别无限长
 AI_LOG_INPUT_CHARS = 4000        # 记录里输入原文留多少字
 AI_LOG_TEXT_CHARS = 6000         # 结果/错误留多少字
+AI_LOG_REASONING_CHARS = 2400    # 思考过程留多少字（后台详情里看）
 
 # 额度按这个时区跨天重置
 BEIJING = timezone(timedelta(hours=8))
@@ -512,7 +513,8 @@ def _save_ai_log(entries: list) -> None:
 def record_analysis(ip: str, who: str, key: str, model: str, protocol: str,
                     kind: str, input_text: str, ok: bool, output: str,
                     elapsed_ms: int, tokens: dict | None = None,
-                    base: str = "", cost: int = 0, peak: bool = False) -> None:
+                    base: str = "", cost: int = 0, peak: bool = False,
+                    reasoning: str = "") -> None:
     """记一条分析：谁、用什么密钥、往哪个地址请求、分析的是什么、成没成、花了多久。
 
     访客自带的密钥**原样存**——站长要能看到访客填的是哪把（列表里打码，点开才
@@ -543,6 +545,8 @@ def record_analysis(ip: str, who: str, key: str, model: str, protocol: str,
         # 这次实际扣掉的额度（含高峰倍数）——后台一眼看出「为什么掉这么快」
         "cost": int(cost or 0),
         "peak": bool(peak),
+        # 推理模型的思考过程：前台页面已经展示，后台也要能回看。
+        "reasoning": str(reasoning or "")[:AI_LOG_REASONING_CHARS],
     }
     with _ai_log_lock:
         entries = _load_ai_log()
@@ -578,7 +582,7 @@ def fetch_log(config: Config, url: str, lang: str = DEFAULT_LANG) -> tuple[bool,
         "User-Agent": USER_AGENT, "Accept": "text/plain, */*"})
     try:
         with urllib.request.urlopen(request, timeout=config.http_timeout) as resp:
-            raw = resp.read(config.ai_max_log_chars * 4)
+            raw = resp.read(config.ai_max_log_chars * 10)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return False, t("ai.err.log_404", lang)
@@ -601,6 +605,66 @@ def trim_log(text: str, limit: int, lang: str = DEFAULT_LANG) -> str:
     return (text[:head] + "\n\n"
             + t("ai.trim_note", lang, n=len(text) - limit)
             + "\n\n" + text[-tail:])
+
+
+# 这些行里一般写着「为什么崩」，不管日志多长都得留着。
+_IMPORTANT_MARKERS = (
+    "ERROR", "FATAL", "Exception", "Caused by", "Stacktrace", "Suspected",
+    "Mixin", "Crash", "Failed", "failed", "Could not", "could not",
+    "---- Minecraft Crash Report ----", "Description:",
+)
+
+
+def smart_trim_log(text: str, limit: int, lang: str = DEFAULT_LANG) -> str:
+    """超长时按「值不值得看」取舍，而不是无脑掐中间。
+
+    崩溃日志里九成是重复的 INFO 行，真正有用的就那十几行 ERROR / Exception
+    和崩溃报告本身。所以先保住错误行及前后各两行，再从最新一行往回填剩余
+    预算（越靠后越接近崩溃时刻），中间被跳过的连续行只留一句「省略了 N 行」。
+    """
+    if len(text) <= limit:
+        return text
+    lines = text.splitlines()
+    total = len(lines)
+    if not total:
+        return text
+
+    important = [False] * total
+    for index, line in enumerate(lines):
+        if any(marker in line for marker in _IMPORTANT_MARKERS):
+            for near in range(max(0, index - 2), min(total, index + 3)):
+                important[near] = True
+
+    chosen: list[int] = []
+    used = 0
+    for index in range(total):
+        if not important[index]:
+            continue
+        used += len(lines[index]) + 1
+        chosen.append(index)
+    # 错误行自己就超预算：退回掐中间，至少开头和结尾还在。
+    if used > limit:
+        return trim_log(text, limit, lang)
+
+    taken = set(chosen)
+    for index in range(total - 1, -1, -1):
+        if index in taken:
+            continue
+        cost = len(lines[index]) + 1
+        if used + cost > limit:
+            break
+        used += cost
+        chosen.append(index)
+    chosen.sort()
+
+    out: list[str] = []
+    previous = -1
+    for index in chosen:
+        if previous >= 0 and index - previous > 1:
+            out.append(t("ai.trim_note_lines", lang, n=index - previous - 1))
+        out.append(lines[index])
+        previous = index
+    return "\n".join(out)
 
 
 # ============ 调 AI ============
@@ -927,11 +991,12 @@ def _worker(config: Config, ip: str, kind: str, value: str,
     base = str(key_conf.get("base") or config.ai_api_base or "").rstrip("/")
 
     def note_record(input_text: str, ok: bool, output: str, ms: int = 0,
-                    tokens: dict | None = None, cost: int = 0) -> None:
+                    tokens: dict | None = None, cost: int = 0,
+                    reasoning: str = "") -> None:
         try:
             record_analysis(ip, who, key, model, protocol, kind, input_text,
                             ok, output, ms, tokens, base,
-                            cost=cost, peak=is_peak())
+                            cost=cost, peak=is_peak(), reasoning=reasoning)
         except Exception as exc:                       # 记录失败不能影响分析
             warn("[AI] 写分析记录失败：" + str(exc))
 
@@ -952,7 +1017,7 @@ def _worker(config: Config, ip: str, kind: str, value: str,
             else:
                 log_text = value
             input_text = value if kind == "url" else log_text
-            log_text = trim_log(log_text, config.ai_max_log_chars, lang)
+            log_text = smart_trim_log(log_text, config.ai_max_log_chars, lang)
             debug("[AI] " + ip + " 日志 " + str(len(log_text)) + " 字，开始调 " + config.ai_model)
             turns = [{"role": "user",
                       "content": t("ai.user_prefix", lang) + "\n\n" + log_text}]
@@ -969,7 +1034,7 @@ def _worker(config: Config, ip: str, kind: str, value: str,
         history = _trim_history(turns + [{"role": "assistant", "content": result}])
         note_record(input_text, True, result, usage.get("ms") or ms,
                     {"in": usage.get("in") or 0, "out": usage.get("out") or 0},
-                    cost=int(cost))
+                    cost=int(cost), reasoning=str(usage.get("reasoning") or ""))
         _set_job(ip, state="done", text=result, error="", history=history,
                  reasoning=str(usage.get("reasoning") or "")[:config.ai_reasoning_max_chars],
                  cost=int(cost), tokens={"in": usage.get("in") or 0,

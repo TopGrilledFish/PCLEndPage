@@ -408,6 +408,7 @@
   "ai.system_prompt": "You are an expert at analysing Minecraft crash logs. The user gives you a crash or error log. Answer in English, lead with the conclusion, and skip the pleasantries. Follow this structure exactly and keep every part short:\n[Conclusion] One sentence on where it crashed.\n[Cause] Quote the key lines from the log (exception class, mod name, class name) and explain why.\n[Fix] Give actionable steps; name the specific mod and version where you can.\nIf the log does not tell you enough, say which part you still need instead of guessing.",
   "ai.user_prefix": "The log follows:",
   "ai.trim_note": "…… ({n} characters omitted from the middle — this does not affect the diagnosis) ……",
+  "ai.trim_note_lines": "... {n} repeated log lines skipped ...",
   "ai.none": "none",
   "ai.title": "AI Log Analysis",
   "ai.headline": "Minecraft crashed? Let AI take a look",
