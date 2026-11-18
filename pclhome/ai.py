@@ -130,7 +130,8 @@ class Quota:
             return 0, 0
 
     def reserve(self, ip: str, bucket: str, amount: int,
-                limit: int, max_calls: int = 0) -> tuple[bool, str, int]:
+                limit: int, max_calls: int = 0,
+                global_bucket: str = "", global_limit: int = 0) -> tuple[bool, str, int]:
         """先预扣一笔再调用（token 只有调完才知道，不预留会被并发穿透）。
 
         返回 ``(是否放行, 拒绝原因, 实际预扣的 token)``；原因取
@@ -146,6 +147,23 @@ class Quota:
                         "SELECT used, calls FROM ai_usage WHERE ip=? AND bucket=?",
                         (ip, bucket)).fetchone()
                     used, calls = (int(row[0]), int(row[1])) if row else (0, 0)
+                    if global_bucket and global_limit > 0:
+                        # 全站闸门放在最前面：它挡的是「拿本站当免费 API」，
+                        # 比单 IP 额度更硬，命中就直接拒绝，不给预留。
+                        grew = conn.execute(
+                            "SELECT used FROM ai_usage WHERE ip=? AND bucket=?",
+                            (GLOBAL_IP, global_bucket)).fetchone()
+                        g_used = int(grew[0]) if grew else 0
+                        if g_used >= global_limit:
+                            conn.rollback()
+                            return False, "global", 0
+                        g_take = max(1, min(want, global_limit - g_used))
+                        gnow = int(time.time())
+                        conn.execute(
+                            "INSERT INTO ai_usage (ip, bucket, used, calls, ts) "
+                            "VALUES (?, ?, ?, 1, ?) ON CONFLICT(ip, bucket) DO UPDATE SET "
+                            "used = used + ?, calls = calls + 1, ts = ?",
+                            (GLOBAL_IP, global_bucket, g_take, gnow, g_take, gnow))
                     if max_calls > 0 and calls >= max_calls:
                         conn.rollback()
                         return False, "calls", 0
@@ -170,7 +188,8 @@ class Quota:
             warn("[AI] 扣额度失败：" + str(exc))
             return False, "error", 0
 
-    def settle(self, ip: str, bucket: str, reserved: int, actual: int) -> None:
+    def settle(self, ip: str, bucket: str, reserved: int, actual: int,
+               global_bucket: str = "") -> None:
         """调用完按实际用量找零：``used = used - 预留 + 实际``。"""
         delta = int(actual or 0) - int(reserved or 0)
         if delta == 0:
@@ -179,9 +198,15 @@ class Quota:
             with self._lock:
                 conn = self._connect()
                 try:
+                    now = int(time.time())
                     conn.execute(
                         "UPDATE ai_usage SET used = MAX(0, used + ?), ts = ? "
-                        "WHERE ip=? AND bucket=?", (delta, int(time.time()), ip, bucket))
+                        "WHERE ip=? AND bucket=?", (delta, now, ip, bucket))
+                    if global_bucket:
+                        conn.execute(
+                            "UPDATE ai_usage SET used = MAX(0, used + ?), ts = ? "
+                            "WHERE ip=? AND bucket=?",
+                            (delta, now, GLOBAL_IP, global_bucket))
                     conn.commit()
                 finally:
                     conn.close()
@@ -226,16 +251,23 @@ class Quota:
             warn("[AI] 重置用量失败：" + str(exc))
             return 0
 
-    def refund(self, ip: str, bucket: str, amount: int = 0) -> None:
+    def refund(self, ip: str, bucket: str, amount: int = 0,
+               global_bucket: str = "") -> None:
         """整笔退回：token 归零那一部分 + 次数减一。"""
         try:
             with self._lock:
                 conn = self._connect()
                 try:
+                    back = max(0, int(amount or 0))
+                    now = int(time.time())
                     conn.execute(
                         "UPDATE ai_usage SET used = MAX(0, used - ?), "
                         "calls = MAX(0, calls - 1), ts = ? WHERE ip=? AND bucket=?",
-                        (max(0, int(amount or 0)), int(time.time()), ip, bucket))
+                        (back, now, ip, bucket))
+                    if global_bucket:
+                        conn.execute(
+                            "UPDATE ai_usage SET used = MAX(0, used - ?), ts = ? "
+                            "WHERE ip=? AND bucket=?", (back, now, GLOBAL_IP, global_bucket))
                     conn.commit()
                 finally:
                     conn.close()
@@ -244,6 +276,27 @@ class Quota:
 
 
 QUOTA = Quota()
+
+# 全站周额度的那一行在 ai_usage 里用的特殊 ip，跟真实 IP 不会撞。
+GLOBAL_IP = "__global__"
+WEEK_SECONDS = 7 * 86400
+
+
+def week_bucket(ts: float | None = None) -> str:
+    """全站周额度的桶键，按**北京时间周一 0 点**切。
+
+    用「epoch 周序号」而不是「年月日-周几」：算起来便宜，跨年也不会重复。
+    """
+    moment = ts if ts is not None else time.time()
+    return "W" + str(int((moment + BEIJING_OFFSET) // WEEK_SECONDS))
+
+
+def week_reset_at(ts: float | None = None) -> float:
+    """本周额度什么时候恢复（下周一 0 点的时间戳）。"""
+    moment = ts if ts is not None else time.time()
+    local = moment + BEIJING_OFFSET
+    index = int(local // WEEK_SECONDS)
+    return (index + 1) * WEEK_SECONDS - BEIJING_OFFSET
 
 
 def beijing_bucket(window: str, ts: float | None = None) -> str:
@@ -343,6 +396,56 @@ def set_own_key(ip: str, raw: str) -> bool:
         _own_keys[ip] = conf
     out("[AI] " + ip + " 设置了自带密钥 " + mask_key(key))
     return True
+
+
+PROBE_TIMEOUT = 10.0
+
+
+def _probe_protocol(config: Config, base: str, key: str, protocol: str) -> tuple[bool, str]:
+    """按某个协议发一个最小请求，能通就返回 ``(True, "")``。
+
+    只花 1 个输出 token，代价可以忽略；重点是把「地址对不对、协议对不对」
+    一次问清楚，而不是让用户自己猜该点哪个按钮。
+    """
+    endpoint = _endpoint(base, protocol)
+    model = PROTOCOLS[protocol][1]
+    payload = {"model": model, "max_tokens": 1,
+               "messages": [{"role": "user", "content": "hi"}]}
+    headers = {"Content-Type": "application/json"}
+    if protocol == "anthropic":
+        headers["x-api-key"] = key
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        headers["Authorization"] = "Bearer " + key
+    request = urllib.request.Request(
+        endpoint, data=json.dumps(payload).encode("utf-8"),
+        headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT) as resp:
+            resp.read(2048)
+            return 200 <= resp.status < 300, ""
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read(400).decode("utf-8", "replace")
+        except Exception:
+            pass
+        return False, "HTTP " + str(exc.code) + ((" " + detail.strip()[:120]) if detail else "")
+    except Exception as exc:
+        return False, str(exc)[:120]
+
+
+def detect_protocol(config: Config, base: str, key: str,
+                    lang: str = DEFAULT_LANG) -> tuple[str, str]:
+    """自动认接口类型：先 OpenAI，再 Anthropic，两个都不通就返回错误说明。"""
+    ok, err_openai = _probe_protocol(config, base, key, "openai")
+    if ok:
+        return "openai", ""
+    ok, err_anthropic = _probe_protocol(config, base, key, "anthropic")
+    if ok:
+        return "anthropic", ""
+    return "", t("ai.err.detect_failed", lang,
+                 openai=err_openai or "?", anthropic=err_anthropic or "?")
 
 
 def set_own_base(ip: str, raw: str, protocol: str) -> bool:
@@ -874,6 +977,10 @@ def _quota_state(config: Config, ip: str, lang: str = DEFAULT_LANG) -> dict:
     calls = QUOTA.calls(ip, bucket)
     return {
         "bucket": bucket,
+        "global_limit": config.ai_global_week_limit_or_zero(),
+        "global_used": QUOTA.used(GLOBAL_IP, week_bucket()),
+        "global_bucket": week_bucket(),
+        "global_reset_at": week_reset_at(),
         "limit": limit,
         "used": used,
         "calls": calls,
@@ -884,6 +991,18 @@ def _quota_state(config: Config, ip: str, lang: str = DEFAULT_LANG) -> dict:
         "window": config.ai_window_label(lang),
         "peak": is_peak(),
         "factor": peak_factor(config),
+        # 全站周额度：挡「拿本站当免费 AI 反代」，只统计内置密钥。
+        "global_bucket": week_bucket(),
+        "global_limit": config.ai_global_week_limit_or_zero(),
+        "global_used": QUOTA.used(GLOBAL_IP, week_bucket()),
+        "global_unlimited": config.ai_global_week_limit_or_zero() <= 0,
+        "global_left": (max(0, config.ai_global_week_limit_or_zero()
+                            - QUOTA.used(GLOBAL_IP, week_bucket()))
+                        if config.ai_global_week_limit_or_zero() > 0 else 0),
+        "global_percent": ((min(100.0, QUOTA.used(GLOBAL_IP, week_bucket()) * 100.0
+                                / config.ai_global_week_limit_or_zero()))
+                           if config.ai_global_week_limit_or_zero() > 0 else 0.0),
+        "global_reset_at": week_reset_at(),
     }
 
 
@@ -945,9 +1064,15 @@ def submit(config: Config, ip: str, raw_input: str, use_own: bool,
     if counted:
         limit = config.ai_token_limit_or_zero()
         allowed, reason, reserved = QUOTA.reserve(
-            ip, bucket, config.ai_reserve_tokens, limit, config.ai_rate_limit)
+            ip, bucket, config.ai_reserve_tokens, limit, config.ai_rate_limit,
+            global_bucket=week_bucket(),
+            global_limit=config.ai_global_week_limit_or_zero())
         if not allowed:
             state = _quota_state(config, ip, lang)
+            if reason == "global":
+                return False, t("ai.err.global_out", lang,
+                                limit=format_tokens(state["global_limit"]),
+                                at=_week_reset_text(lang))
             if reason == "calls":
                 return False, t("ai.err.calls_out", lang,
                                 n=config.ai_rate_limit, window=state["window"])
@@ -968,14 +1093,16 @@ def submit(config: Config, ip: str, raw_input: str, use_own: bool,
              reasoning="", cost=0, reserved=reserved, follow=follow)
 
     threading.Thread(target=_worker,
-                     args=(config, ip, kind, value, key_conf, use_own, lang, reserved, follow),
+                     args=(config, ip, kind, value, key_conf, use_own, lang, reserved, follow,
+                           week_bucket()),
                      name="ai-" + ip, daemon=True).start()
     return True, t("ai.follow_submitted" if follow else "ai.submitted", lang)
 
 
 def _worker(config: Config, ip: str, kind: str, value: str,
             key_conf: dict, use_own: bool, lang: str = DEFAULT_LANG,
-            reserved: int = 0, follow: bool = False) -> None:
+            reserved: int = 0, follow: bool = False,
+            global_bucket: str = "") -> None:
     """后台干活：抓日志 → 调 AI → 写结果。异常都变成给用户看的说明。
 
     每一条都往 ``var/ai_log.json`` 记一份（成功、失败、抓日志失败都记），
@@ -1012,7 +1139,7 @@ def _worker(config: Config, ip: str, kind: str, value: str,
                 ok, log_text = fetch_log(config, value, lang)
                 if not ok:
                     note_record(value, False, log_text)
-                    _fail(config, ip, use_own, log_text, lang, reserved)
+                    _fail(config, ip, use_own, log_text, lang, reserved, global_bucket)
                     return
             else:
                 log_text = value
@@ -1026,11 +1153,11 @@ def _worker(config: Config, ip: str, kind: str, value: str,
         ms = int((time.time() - started) * 1000)
         if not ok:
             note_record(input_text, False, result, ms)
-            _fail(config, ip, use_own, result, lang, reserved)
+            _fail(config, ip, use_own, result, lang, reserved, global_bucket)
             return
 
         cost = usage_tokens(usage, config)
-        _settle(config, ip, reserved, cost, use_own)
+        _settle(config, ip, reserved, cost, use_own, global_bucket)
         history = _trim_history(turns + [{"role": "assistant", "content": result}])
         note_record(input_text, True, result, usage.get("ms") or ms,
                     {"in": usage.get("in") or 0, "out": usage.get("out") or 0},
@@ -1046,21 +1173,24 @@ def _worker(config: Config, ip: str, kind: str, value: str,
     except Exception as exc:
         error("[AI] 任务异常：" + repr(exc))
         note_record(value, False, repr(exc))
-        _fail(config, ip, use_own, t("ai.err.crashed", lang, err=str(exc)), lang, reserved)
+        _fail(config, ip, use_own, t("ai.err.crashed", lang, err=str(exc)), lang, reserved,
+              global_bucket)
 
 
-def _settle(config: Config, ip: str, reserved: int, actual: int, use_own: bool) -> None:
+def _settle(config: Config, ip: str, reserved: int, actual: int, use_own: bool,
+            global_bucket: str = "") -> None:
     """按实际用量结算：预留多了退回，少了补扣。"""
     if use_own or ip in (config.ai_free_ips or []):
         return
-    QUOTA.settle(ip, token_bucket(config), reserved, actual)
+    QUOTA.settle(ip, token_bucket(config), reserved, actual, global_bucket)
 
 
 def _fail(config: Config, ip: str, use_own: bool, message: str,
-          lang: str = DEFAULT_LANG, reserved: int = 0) -> None:
+          lang: str = DEFAULT_LANG, reserved: int = 0,
+          global_bucket: str = "") -> None:
     """失败：把预留的额度整笔还回去（可配置），并把原因写给用户看。"""
     if not use_own and config.ai_refund_on_failure and ip not in (config.ai_free_ips or []):
-        QUOTA.refund(ip, token_bucket(config), reserved)
+        QUOTA.refund(ip, token_bucket(config), reserved, global_bucket)
         message += "\n" + t("ai.refunded", lang)
     warn("[AI] " + ip + " 分析失败：" + message.splitlines()[0][:160])
     _set_job(ip, state="error", text=message, error=message, reasoning="", cost=0)
@@ -1194,6 +1324,14 @@ def _result_block(config: Config, job: dict | None, lang: str = DEFAULT_LANG) ->
     return "".join(parts)
 
 
+def _week_reset_text(lang: str = DEFAULT_LANG) -> str:
+    """「下周一 00:00」这种给用户看的时间。"""
+    moment = datetime.fromtimestamp(week_reset_at(), BEIJING)
+    if str(lang).startswith("zh"):
+        return moment.strftime("%m月%d日 %H:%M")
+    return moment.strftime("%b %d %H:%M")
+
+
 def _reset_text(config: Config, lang: str = DEFAULT_LANG) -> str:
     """窗口还剩多久重置，写成「16:30」这种人话。"""
     moment = datetime.fromtimestamp(bucket_reset_at(config), BEIJING)
@@ -1208,7 +1346,8 @@ def _quota_bar(config: Config, ip: str, lang: str = DEFAULT_LANG) -> str:
     """
     state = _quota_state(config, ip, lang)
     if state["unlimited"]:
-        return _note(t("ai.quota_unlimited", lang, window=state["window"]))
+        return (_note(t("ai.quota_unlimited", lang, window=state["window"]))
+                + _global_line(config, ip, lang))
     percent = state["percent"]
     fill = 100 - max(0, min(100, int(round(percent))))
     # 用量极少时也留一点宽度，不然看起来像空的
@@ -1231,7 +1370,21 @@ def _quota_bar(config: Config, ip: str, lang: str = DEFAULT_LANG) -> str:
               at=_reset_text(config, lang))
     return ('<TextBlock Text="' + _attr(label) + '" FontSize="11" LineHeight="18" '
             'TextWrapping="Wrap" Margin="0,10,0,0" '
-            'Foreground="{DynamicResource ColorBrush1}" />' + bar)
+            'Foreground="{DynamicResource ColorBrush1}" />' + bar + _global_line(config, ip, lang))
+
+
+def _global_line(config: Config, ip: str, lang: str = DEFAULT_LANG) -> str:
+    """全站本周额度那一行小字（不限额时整行不显示）。"""
+    state = _quota_state(config, ip, lang)
+    if state["global_unlimited"]:
+        return ""
+    text = t("ai.quota_global", lang,
+             used=format_tokens(state["global_used"]),
+             limit=format_tokens(state["global_limit"]),
+             at=_week_reset_text(lang))
+    return ('<TextBlock Text="' + _attr(text) + '" FontSize="10" LineHeight="16" '
+            'TextWrapping="Wrap" Margin="0,6,0,0" '
+            'Foreground="{DynamicResource ColorBrush3}" />')
 
 
 def build_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_LANG) -> str:
@@ -1262,7 +1415,7 @@ def build_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_LANG)
         + escape_attr(t("ai.upload_tip", lang)) + '" '
         'EventType="打开网页" EventData="https://mclo.gs/" />'
 
-        + _input_row("ailoginput", t("ai.log_hint", lang), 40, "0,14,0,0")
+        + _input_row("ailoginput", t("ai.log_hint", lang), 40, "0,14,0,0", 430)
 
         + _grid2(
             _help_button(t("ai.builtin_key", lang), ICON_AI, _bind("ailoginput", base, "/ai.json"),
@@ -1311,7 +1464,7 @@ def _follow_block(config: Config, ip: str, base: str, job: dict | None,
         '<TextBlock Text="' + escape_attr(t("ai.follow_hint", lang)) + '" '
         'FontSize="11" LineHeight="18" TextWrapping="Wrap" Margin="0,0,0,8" '
         'Foreground="{DynamicResource ColorBrush3}" />'
-        + _input_row("aifollowinput", t("ai.follow_placeholder", lang), 38)
+        + _input_row("aifollowinput", t("ai.follow_placeholder", lang), 38, "0,8,0,0", 430)
         + _help_button(t("ai.follow_send", lang), ICON_AI,
                        _bind("aifollowinput", base, "/ai_follow.json"),
                        40, margin="0,8,0,0")
@@ -1343,15 +1496,12 @@ def build_own_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_L
 
         '<TextBlock Text="' + escape_attr(t("ai.own_headline", lang)) + '" FontSize="24" '
         'FontWeight="Bold" Foreground="#FF000000" HorizontalAlignment="Center" />'
-        '<TextBlock TextWrapping="Wrap" FontSize="12" LineHeight="20" Margin="0,10,0,0" '
-        'Foreground="{DynamicResource ColorBrush3}" Text="'
-        + escape_attr(t("ai.own_intro", lang)) + '" />'
 
         + _heading(t("ai.log_link", lang), "0,18,0,0")
-        + _input_row("ailoginput", t("ai.log_hint", lang))
+        + _input_row("ailoginput", t("ai.log_hint", lang), 38, "0,8,0,0", 430)
 
         + _heading(t("ai.api_key", lang))
-        + _input_row("aikeyinput", key_hint)
+        + _input_row("aikeyinput", key_hint, 38, "0,8,0,0", 430)
         + _grid2(
             _help_button(t("ai.save_key", lang), ICON_SAVE,
                          _bind("aikeyinput", base, "/ai_key.json"),
@@ -1360,22 +1510,15 @@ def build_own_page(config: Config, ip: str, base_url: str, lang: str = DEFAULT_L
                          38, column=1, margin="5,0,0,0", color=""))
 
         + _heading(t("ai.base_title", lang))
-        + _input_row("aibaseinput", base_hint)
-        + _grid2(
-            _help_button(t("ai.protocol.openai", lang), ICON_SAVE,
-                         _bind("aibaseinput", base, "/ai_base_openai.json"),
-                         38, column=0, margin="0,0,5,0"),
-            _help_button(t("ai.protocol.anthropic", lang), ICON_SAVE,
-                         _bind("aibaseinput", base, "/ai_base_anthropic.json"),
-                         38, column=1, margin="5,0,0,0"))
-        + _note(t("ai.base_note", lang))
+        + _input_row("aibaseinput", base_hint, 38, "0,8,0,0", 430)
+        + _help_button(t("ai.protocol_auto", lang), ICON_SAVE,
+                       _bind("aibaseinput", base, "/ai_base_auto.json"),
+                       38, margin="0,8,0,0")
 
         + _heading(t("ai.model_title", lang))
-        + _input_row("aimodelinput", model_hint)
+        + _input_row("aimodelinput", model_hint, 38, "0,8,0,0", 430)
         + _help_button(t("ai.save_model", lang), ICON_SAVE,
                        _bind("aimodelinput", base, "/ai_model.json"), 38, margin="0,8,0,0")
-        + _note(t("ai.model_note", lang, openai=PROTOCOLS["openai"][1],
-                  anthropic=PROTOCOLS["anthropic"][1]))
 
         + _divider("0,22,0,12")
 
@@ -1504,13 +1647,15 @@ _META = {
     "/ai_follow.json": ("ai.follow_title", "ai.meta.follow"),
     "/ai_key.json": ("ai.meta.save_key_title", "ai.meta.save_key"),
     "/ai_base_openai.json": ("ai.meta.base_openai_title", "ai.meta.base_openai"),
+    "/ai_base_auto.json": ("ai.meta.base_auto_title", "ai.meta.base_auto"),
     "/ai_base_anthropic.json": ("ai.meta.base_anthropic_title", "ai.meta.base_anthropic"),
     "/ai_model.json": ("ai.save_model", "ai.meta.model"),
     "/ai_clear.json": ("ai.meta.clear_title", "ai.meta.clear"),
 }
 _DO = {"/ai_page.xaml": "page", "/ai_own_page.xaml": "own_page",
        "/ai.xaml": "builtin", "/ai_own.xaml": "own", "/ai_follow.xaml": "follow",
-       "/ai_key.xaml": "savekey", "/ai_base_openai.xaml": "base_openai",
+       "/ai_key.xaml": "savekey", "/ai_base_auto.xaml": "base_auto",
+       "/ai_base_openai.xaml": "base_openai",
        "/ai_base_anthropic.xaml": "base_anthropic", "/ai_model.xaml": "savemodel",
        "/ai_clear.xaml": "clearkey"}
 
@@ -1569,6 +1714,31 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
         return _xaml_response(_styled(build_popup(
             t("ai.popup.key_empty", lang), t("ai.popup.key_empty_msg", lang),
             "Yellow", back=own_url, home=True, lang=lang), ip))
+
+    if action == "base_auto":
+        if not get_own_key(ip):
+            return _xaml_response(_styled(build_popup(
+                t("ai.popup.need_key", lang), t("ai.popup.need_key_base", lang),
+                "Yellow", back=own_url, home=True, lang=lang), ip))
+        raw = (params.get("q", "") or "").split("|")[0].strip()
+        if not raw:
+            # 留空 = 回到该协议官方地址，协议先按 OpenAI 占位
+            set_own_base(ip, "", "openai")
+            return _xaml_response(_styled(build_popup(
+                t("ai.popup.base_saved", lang, protocol=protocol_name("openai", lang)),
+                t("ai.popup.now", lang, desc=describe_own_key(ip, lang)),
+                back=own_url, home=True, lang=lang), ip))
+        key = str((get_own_key(ip) or {}).get("key") or "")
+        protocol, err = detect_protocol(config, raw, key, lang)
+        if not protocol:
+            return _xaml_response(_styled(build_popup(
+                t("ai.popup.detect_failed", lang), err,
+                "Yellow", back=own_url, home=True, lang=lang), ip))
+        set_own_base(ip, raw, protocol)
+        return _xaml_response(_styled(build_popup(
+            t("ai.popup.detect_ok", lang, protocol=protocol_name(protocol, lang)),
+            t("ai.popup.now", lang, desc=describe_own_key(ip, lang)),
+            "Blue", back=own_url, home=True, lang=lang), ip))
 
     if action in ("base_openai", "base_anthropic"):
         protocol = "openai" if action == "base_openai" else "anthropic"

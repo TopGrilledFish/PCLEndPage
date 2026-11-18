@@ -132,6 +132,7 @@ ENV_MAP = {
     "PCLHOME_AI_LIMIT": ("ai_rate_limit", int),
     "PCLHOME_AI_TOKEN_LIMIT": ("ai_token_limit", int),
     "PCLHOME_AI_TOKEN_HOURS": ("ai_token_window_hours", float),
+    "PCLHOME_AI_GLOBAL_WEEK_TOKENS": ("ai_global_week_tokens", int),
     "PCLHOME_WALLPAPER": ("enable_wallpaper", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_SAYING": ("enable_saying", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_UAPI_KEY": ("uapi_key", str),
@@ -193,6 +194,9 @@ class Config:
     # 额度桶的键就是"当前是哪个窗口"，所以改窗口长度不用动数据库结构。
     ai_token_limit: int = 60000       # 每窗口 token 额度（高峰时段按 ai_peak_multiplier 倍计）
     ai_token_window_hours: float = 5.0   # 窗口长度（小时）
+    # 全站每周上限（token，含高峰加权）——防有人拿本站当免费 AI 反代。
+    # 只统计内置密钥；访客自带 key 花的是他自己的钱，不计。
+    ai_global_week_tokens: int = 2000000
     ai_reserve_tokens: int = 8000     # 每次请求先预留这么多，结算时按实际用量找零
     ai_peak_multiplier: float = 2.0   # DeepSeek 高峰时段（北京时间 8:30–次日 0:30）加权
     ai_rate_limit: int = 20           # 次数兜底：每窗口最多几次，0 = 不限
@@ -278,6 +282,10 @@ class Config:
         if str(lang).lower().startswith("zh"):
             return number + " 小时"
         return number + (" hour" if abs(hours - 1) < 0.01 else " hours")
+
+    def ai_global_week_limit_or_zero(self) -> int:
+        """全站每周 token 上限；``<= 0`` 表示不限。"""
+        return max(0, int(self.ai_global_week_tokens or 0))
 
     def ai_token_limit_or_zero(self) -> int:
         """额度值：负数当 0（关掉额度），0 也当不限量。"""

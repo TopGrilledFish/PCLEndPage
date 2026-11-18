@@ -187,10 +187,18 @@ def bind_to(element: str, base: str, endpoint: str) -> str:
             + base + endpoint + "?q={0}'}")
 
 
-def input_row(name: str, hint: str, height: int = 38, margin: str = "0,8,0,0") -> str:
-    """一个带底色的输入框。"""
-    return ('<Border Margin="' + margin + '" Height="' + str(height)
-            + '" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+def input_row(name: str, hint: str, height: int = 38, margin: str = "0,8,0,0",
+              width: int = 0) -> str:
+    """一个带底色的输入框。
+
+    ``width`` 大于 0 时不再是整行宽，而是居中固定宽度——设置页那种一长条
+    横贯卡片的输入框，短内容会显得很空。
+    """
+    box = (' Height="' + str(height) + '"')
+    if width > 0:
+        box += ' Width="' + str(int(width)) + '" HorizontalAlignment="Center"'
+    return ('<Border Margin="' + margin + '"' + box
+            + ' Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
             '<local:MyTextBox x:Name="' + name + '" Height="' + str(height)
             + '" Margin="10,0" HintText="' + attr(hint) + '" '
             'Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" /></Border>')
