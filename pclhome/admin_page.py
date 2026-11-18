@@ -935,6 +935,8 @@ RENDER.ai = function () {
       kpi("私人密钥", ai.own_keys || 0, "访客自带") +
     "</div>" +
     '<div class="hint">接口 <b>' + esc(ai.base || "") + "</b> · 每个 IP " + esc(win) + " " + (capped ? fmt(ai.limit) + " token" : "不限额度") + " · 当前 " + esc(peak) + " · 窗口 " + esc(ai.bucket || "") + "</div>" +
+    '<div class="hint">全站本周 ' + fmt(ai.global_used || 0) + " / " + (ai.global_limit > 0 ? fmt(ai.global_limit) + " token" : "不限") +
+      "（只算内置密钥，访客自带 key 不占）" + (ai.global_bucket ? " · 周 " + esc(ai.global_bucket) : "") + "</div>" +
     (rows.length ? table : "") +
     '<div class="btn-row" style="margin-top:4px">' +
       '<button class="btn ghost" data-act="ai-reset" data-scope="quota">重置' + esc(period) + "用量</button>" +
