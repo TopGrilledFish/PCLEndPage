@@ -906,5 +906,7 @@
   "verify.cf_fail": "Cloudflare 那边没通过，再试一次。",
   "verify.cf_expired": "这个链接过期了，回 PCL 刷新页面重新拿一个。",
   "verify.ok_back": "返回主页",
-  "verify.ok_refresh_hint": "点上面的按钮回主页；如果主页还是这张验证卡，点「刷新页面」再来一次。"
+  "verify.ok_refresh_hint": "点上面的按钮回主页；如果主页还是这张验证卡，点「刷新页面」再来一次。",
+  "verify.goto_home": "验证成功，点击我进入主页",
+  "verify.refresh_tip": "如果验证通过后还是此页，请点击下面的刷新"
 }
