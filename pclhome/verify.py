@@ -532,7 +532,7 @@ def _cf_card(ip: str, base: str, lang: str) -> str:
         ' TextWrapping="Wrap" HorizontalAlignment="Center"'
         ' Foreground="{DynamicResource ColorBrush3}" />'
         '<local:MyTextButton Height="38" Margin="0,18,0,0" HorizontalAlignment="Center"'
-        ' Text="' + escape_attr(t("verify.cf_link", lang)) + '" ColorType="Highlight"'
+        ' Text="' + escape_attr(t("verify.cf_link", lang)) + '"'
         ' EventType="打开网页" EventData="' + escape_url_attr(link) + '" />'
         '</StackPanel></local:MyCard>'
     )
@@ -570,8 +570,6 @@ def guide_xaml(ip: str, lang: str = DEFAULT_LANG, origin: str = "",
         '<StackPanel Margin="25,40,23,20">'
         '<TextBlock Text="' + escape_attr(t("verify.need_title", lang)) + '" FontSize="24"'
         ' FontWeight="Bold" HorizontalAlignment="Center" Foreground="#FF000000" />'
-        '<TextBlock Text="' + escape_attr(t("verify.need_desc", lang)) + '" FontSize="11"'
-        ' TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush3}" Margin="0,10,0,0" />'
         + body +
         '<local:MyIconTextButton Height="36" Margin="0,14,0,0" HorizontalAlignment="Center"'
         ' Text="' + escape_attr(t("verify.refresh", lang)) + '" LogoScale="0.85"'

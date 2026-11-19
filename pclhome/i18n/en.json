@@ -887,7 +887,7 @@
   "ai.meta.follow": "Continue from the previous answer",
   "ai.err.cut_note": "(Output hit the length limit, so the answer may be incomplete; raise ai_max_tokens in config.json to allow more.)",
   "verify.title": "Access check",
-  "verify.need_title": "One quick check first",
+  "verify.need_title": "Prove you are human",
   "verify.need_desc": "This site asks for a human check once every 7 days. Tap \"Verify\" below, finish it in your browser, then come back and tap \"Refresh\".",
   "verify.goto": "Verify",
   "verify.refresh": "Refresh",
