@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import random
 import struct
@@ -323,46 +324,84 @@ _FONT = {
 
 
 def _png(code: str) -> bytes:
-    """把验证码画成灰度 PNG（纯标准库：点阵放大 + 噪点 + 干扰线）。"""
+    """把验证码画成灰度 PNG（纯标准库：点阵 + 扭曲 + 噪点 + 干扰线）。
+
+    字形不是直接放大贴上去的：每个字符按 ``波浪 + 斜切 + 纵向挤压`` 反向采样，
+    笔画会歪、会拉长；再叠一层底噪、十条直线干扰和四条正弦干扰。
+    """
     scale = 7
-    gap = 6
+    gap = 7
     cw, ch = 5 * scale, 7 * scale
     width = 20 + CODE_LEN * cw + (CODE_LEN - 1) * gap
     height = ch + 26
-    img = [[int(246 + random.Random(code + str(i)).random() * 9) for _ in range(width)]
-           for i in range(height)]
     rnd = random.Random(code)
+    img = [[228 + rnd.randint(0, 26) for _ in range(width)] for _ in range(height)]
 
-    for _ in range(220):
-        x = rnd.randrange(width)
-        y = rnd.randrange(height)
-        img[y][x] = rnd.choice((208, 218, 228, 236))
+    # 底噪：撒得散一点，颜色偏浅，主要作用是让笔画边缘不干净
+    for _ in range(360):
+        x, y = rnd.randrange(width), rnd.randrange(height)
+        img[y][x] = rnd.choice((198, 208, 216, 224, 232))
 
-    for _ in range(3):
-        x0, y0 = rnd.randrange(width), rnd.randrange(height)
-        x1, y1 = rnd.randrange(width), rnd.randrange(height)
-        steps = max(abs(x1 - x0), abs(y1 - y0), 1)
-        for i in range(steps + 1):
-            x = x0 + (x1 - x0) * i // steps
-            y = y0 + (y1 - y0) * i // steps
-            if 0 <= x < width and 0 <= y < height:
-                img[y][x] = 198
-
+    # 笔画：逐像素反向采样，做出扭曲
     for index, char in enumerate(code):
         rows = _FONT.get(char)
         if not rows:
             continue
-        ox = 10 + index * (cw + gap)
-        oy = 13 + rnd.randint(-3, 3)
-        for row in range(7):
-            for col in range(5):
-                if rows.split("/")[row][col] != "#":
+        bits = rows.split("/")
+        ox = 10 + index * (cw + gap) + rnd.randint(-2, 2)
+        oy = 13 + rnd.randint(-5, 5)
+        phase = rnd.uniform(0.0, 6.283)
+        wave = rnd.uniform(0.05, 0.09)
+        skew = rnd.uniform(-0.10, 0.10)
+        rot = rnd.uniform(-0.08, 0.08)
+        squash = rnd.uniform(0.90, 1.10)
+        tone = 20 + rnd.randint(0, 34)
+        for yy in range(ch):
+            ny = (yy + 0.5) / ch
+            for xx in range(cw):
+                nx = (xx + 0.5) / cw
+                # 先整体转一个小角度，再叠波浪和斜切：字会歪、笔画会拉长
+                ny2 = ny + rot * (nx - 0.5)
+                row = int((max(0.0, min(1.0, ny2)) ** squash) * 7)
+                if row < 0 or row > 6:
                     continue
-                for dy in range(scale):
-                    for dx in range(scale):
-                        x, y = ox + col * scale + dx, oy + row * scale + dy
-                        if 0 <= x < width and 0 <= y < height:
-                            img[y][x] = 24 + rnd.randint(0, 32)
+                line = bits[row]
+                nx2 = nx + wave * math.sin(ny2 * 5.4 + phase) + skew * (ny2 - 0.5)
+                col = int(nx2 * 5)
+                if col < 0 or col > 4:
+                    continue
+                if line[col] != "#":
+                    continue
+                x, y = ox + xx, oy + yy
+                if 0 <= x < width and 0 <= y < height:
+                    img[y][x] = tone + rnd.randint(0, 20)
+
+    # 十条直线干扰，后四条更粗
+    for i in range(10):
+        x0, y0 = rnd.randrange(width), rnd.randrange(height)
+        x1 = min(width - 1, max(0, x0 + rnd.randint(-width // 2, width // 2)))
+        y1 = rnd.randrange(height)
+        tone = rnd.choice((142, 158, 172, 186))
+        thick = 1 if i < 6 else 2
+        steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+        for k in range(steps + 1):
+            x = x0 + (x1 - x0) * k // steps
+            y = y0 + (y1 - y0) * k // steps
+            for t in range(thick):
+                if 0 <= x < width and 0 <= y + t < height:
+                    img[y + t][x] = tone
+
+    # 四条正弦干扰
+    for _ in range(4):
+        yb = rnd.randrange(height)
+        amp = rnd.uniform(2.5, 7.0)
+        freq = rnd.uniform(0.05, 0.14)
+        ph = rnd.uniform(0.0, 6.283)
+        tone = rnd.choice((154, 170, 184, 198))
+        for x in range(width):
+            y = int(yb + amp * math.sin(x * freq + ph))
+            if 0 <= y < height:
+                img[y][x] = tone
 
     raw = b"".join(b"\x00" + bytes(row) for row in img)
 
@@ -547,8 +586,13 @@ def guide_xaml(ip: str, lang: str = DEFAULT_LANG, origin: str = "",
 
 
 def submit_xaml(ip: str, config, lang: str = DEFAULT_LANG, origin: str = "",
-                token: str = "", answer: str = "", site_key: str = "") -> str:
-    """PCL 点「提交」后打开的 `.xaml`：判定、记账、给结果。"""
+                token: str = "", answer: str = "", site_key: str = "",
+                home_builder=None) -> str:
+    """PCL 点「提交」后打开的 `.xaml`：判定、记账、给结果。
+
+    通过时**直接返回主页本体**（`home_builder()`）——PCL 会把这段 XAML 当成
+    帮助页内容渲染，看上去就是主页，不用再看一张「验证通过」的中间页。
+    """
     lang = lang or DEFAULT_LANG
     base = (origin or "").rstrip("/")
     ok, reason = check_token(ip, token, answer)
@@ -556,6 +600,13 @@ def submit_xaml(ip: str, config, lang: str = DEFAULT_LANG, origin: str = "",
         mark_verified(ip, config)
         clear_fail(ip)
         debug("[Verify] " + ip + " 通过访问验证（PCL 内）")
+        if home_builder is not None:
+            try:
+                body = home_builder()
+                if body:
+                    return body
+            except Exception as exc:  # noqa: BLE001 - 渲染失败也要回退成提示页
+                warn("[Verify] 验证通过后渲染主页失败：" + repr(exc))
         head = t("verify.ok_title", lang)
         desc = t("verify.ok_page_desc", lang)
         extra = ('<TextBlock Text="' + escape_attr(t("verify.ok_line", lang)) + '" FontSize="11"'
@@ -675,13 +726,23 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
 
     # --- PCL 点「提交」：先要一份 meta，再要页面本体
     if path == "/verify_submit.json":
-        return _json({"Title": t("verify.title", lang),
+        # 标题用站点名：验证通过时这一段会直接换成主页内容，
+        # 顶部写「访问验证」会显得像还停在中间页
+        title = getattr(config, "site_name", "") or t("verify.title", lang)
+        return _json({"Title": title,
                       "Description": t("verify.submit_desc", lang)})
     if path == "/verify_submit.xaml":
         token = (params.get("t") or [""])[0]
         answer = (params.get("q") or [""])[0]
+
+        def _home_body() -> str:
+            # homepage() 返回 (渲染好的 XAML, HomeData)，只要前一半
+            text, _data = service.homepage(ip, origin)
+            return text or ""
+
         body = submit_xaml(ip, config, lang, base, token, answer,
-                           getattr(config, "turnstile_site_key", ""))
+                           getattr(config, "turnstile_site_key", ""),
+                           home_builder=_home_body)
         return Response.xaml(body)
 
     # --- Cloudflare 回执
