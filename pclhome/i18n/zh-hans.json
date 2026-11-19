@@ -872,5 +872,21 @@
   "ai.reasoning_title": "思考过程",
   "ai.cost_line": "本次约用 {n} token",
   "ai.meta.follow": "接着上一次的结果继续问",
-  "ai.err.cut_note": "（输出到了长度上限，答案可能不完整；把 config.json 里的 ai_max_tokens 调大可以放宽）"
+  "ai.err.cut_note": "（输出到了长度上限，答案可能不完整；把 config.json 里的 ai_max_tokens 调大可以放宽）",
+  "verify.title": "访问验证",
+  "verify.need_title": "需要先做一次验证",
+  "verify.need_desc": "本站开启了访问验证（7 天内只需一次）。点下面的「去验证」，在浏览器里填一下图上的字符，做完回来点「刷新页面」就能看了。",
+  "verify.goto": "去验证",
+  "verify.refresh": "刷新页面",
+  "verify.page_title": "访问验证",
+  "verify.page_hint": "把下面图片里的 5 个字符填进输入框。",
+  "verify.placeholder": "输入验证码",
+  "verify.button": "提交",
+  "verify.page_tip": "验证一次 7 天有效。换网络之后可能需要重新验证。",
+  "verify.ok_title": "验证通过",
+  "verify.ok_desc": "回到启动器点「刷新页面」就能看了。",
+  "verify.ok_line": "7 天内不用再验证。",
+  "verify.wrong": "验证码不对，再试一次。",
+  "verify.expired": "题目过期了，已经换了一道新的。",
+  "verify.locked": "失败次数太多，请 {minutes} 分钟后再试。"
 }

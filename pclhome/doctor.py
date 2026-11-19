@@ -1206,6 +1206,49 @@ def check_rendered(report: Report, config: Config) -> None:
     except Exception as exc:
         report.bad("配色检查失败：" + repr(exc))
 
+    # 访问验证：引导页要给 PCL 能解析，网页那侧的题目/签名要能对上
+    try:
+        from . import verify as verify_module
+
+        guide = verify_module.guide_xaml("203.0.113.7", "zh-hans", "http://localhost")
+        problems = []
+        if "访问验证" not in guide:
+            problems.append("引导页没有标题")
+        if 'EventType="刷新页面"' not in guide:
+            problems.append("引导页没有刷新按钮")
+        if "http://localhost/verify" not in guide:
+            problems.append("引导页没有指向 /verify")
+        if "__" in guide:
+            problems.append("引导页有未替换的占位符")
+        try:
+            import xml.etree.ElementTree as _et
+            _et.fromstring('<?xml version="1.0" encoding="utf-8"?><root '
+                           + _XAML_ROOT_NS + ">" + guide + "</root>")
+        except Exception as exc:
+            problems.append("XML 不良构：" + repr(exc))
+        stray = pal.stray_brushes(guide)
+        if stray:
+            problems.append("配色越界：" + ",".join(str(n) for n in stray))
+
+        html = verify_module.page_html("203.0.113.7", "http://localhost", "zh-hans")
+        if "<svg" not in html or 'name="token"' not in html:
+            problems.append("验证页缺少验证码或 token")
+
+        token, code = verify_module.make_token("203.0.113.7")
+        if not verify_module.check_token("203.0.113.7", token, code)[0]:
+            problems.append("正确答案验不过")
+        if verify_module.check_token("203.0.113.7", token, "00000")[0]:
+            problems.append("错误答案也能过")
+        if verify_module.check_token("198.51.100.9", token, code)[0]:
+            problems.append("换个 IP 也能过")
+
+        if problems:
+            report.bad("访问验证有问题：" + "；".join(problems))
+        else:
+            report.good("访问验证：引导页可解析、验证页能出题、签名只认本 IP")
+    except Exception as exc:
+        report.bad("访问验证检查失败：" + repr(exc))
+
     # 关键内容抽查
     if "今日一言" in homepage or "每日一言" in homepage:
         report.good("每日一言区块存在")

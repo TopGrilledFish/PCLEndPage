@@ -141,6 +141,8 @@ ENV_MAP = {
     "PCLHOME_LUNAR": ("enable_lunar", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_TRUST_PROXY": ("trust_proxy_headers", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_GUARD": ("guard_clients", lambda v: v not in ("0", "false", "no")),
+    "PCLHOME_VERIFY": ("verify_enabled", lambda v: v not in ("0", "false", "no")),
+    "PCLHOME_VERIFY_DAYS": ("verify_days", float),
 }
 
 
@@ -225,6 +227,12 @@ class Config:
 
     # ---- 来源守卫：上游只放行 PCL 客户端与真实浏览器 ----
     guard_clients: bool = True
+
+    # ---- 访问验证：通过一次，N 天内不再问（见 verify.py）----
+    # 起因是 2026-11-17 那波 564 次 GET / 的境外批量请求：UA 能伪造，
+    # 所以加一道真人在浏览器里过一遍的闸门。关掉就是退回"只看 UA"。
+    verify_enabled: bool = True
+    verify_days: float = 7.0
 
     def resolved_base_url(self, origin: str = "") -> str:
         """构建期写死优先；没配就用请求方推导出的 origin。"""

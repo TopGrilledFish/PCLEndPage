@@ -45,6 +45,7 @@ from . import palette
 from . import profiles
 from . import settings
 from . import languages
+from . import verify
 from . import visit
 from .xaml import build_fallback_xaml
 
@@ -54,6 +55,20 @@ def _bot_xaml(ip: str) -> str:
     lang = profiles.lang_for(ip)
     return build_fallback_xaml(t("fallback.denied_title", lang),
                                t("fallback.bot_msg", lang), lang=lang)
+
+
+def is_pcl_client(user_agent: str, referer: str = "") -> bool:
+    """只认 PCL 自己：UA 带 PCL2，或者 Referer 是 PCL 的帮助页。
+
+    和 ``is_trusted_client`` 的区别是**不再放行普通浏览器**。``/`` 这个路径
+    用这套更严的规则——它是 2026-11-17 那波批量请求打的入口（564 次 / 2 分钟），
+    而真实 PCL 只请求 ``/Custom.xaml`` 和 ``/<日期>``，并不依赖 ``/``。
+    """
+    ua = user_agent or ""
+    if re.search(r"PCL2", ua, re.I):
+        return True
+    return bool(re.search(r"pcl2\.server|pcl2\.open\.server", referer or "", re.I))
+
 
 
 def _updating_xaml(ip: str, eta: str = "", reason: str = "") -> str:
@@ -434,6 +449,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(admin_module.handle(service, self, path, parsed.query))
             return
 
+        if path in verify.VERIFY_PATHS:
+            # 验证页是给浏览器看的，不走来源守卫（守卫只认 PCL/带 Mozilla 的 UA，
+            # 而玩家可能用任何浏览器打开）；页面里自己按 IP 判验证状态。
+            response = verify.handle(service, path, parsed.query, self._log_ip, self._origin())
+            if response is None:
+                self._send(Response(404, b"Not Found", content_type="text/plain; charset=utf-8"))
+                return
+            self._note = "访问验证页"
+            self._send(response)
+            return
+
         if path in ai.AI_PATHS:
             if service.config.guard_clients and not is_trusted_client(ua, referer):
                 self._force_warn = True
@@ -525,6 +551,12 @@ class Handler(BaseHTTPRequestHandler):
                               else "维护模式拦截（标记版）")
                 self._send(Response.xaml(blocked))
                 return
+            if service.config.verify_enabled and not verify.is_verified(marker_ip):
+                self._note = "未通过访问验证（标记版），返回引导页"
+                self._send(Response.xaml(verify.guide_xaml(marker_ip,
+                                                            profiles.lang_for(marker_ip),
+                                                            self._origin())))
+                return
             try:
                 body, data = service.homepage(marker_ip, self._origin(), marker=True)
             except Exception:
@@ -558,6 +590,16 @@ class Handler(BaseHTTPRequestHandler):
                                 headers={"Allow": "GET, HEAD", **BASE_SECURITY_HEADERS}))
             return
 
+        if service.config.guard_clients and path == "/":
+            # 根路径只留给真正的 PCL。2026-11-17 21:04 那两分钟，365 个境外
+            # 数据中心 IP 打了 564 次 GET /，每次都完整渲染主页（2.6 秒 + 外部接口）。
+            # 真实客户端请求的是 /Custom.xaml 或 /<日期>，不依赖 /。
+            if not is_pcl_client(ua, referer):
+                self._force_warn = True
+                self._note = "根路径拒绝非 PCL 请求：UA=" + (ua[:60] or "（空）")
+                self._send(Response.xaml(_bot_xaml(self._log_ip)))
+                return
+
         if service.config.guard_clients and (path in DATA_ENDPOINTS or path in VERSION_PATHS):
             if not is_trusted_client(ua, referer):
                 self._force_warn = True
@@ -583,6 +625,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._force_warn = True
                 self._note = ("已封禁的 IP 请求主页" if service.store.is_blocked(ip) else "维护模式拦截")
                 self._send(Response.xaml(blocked))
+                return
+            # 访问验证闸门：没验证过就只发引导页——不组装主页，也就不调
+            # uapi / ip-api，批量请求拿不到任何有价值的东西。
+            if service.config.verify_enabled and not verify.is_verified(ip):
+                self._note = "未通过访问验证，返回引导页"
+                self._send(Response.xaml(verify.guide_xaml(ip, profiles.lang_for(ip), origin)))
                 return
             country = self.headers.get("CF-IPCountry") or "XX"
             try:

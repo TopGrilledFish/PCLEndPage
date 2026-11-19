@@ -885,5 +885,21 @@
   "ai.reasoning_title": "Reasoning",
   "ai.cost_line": "About {n} tokens used",
   "ai.meta.follow": "Continue from the previous answer",
-  "ai.err.cut_note": "(Output hit the length limit, so the answer may be incomplete; raise ai_max_tokens in config.json to allow more.)"
+  "ai.err.cut_note": "(Output hit the length limit, so the answer may be incomplete; raise ai_max_tokens in config.json to allow more.)",
+  "verify.title": "Access check",
+  "verify.need_title": "One quick check first",
+  "verify.need_desc": "This site asks for a human check once every 7 days. Tap \"Verify\" below, finish it in your browser, then come back and tap \"Refresh\".",
+  "verify.goto": "Verify",
+  "verify.refresh": "Refresh",
+  "verify.page_title": "Access check",
+  "verify.page_hint": "Type the 5 characters from the picture below.",
+  "verify.placeholder": "Enter the code",
+  "verify.button": "Submit",
+  "verify.page_tip": "One check lasts 7 days. Switching networks may ask again.",
+  "verify.ok_title": "Passed",
+  "verify.ok_desc": "Go back to the launcher and tap \"Refresh\".",
+  "verify.ok_line": "No more checks for 7 days.",
+  "verify.wrong": "Wrong code, try again.",
+  "verify.expired": "That code expired, here is a new one.",
+  "verify.locked": "Too many failures, try again in {minutes} minutes."
 }

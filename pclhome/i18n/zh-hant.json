@@ -872,5 +872,21 @@
   "ai.reasoning_title": "思考過程",
   "ai.cost_line": "本次約用 {n} token",
   "ai.meta.follow": "接着上一次的結果繼續問",
-  "ai.err.cut_note": "（輸出到了長度上限，答案可能不完整；把 config.json 裡的 ai_max_tokens 調大可以放寬）"
+  "ai.err.cut_note": "（輸出到了長度上限，答案可能不完整；把 config.json 裡的 ai_max_tokens 調大可以放寬）",
+  "verify.title": "訪問驗證",
+  "verify.need_title": "需要先做一次驗證",
+  "verify.need_desc": "本站開啟了訪問驗證（7 天內只需一次）。點下面的「去驗證」，在瀏覽器裡填一下圖上的字符，做完回來點「刷新頁面」就能看了。",
+  "verify.goto": "去驗證",
+  "verify.refresh": "刷新頁面",
+  "verify.page_title": "訪問驗證",
+  "verify.page_hint": "把下面圖片裡的 5 個字符填進輸入框。",
+  "verify.placeholder": "輸入驗證碼",
+  "verify.button": "提交",
+  "verify.page_tip": "驗證一次 7 天有效。換網絡之後可能需要重新驗證。",
+  "verify.ok_title": "驗證通過",
+  "verify.ok_desc": "回到啟動器點「刷新頁面」就能看了。",
+  "verify.ok_line": "7 天內不用再驗證。",
+  "verify.wrong": "驗證碼不對，再試一次。",
+  "verify.expired": "題目過期了，已經換了一道新的。",
+  "verify.locked": "失敗次數太多，請 {minutes} 分鐘後再試。"
 }
