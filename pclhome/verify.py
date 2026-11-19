@@ -494,9 +494,6 @@ button:active{transform:translateY(1px)}
 .ok{margin:10px 0 0;padding:10px 12px;border-radius:10px;background:#ecfdf3;
  color:#067647;font-size:13px;border:1px solid #c6f2d8}
 .tip{margin-top:14px;font-size:12px;color:#8b93a1}
-.go{display:block;margin-top:18px;padding:12px;text-align:center;text-decoration:none;
- font-size:15px;font-weight:600;color:#fff;background:#2f6feb;border-radius:10px}
-.go:active{transform:translateY(1px)}
 """
 
 
@@ -532,7 +529,6 @@ def ok_html(ip: str, origin: str, lang: str = DEFAULT_LANG) -> str:
     title = t("verify.page_title", lang)
     head = t("verify.ok_title", lang)
     body = t("verify.ok_desc", lang)
-    home = (origin or "").rstrip("/") + "/"
     return (
         "<!doctype html><html lang=\"" + html_escape(lang) + "\"><head>"
         "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
@@ -540,8 +536,6 @@ def ok_html(ip: str, origin: str, lang: str = DEFAULT_LANG) -> str:
         "<div class=\"card\"><h1>" + html_escape(head) + "</h1>"
         "<p>" + html_escape(body) + "</p>"
         "<div class=\"ok\">" + html_escape(t("verify.ok_line", lang)) + "</div>"
-        "<a class=\"go\" href=\"" + html_escape(home) + "\">"
-        + html_escape(t("verify.goto_home", lang)) + "</a>"
         "</div></body></html>"
     )
 

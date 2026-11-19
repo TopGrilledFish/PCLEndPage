@@ -594,8 +594,7 @@ class Handler(BaseHTTPRequestHandler):
             # 根路径只留给真正的 PCL。2026-11-17 21:04 那两分钟，365 个境外
             # 数据中心 IP 打了 564 次 GET /，每次都完整渲染主页（2.6 秒 + 外部接口）。
             # 真实客户端请求的是 /Custom.xaml 或 /<日期>，不依赖 /。
-            # 已经通过访问验证的浏览器放行：验证成功页上的「进入主页」按钮就指这里。
-            if not is_pcl_client(ua, referer) and not verify.is_verified(self._log_ip):
+            if not is_pcl_client(ua, referer):
                 self._force_warn = True
                 self._note = "根路径拒绝非 PCL 请求：UA=" + (ua[:60] or "（空）")
                 self._send(Response.xaml(_bot_xaml(self._log_ip)))

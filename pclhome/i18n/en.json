@@ -918,8 +918,7 @@
   "verify.cf_ok": "It returns here automatically - then press Refresh in PCL.",
   "verify.cf_fail": "Cloudflare rejected that, try again.",
   "verify.cf_expired": "This link expired - refresh the homepage in PCL to get a new one.",
-  "verify.ok_back": "Back to home",
+  "verify.ok_back": "Verified - click to open the homepage",
   "verify.ok_refresh_hint": "Tap the button above to go home; if the home page still shows this card, hit Refresh there.",
-  "verify.goto_home": "Verified - click to open the homepage",
   "verify.refresh_tip": "If you still see this page after verifying, click refresh below"
 }
