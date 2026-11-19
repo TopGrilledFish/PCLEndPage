@@ -34,7 +34,7 @@ from . import profiles
 from .config import VAR_DIR
 from .i18n import DEFAULT_LANG, t
 from .log import debug, warn
-from .xaml import ICON_KEY, ICON_REFRESH, ICON_SAVE, escape_attr, escape_url_attr
+from .xaml import ICON_REFRESH, ICON_SAVE, escape_attr, escape_url_attr
 
 VERIFY_PATHS = {
     "/verify", "/verify/",
@@ -522,25 +522,19 @@ def ok_html(ip: str, origin: str, lang: str = DEFAULT_LANG) -> str:
     )
 
 
-def _cf_block(ip: str, base: str, lang: str) -> str:
-    """PCL 里展示「去浏览器做题」的那一块：地址 + 复制 + 打开。"""
+def _cf_card(ip: str, base: str, lang: str) -> str:
+    """连错几次之后给的一张极简卡：一句话 + 一个按钮，别的都不放。"""
     link = (base or "") + "/verify_cf?c=" + cf_token(ip)
     return (
-        '<TextBlock Text="' + escape_attr(t("verify.cf_title", lang)) + '" FontSize="15"'
-        ' FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" Margin="0,16,0,0" />'
-        '<TextBlock Text="' + escape_attr(t("verify.cf_desc", lang)) + '" FontSize="11"'
-        ' TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush3}" Margin="0,6,0,0" />'
-        '<Border Margin="0,10,0,0" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
-        '<TextBlock Text="' + escape_attr(link) + '" FontSize="11" TextWrapping="Wrap"'
-        ' Margin="10,8" Foreground="{DynamicResource ColorBrush2}" /></Border>'
-        '<local:MyIconTextButton Height="38" Margin="0,10,0,0" HorizontalAlignment="Center"'
-        ' Text="' + escape_attr(t("verify.cf_link", lang)) + '" LogoScale="0.85"'
-        ' ColorType="Highlight" Logo="' + escape_attr(ICON_KEY) + '"'
+        '<local:MyCard Title="' + escape_attr(t("verify.cf_title", lang)) + '" CanSwap="False">'
+        '<StackPanel Margin="25,40,23,20">'
+        '<TextBlock Text="' + escape_attr(t("verify.cf_hint", lang)) + '" FontSize="12"'
+        ' TextWrapping="Wrap" HorizontalAlignment="Center"'
+        ' Foreground="{DynamicResource ColorBrush3}" />'
+        '<local:MyTextButton Height="38" Margin="0,18,0,0" HorizontalAlignment="Center"'
+        ' Text="' + escape_attr(t("verify.cf_link", lang)) + '" ColorType="Highlight"'
         ' EventType="打开网页" EventData="' + escape_url_attr(link) + '" />'
-        '<local:MyIconTextButton Height="38" Margin="0,8,0,0" HorizontalAlignment="Center"'
-        ' Text="' + escape_attr(t("verify.cf_copy", lang)) + '" LogoScale="0.85"'
-        ' Logo="' + escape_attr(ICON_KEY) + '" EventType="复制文本" EventData="'
-        + escape_attr(link) + '" />'
+        '</StackPanel></local:MyCard>'
     )
 
 
@@ -550,7 +544,9 @@ def guide_xaml(ip: str, lang: str = DEFAULT_LANG, origin: str = "",
     lang = lang or DEFAULT_LANG
     base = (origin or "").rstrip("/")
     if need_turnstile(ip, site_key):
-        body = _cf_block(ip, base, lang)
+        # 连错够次数：整张卡只留「请验证您是真人」+ 一个按钮
+        return palette.apply(_cf_card(ip, base, lang),
+                             profiles.PROFILES.palette_for(ip))
     else:
         token, _code = make_token(ip)
         image = base + "/verify_img.png?t=" + urllib.parse.quote(token)
@@ -615,8 +611,9 @@ def submit_xaml(ip: str, config, lang: str = DEFAULT_LANG, origin: str = "",
         count = note_fail(ip)
         head = t("verify.fail_title", lang)
         if count >= FAIL_FOR_CF and site_key:
-            desc = t("verify.cf_desc", lang)
-            extra = _cf_block(ip, base, lang)
+            # 连错够次数就整张卡换成「去浏览器验证」，不再贴第二次失败提示
+            return palette.apply(_cf_card(ip, base, lang),
+                                 profiles.PROFILES.palette_for(ip))
         else:
             left = max(0, FAIL_FOR_CF - count)
             if reason == "expired":
