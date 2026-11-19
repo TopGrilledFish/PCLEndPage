@@ -21,8 +21,11 @@ import hmac
 import json
 import os
 import random
+import struct
 import time
 import urllib.parse
+import urllib.request
+import zlib
 from html import escape as html_escape
 
 from . import palette
@@ -30,9 +33,14 @@ from . import profiles
 from .config import VAR_DIR
 from .i18n import DEFAULT_LANG, t
 from .log import debug, warn
-from .xaml import ICON_KEY, ICON_REFRESH, escape_attr, escape_url_attr
+from .xaml import ICON_KEY, ICON_REFRESH, ICON_SAVE, escape_attr, escape_url_attr
 
-VERIFY_PATHS = {"/verify", "/verify/"}
+VERIFY_PATHS = {
+    "/verify", "/verify/",
+    "/verify_img.png",
+    "/verify_submit.json", "/verify_submit.xaml",
+    "/verify_cf", "/verify_cf/", "/verify_cf_post",
+}
 
 VERIFY_FILE = VAR_DIR / "verify.json"
 SECRET_FILE = VAR_DIR / "verify_secret"
@@ -43,6 +51,10 @@ TOKEN_TTL = 900
 # 连续输错 5 次，封 1 小时。家用 IP 一般一次就过，这条只惩罚脚本
 MAX_FAIL = 5
 LOCK_SECONDS = 3600
+# 连续错 3 次就换 Cloudflare 的题（浏览器里做，比看图难骗）
+FAIL_FOR_CF = 3
+CF_TTL = 900
+TURNSTILE_VERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
 # 去掉了 0/O、1/I/L 这些屏幕上容易看混的字符
 ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
@@ -156,7 +168,8 @@ def locked_seconds(ip: str) -> int:
     return int(left) if left > 0 else 0
 
 
-def note_fail(ip: str) -> None:
+def note_fail(ip: str) -> int:
+    """记一次失败，返回累计失败次数（连续错到 FAIL_FOR_CF 就换 Cloudflare 的题）。"""
     data = _load()
     row = data["fails"].get(ip)
     count = int(_as_float(row[0])) + 1 if isinstance(row, list) and row else 1
@@ -164,6 +177,85 @@ def note_fail(ip: str) -> None:
     data["fails"][ip] = [count, until]
     _save(data)
     debug("[Verify] " + ip + " 验证失败 " + str(count) + " 次")
+    return count
+
+
+def fail_count(ip: str) -> int:
+    data = _load()
+    row = data["fails"].get(ip)
+    return int(_as_float(row[0])) if isinstance(row, list) and row else 0
+
+
+def clear_fail(ip: str) -> None:
+    data = _load()
+    data["fails"].pop(ip, None)
+    _save(data)
+
+
+# --------------------------------------------------------------------------- Cloudflare
+
+def _has_cf(ip: str) -> bool:
+    """只读检查：这个 IP 有没有还没过期的临时链接。"""
+    data = _load()
+    row = data.get("cf", {}).get(ip)
+    return (isinstance(row, list) and len(row) >= 2
+            and _as_float(row[1]) > time.time())
+
+
+def need_turnstile(ip: str, site_key: str = "") -> bool:
+    """连续错够次数、且配了 Turnstile，才引导去浏览器做题。"""
+    if not site_key:
+        return False
+    if fail_count(ip) >= FAIL_FOR_CF:
+        return True
+    return _has_cf(ip)
+
+
+def cf_token(ip: str) -> str:
+    """取（必要时生成）这个 IP 的临时 Cloudflare 链接令牌，15 分钟有效。"""
+    data = _load()
+    store = data.setdefault("cf", {})
+    row = store.get(ip)
+    now = time.time()
+    if isinstance(row, list) and len(row) >= 2 and _as_float(row[1]) > now:
+        return str(row[0])
+    token = hashlib.sha256((ip + "|" + str(now) + "|" + os.urandom(8).hex()).encode()).hexdigest()[:24]
+    store[ip] = [token, now + CF_TTL]
+    _save(data)
+    return token
+
+
+def check_cf_token(ip: str, token: str) -> bool:
+    data = _load()
+    row = data.get("cf", {}).get(ip)
+    if not isinstance(row, list) or len(row) < 2:
+        return False
+    if _as_float(row[1]) <= time.time():
+        return False
+    return hmac.compare_digest(str(row[0]), str(token or ""))
+
+
+def turnstile_ok(secret: str, response: str, ip: str) -> tuple[bool, str]:
+    """服务端校验 Turnstile 回执。"""
+    if not secret or not response:
+        return False, "missing"
+    try:
+        body = urllib.parse.urlencode({
+            "secret": secret, "response": response, "remoteip": ip,
+        }).encode()
+        request = urllib.request.Request(
+            TURNSTILE_VERIFY, data=body, method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as resp:
+            info = json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception as exc:  # noqa: BLE001 - 网络/JSON 都可能炸，统一判失败
+        warn("[Verify] Turnstile 校验异常：" + repr(exc))
+        return False, "error"
+    if info.get("success"):
+        return True, ""
+    codes = info.get("error-codes") or []
+    return False, ",".join(str(code) for code in codes[:3]) or "failed"
 
 
 # --------------------------------------------------------------------------- 题目
@@ -191,6 +283,107 @@ def check_token(ip: str, token: str, answer: str) -> tuple[bool, str]:
     if str(answer or "").strip().upper() != code:
         return False, "wrong"
     return True, ""
+
+
+# 5×7 点阵字库，只覆盖 ALPHABET 里的 31 个字符。手写而不是依赖字体文件：
+# 服务器上没有 Pillow，也不该为了一个验证码去装第三方包。
+_FONT = {
+    "2": ".####/#...#/....#/...#./..#../.#.../#####",
+    "3": "#####/....#/...#./..##./....#/#...#/.###.",
+    "4": "...#./..##./.#.#./#..#./#####/...#./...#.",
+    "5": "#####/#..../####./....#/....#/#...#/.###.",
+    "6": "..##./.#.../#..../####./#...#/#...#/.###.",
+    "7": "#####/....#/...#./..#../.#.../.#.../.#...",
+    "8": ".###./#...#/#...#/.###./#...#/#...#/.###.",
+    "9": ".###./#...#/#...#/.####/....#/...#./.##..",
+    "A": "..#../.#.#./#...#/#...#/#####/#...#/#...#",
+    "B": "####./#...#/#...#/####./#...#/#...#/####.",
+    "C": ".###./#...#/#..../#..../#..../#...#/.###.",
+    "D": "###../#..#./#...#/#...#/#...#/#..#./###..",
+    "E": "#####/#..../#..../####./#..../#..../#####",
+    "F": "#####/#..../#..../####./#..../#..../#....",
+    "G": ".###./#...#/#..../#.###/#...#/#...#/.###.",
+    "H": "#...#/#...#/#...#/#####/#...#/#...#/#...#",
+    "J": "..###/...#./...#./...#./...#./#..#./.##..",
+    "K": "#...#/#..#./#.#../##.../#.#../#..#./#...#",
+    "M": "#...#/##.##/#.#.#/#.#.#/#...#/#...#/#...#",
+    "N": "#...#/##..#/#.#.#/#..##/#...#/#...#/#...#",
+    "P": "####./#...#/#...#/####./#..../#..../#....",
+    "Q": ".###./#...#/#...#/#...#/#.#.#/#..#./.##.#",
+    "R": "####./#...#/#...#/####./#.#../#..#./#...#",
+    "S": ".###./#...#/#..../.###./....#/#...#/.###.",
+    "T": "#####/..#../..#../..#../..#../..#../..#..",
+    "U": "#...#/#...#/#...#/#...#/#...#/#...#/.###.",
+    "V": "#...#/#...#/#...#/#...#/#...#/.#.#./..#..",
+    "W": "#...#/#...#/#...#/#.#.#/#.#.#/##.##/#...#",
+    "X": "#...#/#...#/.#.#./..#../.#.#./#...#/#...#",
+    "Y": "#...#/#...#/.#.#./..#../..#../..#../..#..",
+    "Z": "#####/....#/...#./..#../.#.../#..../#####",
+}
+
+
+def _png(code: str) -> bytes:
+    """把验证码画成灰度 PNG（纯标准库：点阵放大 + 噪点 + 干扰线）。"""
+    scale = 7
+    gap = 6
+    cw, ch = 5 * scale, 7 * scale
+    width = 20 + CODE_LEN * cw + (CODE_LEN - 1) * gap
+    height = ch + 26
+    img = [[int(246 + random.Random(code + str(i)).random() * 9) for _ in range(width)]
+           for i in range(height)]
+    rnd = random.Random(code)
+
+    for _ in range(220):
+        x = rnd.randrange(width)
+        y = rnd.randrange(height)
+        img[y][x] = rnd.choice((208, 218, 228, 236))
+
+    for _ in range(3):
+        x0, y0 = rnd.randrange(width), rnd.randrange(height)
+        x1, y1 = rnd.randrange(width), rnd.randrange(height)
+        steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+        for i in range(steps + 1):
+            x = x0 + (x1 - x0) * i // steps
+            y = y0 + (y1 - y0) * i // steps
+            if 0 <= x < width and 0 <= y < height:
+                img[y][x] = 198
+
+    for index, char in enumerate(code):
+        rows = _FONT.get(char)
+        if not rows:
+            continue
+        ox = 10 + index * (cw + gap)
+        oy = 13 + rnd.randint(-3, 3)
+        for row in range(7):
+            for col in range(5):
+                if rows.split("/")[row][col] != "#":
+                    continue
+                for dy in range(scale):
+                    for dx in range(scale):
+                        x, y = ox + col * scale + dx, oy + row * scale + dy
+                        if 0 <= x < width and 0 <= y < height:
+                            img[y][x] = 24 + rnd.randint(0, 32)
+
+    raw = b"".join(b"\x00" + bytes(row) for row in img)
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        body = tag + payload
+        return (struct.pack(">I", len(payload)) + body
+                + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def image_bytes(ip: str, token: str) -> bytes:
+    """``/verify_img.png?t=...``：token 里的答案就是图上的字。"""
+    parts = (token or "").split(".")
+    if len(parts) == 3:
+        ts, code, sig = parts
+        if hmac.compare_digest(sig, _sign(ip, ts, code)):
+            return _png(code)
+    return _png(_random_code())
 
 
 def _svg(code: str) -> str:
@@ -290,11 +483,53 @@ def ok_html(ip: str, origin: str, lang: str = DEFAULT_LANG) -> str:
     )
 
 
-def guide_xaml(ip: str, lang: str = DEFAULT_LANG, origin: str = "") -> str:
-    """PCL 侧的引导页。**不组装主页**，所以不会调 uapi / ip-api。"""
+def _cf_block(ip: str, base: str, lang: str) -> str:
+    """PCL 里展示「去浏览器做题」的那一块：地址 + 复制 + 打开。"""
+    link = (base or "") + "/verify_cf?c=" + cf_token(ip)
+    return (
+        '<TextBlock Text="' + escape_attr(t("verify.cf_title", lang)) + '" FontSize="15"'
+        ' FontWeight="Bold" Foreground="{DynamicResource ColorBrush1}" Margin="0,16,0,0" />'
+        '<TextBlock Text="' + escape_attr(t("verify.cf_desc", lang)) + '" FontSize="11"'
+        ' TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush3}" Margin="0,6,0,0" />'
+        '<Border Margin="0,10,0,0" Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+        '<TextBlock Text="' + escape_attr(link) + '" FontSize="11" TextWrapping="Wrap"'
+        ' Margin="10,8" Foreground="{DynamicResource ColorBrush2}" /></Border>'
+        '<local:MyIconTextButton Height="38" Margin="0,10,0,0" HorizontalAlignment="Center"'
+        ' Text="' + escape_attr(t("verify.cf_link", lang)) + '" LogoScale="0.85"'
+        ' ColorType="Highlight" Logo="' + escape_attr(ICON_KEY) + '"'
+        ' EventType="打开网页" EventData="' + escape_url_attr(link) + '" />'
+        '<local:MyIconTextButton Height="38" Margin="0,8,0,0" HorizontalAlignment="Center"'
+        ' Text="' + escape_attr(t("verify.cf_copy", lang)) + '" LogoScale="0.85"'
+        ' Logo="' + escape_attr(ICON_KEY) + '" EventType="复制文本" EventData="'
+        + escape_attr(link) + '" />'
+    )
+
+
+def guide_xaml(ip: str, lang: str = DEFAULT_LANG, origin: str = "",
+               site_key: str = "") -> str:
+    """PCL 侧的验证页。**不组装主页**，所以不会调 uapi / ip-api。"""
     lang = lang or DEFAULT_LANG
     base = (origin or "").rstrip("/")
-    url = (base + "/verify") if base else "/verify"
+    if need_turnstile(ip, site_key):
+        body = _cf_block(ip, base, lang)
+    else:
+        token, _code = make_token(ip)
+        image = base + "/verify_img.png?t=" + urllib.parse.quote(token)
+        fmt = ("{Binding Path=Text,ElementName=vcode,StringFormat='{}"
+               + base + "/verify_submit.json?t=" + token + "&q={0}'}")
+        body = (
+            '<local:MyImage Source="' + escape_url_attr(image) + '" Height="76"'
+            ' HorizontalAlignment="Center" Margin="0,14,0,0" />'
+            '<Border Margin="0,12,0,0" Height="38" Width="260" HorizontalAlignment="Center"'
+            ' Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+            '<local:MyTextBox x:Name="vcode" Height="38" Margin="10,0"'
+            ' HintText="' + escape_attr(t("verify.img_hint", lang)) + '"'
+            ' Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" /></Border>'
+            '<local:MyIconTextButton Height="40" Margin="0,12,0,0" HorizontalAlignment="Center"'
+            ' Text="' + escape_attr(t("verify.submit", lang)) + '" LogoScale="0.85"'
+            ' ColorType="Highlight" Logo="' + escape_attr(ICON_SAVE)
+            + '" EventType="打开帮助" EventData="' + escape_url_attr(fmt) + '" />'
+        )
     page = (
         '<local:MyCard Title="' + escape_attr(t("verify.title", lang)) + '" CanSwap="False">'
         '<StackPanel Margin="25,40,23,20">'
@@ -302,11 +537,67 @@ def guide_xaml(ip: str, lang: str = DEFAULT_LANG, origin: str = "") -> str:
         ' FontWeight="Bold" HorizontalAlignment="Center" Foreground="#FF000000" />'
         '<TextBlock Text="' + escape_attr(t("verify.need_desc", lang)) + '" FontSize="11"'
         ' TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush3}" Margin="0,10,0,0" />'
-        '<local:MyIconTextButton Height="40" Margin="0,14,0,0" HorizontalAlignment="Center"'
-        ' Text="' + escape_attr(t("verify.goto", lang)) + '" LogoScale="0.85" ColorType="Highlight"'
-        ' Logo="' + escape_attr(ICON_KEY) + '" EventType="打开网页" EventData="'
-        + escape_url_attr(url) + '" />'
-        '<local:MyIconTextButton Height="40" Margin="0,8,0,0" HorizontalAlignment="Center"'
+        + body +
+        '<local:MyIconTextButton Height="36" Margin="0,14,0,0" HorizontalAlignment="Center"'
+        ' Text="' + escape_attr(t("verify.refresh", lang)) + '" LogoScale="0.85"'
+        ' Logo="' + escape_attr(ICON_REFRESH) + '" EventType="刷新页面" EventData="-" />'
+        "</StackPanel></local:MyCard>"
+    )
+    return palette.apply(page, profiles.PROFILES.palette_for(ip))
+
+
+def submit_xaml(ip: str, config, lang: str = DEFAULT_LANG, origin: str = "",
+                token: str = "", answer: str = "", site_key: str = "") -> str:
+    """PCL 点「提交」后打开的 `.xaml`：判定、记账、给结果。"""
+    lang = lang or DEFAULT_LANG
+    base = (origin or "").rstrip("/")
+    ok, reason = check_token(ip, token, answer)
+    if ok:
+        mark_verified(ip, config)
+        clear_fail(ip)
+        debug("[Verify] " + ip + " 通过访问验证（PCL 内）")
+        head = t("verify.ok_title", lang)
+        desc = t("verify.ok_page_desc", lang)
+        extra = ('<TextBlock Text="' + escape_attr(t("verify.ok_line", lang)) + '" FontSize="11"'
+                 ' Foreground="{DynamicResource ColorBrush3}" Margin="0,10,0,0" />')
+    else:
+        count = note_fail(ip)
+        head = t("verify.fail_title", lang)
+        if count >= FAIL_FOR_CF and site_key:
+            desc = t("verify.cf_desc", lang)
+            extra = _cf_block(ip, base, lang)
+        else:
+            left = max(0, FAIL_FOR_CF - count)
+            if reason == "expired":
+                desc = t("verify.expired", lang)
+            else:
+                desc = t("verify.wrong_left", lang, n=left)
+            token, _code = make_token(ip)
+            image = base + "/verify_img.png?t=" + urllib.parse.quote(token)
+            fmt = ("{Binding Path=Text,ElementName=vsb,StringFormat='{}"
+                   + base + "/verify_submit.json?t=" + token + "&q={0}'}")
+            extra = (
+                '<local:MyImage Source="' + escape_url_attr(image) + '" Height="76"'
+                ' HorizontalAlignment="Center" Margin="0,12,0,0" />'
+                '<Border Margin="0,12,0,0" Height="38" Width="260" HorizontalAlignment="Center"'
+                ' Background="{DynamicResource ColorBrush7}" CornerRadius="5">'
+                '<local:MyTextBox x:Name="vsb" Height="38" Margin="10,0"'
+                ' HintText="' + escape_attr(t("verify.img_hint", lang)) + '"'
+                ' Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" /></Border>'
+                '<local:MyIconTextButton Height="40" Margin="0,12,0,0" HorizontalAlignment="Center"'
+                ' Text="' + escape_attr(t("verify.submit", lang)) + '" LogoScale="0.85"'
+                ' ColorType="Highlight" Logo="' + escape_attr(ICON_SAVE)
+                + '" EventType="打开帮助" EventData="' + escape_url_attr(fmt) + '" />'
+            )
+    page = (
+        '<local:MyCard Title="' + escape_attr(t("verify.title", lang)) + '" CanSwap="False">'
+        '<StackPanel Margin="25,40,23,20">'
+        '<TextBlock Text="' + escape_attr(head) + '" FontSize="22" FontWeight="Bold"'
+        ' HorizontalAlignment="Center" Foreground="#FF000000" />'
+        '<TextBlock Text="' + escape_attr(desc) + '" FontSize="11" TextWrapping="Wrap"'
+        ' Foreground="{DynamicResource ColorBrush3}" Margin="0,10,0,0" />'
+        + extra +
+        '<local:MyIconTextButton Height="36" Margin="0,16,0,0" HorizontalAlignment="Center"'
         ' Text="' + escape_attr(t("verify.refresh", lang)) + '" LogoScale="0.85"'
         ' Logo="' + escape_attr(ICON_REFRESH) + '" EventType="刷新页面" EventData="-" />'
         "</StackPanel></local:MyCard>"
@@ -316,8 +607,49 @@ def guide_xaml(ip: str, lang: str = DEFAULT_LANG, origin: str = "") -> str:
 
 # --------------------------------------------------------------------------- 路由
 
+_CF_SCRIPT = (
+    "<script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\""
+    " async defer></script>"
+)
+
+
+def cf_html(ip: str, origin: str, lang: str, site_key: str, token: str,
+            error: str = "") -> str:
+    """浏览器里的 Cloudflare Turnstile 页（连续错 3 次后才用）。"""
+    lang = lang or DEFAULT_LANG
+    title = t("verify.cf_page_title", lang)
+    hint = t("verify.cf_page_desc", lang)
+    tip = t("verify.cf_ok", lang)
+    err_html = ('<div class="err">' + html_escape(error) + "</div>") if error else ""
+    script = (
+        "<script>function cfDone(t){location.href='"
+        + '/verify_cf_post?c=' + html_escape(token)
+        + "&r='+encodeURIComponent(t);}</script>"
+    )
+    return (
+        "<!doctype html><html lang=\"" + html_escape(lang) + "\"><head>"
+        "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>" + html_escape(title) + "</title><style>" + _STYLE + "</style>"
+        + _CF_SCRIPT + "</head><body>"
+        "<div class=\"card\"><h1>" + html_escape(title) + "</h1>"
+        "<p>" + html_escape(hint) + "</p>"
+        "<div style=\"display:flex;justify-content:center;margin:18px 0\">"
+        "<div class=\"cf-turnstile\" data-sitekey=\"" + html_escape(site_key)
+        + "\" data-callback=\"cfDone\"></div></div>"
+        + err_html +
+        "<div class=\"tip\">" + html_escape(tip) + "</div>"
+        "</div>" + script + "</body></html>"
+    )
+
+
+def _clear_cf(ip: str) -> None:
+    data = _load()
+    data.get("cf", {}).pop(ip, None)
+    _save(data)
+
+
 def handle(service, path: str, query: str, ip: str, origin: str = ""):
-    """``/verify`` 与 ``/verify/``。返回 Response；关掉验证时返回 None（交给 404）。"""
+    """访问验证相关路径。返回 Response；关掉验证时返回 None（交给 404）。"""
     from .server import Response
 
     config = service.config
@@ -325,11 +657,67 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
         return None
 
     lang = profiles.PROFILES.lang_for(ip)
-    base = service.config.resolved_base_url(origin) if hasattr(service.config, "resolved_base_url") else origin
+    base = (service.config.resolved_base_url(origin)
+            if hasattr(service.config, "resolved_base_url") else origin)
+    params = urllib.parse.parse_qs(query or "")
 
     def _html(text: str):
         return Response(body=text.encode("utf-8"), content_type="text/html; charset=utf-8")
 
+    def _json(payload: dict):
+        return Response(body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                        content_type="application/json; charset=utf-8")
+
+    # --- PCL 里的验证码图片
+    if path == "/verify_img.png":
+        token = (params.get("t") or [""])[0]
+        return Response(body=image_bytes(ip, token), content_type="image/png")
+
+    # --- PCL 点「提交」：先要一份 meta，再要页面本体
+    if path == "/verify_submit.json":
+        return _json({"Title": t("verify.title", lang),
+                      "Description": t("verify.submit_desc", lang)})
+    if path == "/verify_submit.xaml":
+        token = (params.get("t") or [""])[0]
+        answer = (params.get("q") or [""])[0]
+        body = submit_xaml(ip, config, lang, base, token, answer,
+                           getattr(config, "turnstile_site_key", ""))
+        return Response.xaml(body)
+
+    # --- Cloudflare 回执
+    if path == "/verify_cf_post":
+        token = (params.get("c") or [""])[0]
+        response = (params.get("r") or [""])[0]
+        if not check_cf_token(ip, token):
+            return _html(cf_html(ip, base, lang,
+                                 getattr(config, "turnstile_site_key", ""), cf_token(ip),
+                                 error=t("verify.cf_expired", lang)))
+        ok, reason = turnstile_ok(getattr(config, "turnstile_secret", ""), response, ip)
+        if ok:
+            mark_verified(ip, config)
+            clear_fail(ip)
+            _clear_cf(ip)
+            debug("[Verify] " + ip + " 通过 Cloudflare 验证")
+            return _html(ok_html(ip, base, lang))
+        warn("[Verify] Turnstile 未通过：" + str(reason))
+        return _html(cf_html(ip, base, lang,
+                             getattr(config, "turnstile_site_key", ""), token,
+                             error=t("verify.cf_fail", lang)))
+
+    # --- 浏览器版 Cloudflare 页
+    if path in ("/verify_cf", "/verify_cf/"):
+        if is_verified(ip):
+            return _html(ok_html(ip, base, lang))
+        token = (params.get("c") or [""])[0]
+        if not check_cf_token(ip, token):
+            token = cf_token(ip)
+        site_key = getattr(config, "turnstile_site_key", "")
+        if not site_key:
+            # 没配站点密钥就退回看图验证，别给一个空白页
+            return _html(page_html(ip, base, lang))
+        return _html(cf_html(ip, base, lang, site_key, token))
+
+    # --- 浏览器版看图验证
     if is_verified(ip):
         return _html(ok_html(ip, base, lang))
 
@@ -338,7 +726,6 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
         minutes = max(1, int(left / 60) + 1)
         return _html(page_html(ip, base, lang, error=t("verify.locked", lang, minutes=minutes)))
 
-    params = urllib.parse.parse_qs(query or "")
     answer = (params.get("answer") or [""])[0]
     token = (params.get("token") or [""])[0]
 
@@ -346,6 +733,7 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
         ok, reason = check_token(ip, token, answer)
         if ok:
             mark_verified(ip, config)
+            clear_fail(ip)
             debug("[Verify] " + ip + " 通过验证")
             return _html(ok_html(ip, base, lang))
         note_fail(ip)

@@ -901,5 +901,20 @@
   "verify.ok_line": "No more checks for 7 days.",
   "verify.wrong": "Wrong code, try again.",
   "verify.expired": "That code expired, here is a new one.",
-  "verify.locked": "Too many failures, try again in {minutes} minutes."
+  "verify.locked": "Too many failures, try again in {minutes} minutes.",
+  "verify.img_hint": "Type the characters in the image",
+  "verify.submit": "Submit",
+  "verify.submit_desc": "Submit verification code",
+  "verify.fail_title": "Verification failed",
+  "verify.wrong_left": "Wrong code, {n} tries left",
+  "verify.ok_page_desc": "Verified. Go back to the homepage and press Refresh.",
+  "verify.cf_title": "Verify another way",
+  "verify.cf_desc": "Too many wrong codes - finish the Cloudflare check in your browser instead.",
+  "verify.cf_link": "Open in browser",
+  "verify.cf_copy": "Copy link",
+  "verify.cf_page_title": "Access check",
+  "verify.cf_page_desc": "Tick the box below to pass the Cloudflare check.",
+  "verify.cf_ok": "It returns here automatically - then press Refresh in PCL.",
+  "verify.cf_fail": "Cloudflare rejected that, try again.",
+  "verify.cf_expired": "This link expired - refresh the homepage in PCL to get a new one."
 }

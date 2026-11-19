@@ -553,9 +553,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if service.config.verify_enabled and not verify.is_verified(marker_ip):
                 self._note = "未通过访问验证（标记版），返回引导页"
-                self._send(Response.xaml(verify.guide_xaml(marker_ip,
-                                                            profiles.lang_for(marker_ip),
-                                                            self._origin())))
+                self._send(Response.xaml(verify.guide_xaml(
+                    marker_ip, profiles.lang_for(marker_ip), self._origin(),
+                    service.config.turnstile_site_key)))
                 return
             try:
                 body, data = service.homepage(marker_ip, self._origin(), marker=True)
@@ -630,7 +630,9 @@ class Handler(BaseHTTPRequestHandler):
             # uapi / ip-api，批量请求拿不到任何有价值的东西。
             if service.config.verify_enabled and not verify.is_verified(ip):
                 self._note = "未通过访问验证，返回引导页"
-                self._send(Response.xaml(verify.guide_xaml(ip, profiles.lang_for(ip), origin)))
+                self._send(Response.xaml(verify.guide_xaml(
+                    ip, profiles.lang_for(ip), origin,
+                    service.config.turnstile_site_key)))
                 return
             country = self.headers.get("CF-IPCountry") or "XX"
             try:

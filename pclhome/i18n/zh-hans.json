@@ -888,5 +888,20 @@
   "verify.ok_line": "7 天内不用再验证。",
   "verify.wrong": "验证码不对，再试一次。",
   "verify.expired": "题目过期了，已经换了一道新的。",
-  "verify.locked": "失败次数太多，请 {minutes} 分钟后再试。"
+  "verify.locked": "失败次数太多，请 {minutes} 分钟后再试。",
+  "verify.img_hint": "输入图上的字符",
+  "verify.submit": "提交",
+  "verify.submit_desc": "提交验证码",
+  "verify.fail_title": "验证没通过",
+  "verify.wrong_left": "不对，还能试 {n} 次",
+  "verify.ok_page_desc": "验证通过了。回主页点一下「刷新页面」即可。",
+  "verify.cf_title": "换个方式验证",
+  "verify.cf_desc": "连错几次了，去浏览器里过一下 Cloudflare 的人机验证更省事。",
+  "verify.cf_link": "在浏览器里打开",
+  "verify.cf_copy": "复制地址",
+  "verify.cf_page_title": "访问验证",
+  "verify.cf_page_desc": "点一下下面的方框，完成 Cloudflare 的验证。",
+  "verify.cf_ok": "通过后会自动跳回来，再回 PCL 点「刷新页面」。",
+  "verify.cf_fail": "Cloudflare 那边没通过，再试一次。",
+  "verify.cf_expired": "这个链接过期了，回 PCL 刷新页面重新拿一个。"
 }

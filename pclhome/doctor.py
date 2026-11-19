@@ -1206,20 +1206,27 @@ def check_rendered(report: Report, config: Config) -> None:
     except Exception as exc:
         report.bad("配色检查失败：" + repr(exc))
 
-    # 访问验证：引导页要给 PCL 能解析，网页那侧的题目/签名要能对上
+    # 访问验证：PCL 侧页面要给能解析，题目图/签名/升级到 Cloudflare 都要能对上
     try:
         from . import verify as verify_module
 
-        guide = verify_module.guide_xaml("203.0.113.7", "zh-hans", "http://localhost")
+        ip = "203.0.113.7"
+        verify_module.clear_fail(ip)
+        verify_module._clear_cf(ip)
+        guide = verify_module.guide_xaml(ip, "zh-hans", "http://localhost", "test-site-key")
         problems = []
         if "访问验证" not in guide:
-            problems.append("引导页没有标题")
+            problems.append("验证页没有标题")
         if 'EventType="刷新页面"' not in guide:
-            problems.append("引导页没有刷新按钮")
-        if "http://localhost/verify" not in guide:
-            problems.append("引导页没有指向 /verify")
+            problems.append("验证页没有刷新按钮")
+        if "http://localhost/verify_img.png?t=" not in guide:
+            problems.append("验证页没有验证码图片")
+        if "http://localhost/verify_submit.json?t=" not in guide:
+            problems.append("验证页没有提交按钮")
+        if "<local:MyTextBox" not in guide:
+            problems.append("验证页没有输入框")
         if "__" in guide:
-            problems.append("引导页有未替换的占位符")
+            problems.append("验证页有未替换的占位符")
         try:
             import xml.etree.ElementTree as _et
             _et.fromstring('<?xml version="1.0" encoding="utf-8"?><root '
@@ -1230,22 +1237,37 @@ def check_rendered(report: Report, config: Config) -> None:
         if stray:
             problems.append("配色越界：" + ",".join(str(n) for n in stray))
 
-        html = verify_module.page_html("203.0.113.7", "http://localhost", "zh-hans")
-        if "<svg" not in html or 'name="token"' not in html:
-            problems.append("验证页缺少验证码或 token")
+        token, code = verify_module.make_token(ip)
+        png = verify_module.image_bytes(ip, token)
+        if not png.startswith(b"\x89PNG\r\n\x1a\n") or len(png) < 1000:
+            problems.append("验证码不是有效 PNG")
+        if verify_module.image_bytes(ip, "bad.token.here")[:4] != b"\x89PNG":
+            problems.append("坏 token 没有兜底出图")
 
-        token, code = verify_module.make_token("203.0.113.7")
-        if not verify_module.check_token("203.0.113.7", token, code)[0]:
+        if not verify_module.check_token(ip, token, code)[0]:
             problems.append("正确答案验不过")
-        if verify_module.check_token("203.0.113.7", token, "00000")[0]:
+        if verify_module.check_token(ip, token, "00000")[0]:
             problems.append("错误答案也能过")
         if verify_module.check_token("198.51.100.9", token, code)[0]:
             problems.append("换个 IP 也能过")
 
+        # 连错三次应该升级到 Cloudflare 那条路（页面里出现临时链接）
+        for _ in range(verify_module.FAIL_FOR_CF):
+            wrong_token, _wrong = verify_module.make_token(ip)
+            page = verify_module.submit_xaml(ip, config, "zh-hans", "http://localhost",
+                                             wrong_token, "00000", "test-site-key")
+        if "/verify_cf?c=" not in page:
+            problems.append("连错后没有升级到 Cloudflare")
+        after = verify_module.guide_xaml(ip, "zh-hans", "http://localhost", "test-site-key")
+        if "/verify_cf?c=" not in after:
+            problems.append("升级后验证页没有再给链接")
+        verify_module.clear_fail(ip)
+        verify_module._clear_cf(ip)
+
         if problems:
             report.bad("访问验证有问题：" + "；".join(problems))
         else:
-            report.good("访问验证：引导页可解析、验证页能出题、签名只认本 IP")
+            report.good("访问验证：图能出、码能验、签名只认本 IP、连错会升级到 Cloudflare")
     except Exception as exc:
         report.bad("访问验证检查失败：" + repr(exc))
 

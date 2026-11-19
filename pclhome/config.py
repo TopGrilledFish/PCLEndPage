@@ -143,6 +143,8 @@ ENV_MAP = {
     "PCLHOME_GUARD": ("guard_clients", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_VERIFY": ("verify_enabled", lambda v: v not in ("0", "false", "no")),
     "PCLHOME_VERIFY_DAYS": ("verify_days", float),
+    "PCLHOME_TURNSTILE_KEY": ("turnstile_site_key", str),
+    "PCLHOME_TURNSTILE_SECRET": ("turnstile_secret", str),
 }
 
 
@@ -233,6 +235,10 @@ class Config:
     # 所以加一道真人在浏览器里过一遍的闸门。关掉就是退回"只看 UA"。
     verify_enabled: bool = True
     verify_days: float = 7.0
+    # Cloudflare Turnstile：连续看错几次图之后，改让浏览器里做一次 Turnstile。
+    # 两个都填了才会启用；只填一半就退回看图验证（不会给空白页）。
+    turnstile_site_key: str = ""
+    turnstile_secret: str = ""
 
     def resolved_base_url(self, origin: str = "") -> str:
         """构建期写死优先；没配就用请求方推导出的 origin。"""
