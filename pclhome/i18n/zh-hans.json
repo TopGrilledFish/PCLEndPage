@@ -894,7 +894,7 @@
   "verify.submit_desc": "提交验证码",
   "verify.fail_title": "验证没通过",
   "verify.wrong_left": "不对，还能试 {n} 次",
-  "verify.ok_page_desc": "验证通过了。回主页点一下「刷新页面」即可。",
+  "verify.ok_page_desc": "这个 IP 已通过验证，{days} 天内不用再验证。",
   "verify.cf_title": "请验证您是人类",
   "verify.cf_hint": "在浏览器里完成一次人机验证，通过后就能进主页。",
   "verify.cf_link": "点我打开浏览器验证",
@@ -904,5 +904,7 @@
   "verify.cf_page_desc": "点一下下面的方框，完成 Cloudflare 的验证。",
   "verify.cf_ok": "通过后会自动跳回来，再回 PCL 点「刷新页面」。",
   "verify.cf_fail": "Cloudflare 那边没通过，再试一次。",
-  "verify.cf_expired": "这个链接过期了，回 PCL 刷新页面重新拿一个。"
+  "verify.cf_expired": "这个链接过期了，回 PCL 刷新页面重新拿一个。",
+  "verify.ok_back": "返回主页",
+  "verify.ok_refresh_hint": "点上面的按钮回主页；如果主页还是这张验证卡，点「刷新页面」再来一次。"
 }

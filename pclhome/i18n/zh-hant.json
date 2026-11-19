@@ -894,7 +894,7 @@
   "verify.submit_desc": "提交驗證碼",
   "verify.fail_title": "驗證沒通過",
   "verify.wrong_left": "不對，還能試 {n} 次",
-  "verify.ok_page_desc": "驗證通過了。回主頁點一下「刷新頁面」即可。",
+  "verify.ok_page_desc": "這個 IP 已通過驗證，{days} 天內不用再驗證。",
   "verify.cf_title": "請驗證您是人類",
   "verify.cf_hint": "在瀏覽器裡完成一次人機驗證，通過後就能進主頁。",
   "verify.cf_link": "點我開啟瀏覽器驗證",
@@ -904,5 +904,7 @@
   "verify.cf_page_desc": "點一下下面的方框，完成 Cloudflare 的驗證。",
   "verify.cf_ok": "通過後會自動跳回來，再回 PCL 點「刷新頁面」。",
   "verify.cf_fail": "Cloudflare 那邊沒通過，再試一次。",
-  "verify.cf_expired": "這個鏈接過期了，回 PCL 刷新頁面重新拿一個。"
+  "verify.cf_expired": "這個鏈接過期了，回 PCL 刷新頁面重新拿一個。",
+  "verify.ok_back": "返回主頁",
+  "verify.ok_refresh_hint": "點上面的按鈕回主頁；如果主頁還是這張驗證卡，點「刷新頁面」再來一次。"
 }

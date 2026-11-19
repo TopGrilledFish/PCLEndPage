@@ -34,7 +34,7 @@ from . import profiles
 from .config import VAR_DIR
 from .i18n import DEFAULT_LANG, t
 from .log import debug, warn
-from .xaml import ICON_REFRESH, ICON_SAVE, escape_attr, escape_url_attr
+from .xaml import ICON_HOME, ICON_REFRESH, ICON_SAVE, escape_attr, escape_url_attr
 
 VERIFY_PATHS = {
     "/verify", "/verify/",
@@ -116,12 +116,28 @@ def _secret() -> bytes:
 _SECRET = b""
 
 
-def _sign(ip: str, ts: str, code: str) -> str:
+def _secret_bytes() -> bytes:
     global _SECRET
     if not _SECRET:
         _SECRET = _secret()
-    raw = (ip + "|" + ts + "|" + code).encode("utf-8")
-    return hmac.new(_SECRET, raw, hashlib.sha256).hexdigest()[:32]
+    return _SECRET
+
+
+def _sign_token(ip: str, ts: str, nonce: str) -> str:
+    """签 ``(ip, ts, nonce)``——答案不参与签名，因为它压根不在 token 里。"""
+    raw = ("t|" + ip + "|" + ts + "|" + nonce).encode("utf-8")
+    return hmac.new(_secret_bytes(), raw, hashlib.sha256).hexdigest()[:32]
+
+
+def _code_for(ip: str, ts: str, nonce: str) -> str:
+    """由 ``(ip, ts, nonce)`` 派生验证码。
+
+    以前 token 直接写成 ``时间戳.答案.签名``，访客把 token 拆开就能读到答案，
+    等于没验证；现在 token 里只有时间戳和随机数，答案现派生。
+    """
+    raw = ("c|" + ip + "|" + ts + "|" + nonce).encode("utf-8")
+    digest = hmac.new(_secret_bytes(), raw, hashlib.sha256).digest()
+    return "".join(ALPHABET[b % len(ALPHABET)] for b in digest[:CODE_LEN])
 
 
 def ttl_seconds(config) -> int:
@@ -266,22 +282,22 @@ def _random_code() -> str:
 
 
 def make_token(ip: str) -> tuple[str, str]:
-    code = _random_code()
     ts = str(int(time.time()))
-    return ts + "." + code + "." + _sign(ip, ts, code), code
+    nonce = os.urandom(4).hex()
+    return ts + "." + nonce + "." + _sign_token(ip, ts, nonce), _code_for(ip, ts, nonce)
 
 
 def check_token(ip: str, token: str, answer: str) -> tuple[bool, str]:
     parts = (token or "").split(".")
     if len(parts) != 3:
         return False, "bad"
-    ts, code, sig = parts
-    if not hmac.compare_digest(sig, _sign(ip, ts, code)):
+    ts, nonce, sig = parts
+    if not hmac.compare_digest(sig, _sign_token(ip, ts, nonce)):
         return False, "bad"
     age = time.time() - _as_float(ts)
     if age < 0 or age > TOKEN_TTL:
         return False, "expired"
-    if str(answer or "").strip().upper() != code:
+    if str(answer or "").strip().upper() != _code_for(ip, ts, nonce):
         return False, "wrong"
     return True, ""
 
@@ -416,12 +432,14 @@ def _png(code: str) -> bytes:
 
 
 def image_bytes(ip: str, token: str) -> bytes:
-    """``/verify_img.png?t=...``：token 里的答案就是图上的字。"""
+    """``/verify_img.png?t=...``：现派生答案再画图，token 本身不含答案。"""
     parts = (token or "").split(".")
     if len(parts) == 3:
-        ts, code, sig = parts
-        if hmac.compare_digest(sig, _sign(ip, ts, code)):
-            return _png(code)
+        ts, nonce, sig = parts
+        if hmac.compare_digest(sig, _sign_token(ip, ts, nonce)):
+            age = time.time() - _as_float(ts)
+            if 0 <= age <= TOKEN_TTL:
+                return _png(_code_for(ip, ts, nonce))
     return _png(_random_code())
 
 
@@ -580,31 +598,38 @@ def guide_xaml(ip: str, lang: str = DEFAULT_LANG, origin: str = "",
 
 
 def submit_xaml(ip: str, config, lang: str = DEFAULT_LANG, origin: str = "",
-                token: str = "", answer: str = "", site_key: str = "",
-                home_builder=None) -> str:
+                token: str = "", answer: str = "", site_key: str = "") -> str:
     """PCL 点「提交」后打开的 `.xaml`：判定、记账、给结果。
 
-    通过时**直接返回主页本体**（`home_builder()`）——PCL 会把这段 XAML 当成
-    帮助页内容渲染，看上去就是主页，不用再看一张「验证通过」的中间页。
+    通过时只给一张「验证通过」卡 + 一个「返回主页」按钮：那个按钮走
+    `切换页面 / Launch`，跟主页上「返回主页」是同一种动作，PCL 会切回启动页
+    重新加载，不会停在「打开帮助」的详情页里。
     """
     lang = lang or DEFAULT_LANG
     base = (origin or "").rstrip("/")
     ok, reason = check_token(ip, token, answer)
+    bottom = ""
     if ok:
         mark_verified(ip, config)
         clear_fail(ip)
         debug("[Verify] " + ip + " 通过访问验证（PCL 内）")
-        if home_builder is not None:
-            try:
-                body = home_builder()
-                if body:
-                    return body
-            except Exception as exc:  # noqa: BLE001 - 渲染失败也要回退成提示页
-                warn("[Verify] 验证通过后渲染主页失败：" + repr(exc))
         head = t("verify.ok_title", lang)
-        desc = t("verify.ok_page_desc", lang)
-        extra = ('<TextBlock Text="' + escape_attr(t("verify.ok_line", lang)) + '" FontSize="11"'
-                 ' Foreground="{DynamicResource ColorBrush3}" Margin="0,10,0,0" />')
+        try:
+            days = int(float(getattr(config, "verify_days", 7) or 7))
+        except (TypeError, ValueError):
+            days = 7
+        desc = t("verify.ok_page_desc", lang, days=str(days))
+        # 只给一个「返回主页」按钮：走切换页面 / Launch，跟主页上那枚
+        # 「返回主页」完全是同一个动作，PCL 会切回启动页而不是停在详情页
+        extra = (
+            '<local:MyIconTextButton Height="40" Margin="0,18,0,0" HorizontalAlignment="Center"'
+            ' Text="' + escape_attr(t("verify.ok_back", lang)) + '" LogoScale="0.85"'
+            ' ColorType="Highlight" Logo="' + escape_attr(ICON_HOME)
+            + '" EventType="切换页面" EventData="Launch" />'
+            '<TextBlock Text="' + escape_attr(t("verify.ok_refresh_hint", lang)) + '" FontSize="11"'
+            ' TextWrapping="Wrap" HorizontalAlignment="Center"'
+            ' Foreground="{DynamicResource ColorBrush3}" Margin="0,12,0,0" />'
+        )
     else:
         count = note_fail(ip)
         head = t("verify.fail_title", lang)
@@ -613,6 +638,11 @@ def submit_xaml(ip: str, config, lang: str = DEFAULT_LANG, origin: str = "",
             return palette.apply(_cf_card(ip, base, lang),
                                  profiles.PROFILES.palette_for(ip))
         else:
+            bottom = (
+                '<local:MyIconTextButton Height="36" Margin="0,16,0,0" HorizontalAlignment="Center"'
+                ' Text="' + escape_attr(t("verify.refresh", lang)) + '" LogoScale="0.85"'
+                ' Logo="' + escape_attr(ICON_REFRESH) + '" EventType="刷新页面" EventData="-" />'
+            )
             left = max(0, FAIL_FOR_CF - count)
             if reason == "expired":
                 desc = t("verify.expired", lang)
@@ -642,10 +672,7 @@ def submit_xaml(ip: str, config, lang: str = DEFAULT_LANG, origin: str = "",
         ' HorizontalAlignment="Center" Foreground="#FF000000" />'
         '<TextBlock Text="' + escape_attr(desc) + '" FontSize="11" TextWrapping="Wrap"'
         ' Foreground="{DynamicResource ColorBrush3}" Margin="0,10,0,0" />'
-        + extra +
-        '<local:MyIconTextButton Height="36" Margin="0,16,0,0" HorizontalAlignment="Center"'
-        ' Text="' + escape_attr(t("verify.refresh", lang)) + '" LogoScale="0.85"'
-        ' Logo="' + escape_attr(ICON_REFRESH) + '" EventType="刷新页面" EventData="-" />'
+        + extra + bottom +
         "</StackPanel></local:MyCard>"
     )
     return palette.apply(page, profiles.PROFILES.palette_for(ip))
@@ -721,8 +748,6 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
 
     # --- PCL 点「提交」：先要一份 meta，再要页面本体
     if path == "/verify_submit.json":
-        # 标题用站点名：验证通过时这一段会直接换成主页内容，
-        # 顶部写「访问验证」会显得像还停在中间页
         title = getattr(config, "site_name", "") or t("verify.title", lang)
         return _json({"Title": title,
                       "Description": t("verify.submit_desc", lang)})
@@ -730,14 +755,8 @@ def handle(service, path: str, query: str, ip: str, origin: str = ""):
         token = (params.get("t") or [""])[0]
         answer = (params.get("q") or [""])[0]
 
-        def _home_body() -> str:
-            # homepage() 返回 (渲染好的 XAML, HomeData)，只要前一半
-            text, _data = service.homepage(ip, origin)
-            return text or ""
-
         body = submit_xaml(ip, config, lang, base, token, answer,
-                           getattr(config, "turnstile_site_key", ""),
-                           home_builder=_home_body)
+                           getattr(config, "turnstile_site_key", ""))
         return Response.xaml(body)
 
     # --- Cloudflare 回执

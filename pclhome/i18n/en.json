@@ -907,7 +907,7 @@
   "verify.submit_desc": "Submit verification code",
   "verify.fail_title": "Verification failed",
   "verify.wrong_left": "Wrong code, {n} tries left",
-  "verify.ok_page_desc": "Verified. Go back to the homepage and press Refresh.",
+  "verify.ok_page_desc": "This IP is verified; you won't be asked again for {days} days.",
   "verify.cf_title": "Prove you are human",
   "verify.cf_hint": "Finish a quick check in your browser and the homepage opens.",
   "verify.cf_link": "Open browser to verify",
@@ -917,5 +917,7 @@
   "verify.cf_page_desc": "Tick the box below to pass the Cloudflare check.",
   "verify.cf_ok": "It returns here automatically - then press Refresh in PCL.",
   "verify.cf_fail": "Cloudflare rejected that, try again.",
-  "verify.cf_expired": "This link expired - refresh the homepage in PCL to get a new one."
+  "verify.cf_expired": "This link expired - refresh the homepage in PCL to get a new one.",
+  "verify.ok_back": "Back to home",
+  "verify.ok_refresh_hint": "Tap the button above to go home; if the home page still shows this card, hit Refresh there."
 }
