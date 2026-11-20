@@ -206,7 +206,8 @@ def check_i18n(report: Report) -> None:
             continue
         # calc.separator_hint 是唯一允许出现全角标点的：它本身就在说明
         # 「逗号中文英文都可以」，不写出那个「，」就说不清。
-        if CJK_RE.search(value) and key != "calc.separator_hint":
+        # home.refresh_hint 是故意写成中英双语的（用 / 隔开），哪种语言都显示两句话。
+        if CJK_RE.search(value) and key not in ("calc.separator_hint", "home.refresh_hint"):
             untranslated.append(key)
     if untranslated:
         report.bad("英文里还有中文（" + str(len(untranslated)) + " 条）："
@@ -634,9 +635,13 @@ def _cjk_hits(xaml: str) -> list:
     """页面里残留的中文片段，便于定位。
 
     ``calc.separator_hint`` 那句在英文页面里本来就要写出「，」来说明分隔符，
-    所以先把这句原文摘掉再扫。
+    所以先把这句原文摘掉再扫。``home.refresh_hint`` 是中英双语故意写在一起，
+    两种语言页面里都会出现中文，同样先摘掉。
     """
-    text = visible_text(xaml).replace(calc.separator_hint("en"), "")
+    text = visible_text(xaml)
+    text = text.replace(calc.separator_hint("en"), "")
+    from . import i18n as _i18n
+    text = text.replace(_i18n.t("home.refresh_hint", "en"), "")
     return [match.group(0).strip()[:60]
             for match in re.finditer(r'[^"<>\n]*' + CJK_RE.pattern + r'[^"<>\n]*', text)]
 

@@ -907,5 +907,6 @@
   "verify.cf_expired": "這個鏈接過期了，回 PCL 刷新頁面重新拿一個。",
   "verify.ok_back": "驗證成功，點擊我進入主頁",
   "verify.ok_refresh_hint": "點上面的按鈕回主頁；如果主頁還是這張驗證卡，點「刷新頁面」再來一次。",
-  "verify.refresh_tip": "如果驗證通過後還是此頁，請點擊下面的刷新"
+  "verify.refresh_tip": "如果驗證通過後還是此頁，請點擊下面的刷新",
+  "home.refresh_hint": "如果信息不准确，请点击刷新 / If the info looks wrong, click refresh"
 }

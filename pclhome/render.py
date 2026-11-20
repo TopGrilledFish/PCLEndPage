@@ -215,6 +215,8 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str,
         "T_DAY_SUFFIX": escape_attr(t("date.day_suffix", lang)),
         "T_QUOTE_LABEL": escape_attr(t("home.quote_label", lang)),
         "T_SITES_TITLE": escape_attr(t("home.sites_title", lang)),
+        # 欢迎卡顶上那条提示，中英双语写在一起（用 / 隔开），不跟语言走。
+        "T_REFRESH_HINT": escape_attr(t("home.refresh_hint", lang)),
 
         # 这三块以前是构建期写死的，现在按语言现算
         "ACTION_BUTTONS": build_action_buttons(config, lang),

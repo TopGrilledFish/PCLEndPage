@@ -920,5 +920,6 @@
   "verify.cf_expired": "This link expired - refresh the homepage in PCL to get a new one.",
   "verify.ok_back": "Verified - click to open the homepage",
   "verify.ok_refresh_hint": "Tap the button above to go home; if the home page still shows this card, hit Refresh there.",
-  "verify.refresh_tip": "If you still see this page after verifying, click refresh below"
+  "verify.refresh_tip": "If you still see this page after verifying, click refresh below",
+  "home.refresh_hint": "如果信息不准确，请点击刷新 / If the info looks wrong, click refresh"
 }
