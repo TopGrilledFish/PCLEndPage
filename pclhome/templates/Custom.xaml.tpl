@@ -31,7 +31,7 @@
             <StackPanel.Effect>
                 <BlurEffect Radius="0" />
             </StackPanel.Effect>
-            <local:MyHint Margin="0,0,0,12" Text="__T_REFRESH_HINT__" />
+            <local:MyHint Margin="0,0,0,12" Theme="Blue" Text="__T_REFRESH_HINT__" />
             <!-- __FESTIVAL_BANNER__ -->
             <Border CornerRadius="12" Height="280" Margin="0,0,0,16" ClipToBounds="True">
                 <Grid>
