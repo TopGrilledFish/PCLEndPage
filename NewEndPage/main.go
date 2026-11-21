@@ -312,7 +312,58 @@ func newLegacyProxy(backend string) *httputil.ReverseProxy {
 		log.Printf("[Proxy] 旧服务不可用：%v", err)
 		http.Error(w, "legacy backend unavailable", http.StatusBadGateway)
 	}
+	// 旧版生成的 XAML 页面（/ai_page.*、/calc.*、/visit_page.* 等）在顶部补一条
+	// 「新版测试站点」横条；主页由 Go 版自己渲染，已有横条。
+	p.ModifyResponse = func(resp *http.Response) error {
+		if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" {
+			return nil
+		}
+		ct := resp.Header.Get("Content-Type")
+		if !strings.Contains(ct, "xml") {
+			return nil
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		body = injectNewSiteHint(body)
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		return nil
+	}
 	return p
+}
+
+// injectNewSiteHint 在 XAML 根元素开标签之后插入新版横条。
+// 跳过 XML 声明、注释与空白；找不到根元素时原样返回。
+func injectNewSiteHint(body []byte) []byte {
+	s := string(body)
+	pos := 0
+	for pos < len(s) {
+		for pos < len(s) && (s[pos] == ' ' || s[pos] == '\t' || s[pos] == '\r' || s[pos] == '\n') {
+			pos++
+		}
+		if pos >= len(s) || s[pos] != '<' {
+			return body
+		}
+		if pos+1 < len(s) && (s[pos+1] == '?' || s[pos+1] == '!') {
+			gt := strings.IndexByte(s[pos:], '>')
+			if gt < 0 {
+				return body
+			}
+			pos += gt + 1
+			continue
+		}
+		gt := strings.IndexByte(s[pos:], '>')
+		if gt < 0 {
+			return body
+		}
+		gt += pos
+		return []byte(s[:gt+1] + "\n    " + newSiteHint + s[gt+1:])
+	}
+	return body
 }
 
 // ---------- 小工具 ----------
