@@ -348,8 +348,12 @@ func newLegacyProxy(backend string) *httputil.ReverseProxy {
 	return p
 }
 
-// injectNewSiteHint 在 XAML 根元素开标签之后插入新版横条。
+// injectNewSiteHint 在 XAML 页面内容区顶部插入新版横条。
 // 跳过 XML 声明、注释与空白；找不到根元素时原样返回。
+//
+// 注意：旧版多数页面根元素是 <local:MyCard>（只允许一个子元素），
+// 横条不能与卡片内的 StackPanel 并列，必须插进该 StackPanel 内部，
+// 否则 PCL 布局会错乱（横条压到页面中部）。
 func injectNewSiteHint(body []byte) []byte {
 	s := string(body)
 	pos := 0
@@ -368,14 +372,33 @@ func injectNewSiteHint(body []byte) []byte {
 			pos += gt + 1
 			continue
 		}
-		gt := strings.IndexByte(s[pos:], '>')
-		if gt < 0 {
-			return body
-		}
-		gt += pos
-		return []byte(s[:gt+1] + "\n    " + newSiteHint + s[gt+1:])
+		break
 	}
-	return body
+	rootGT := strings.IndexByte(s[pos:], '>')
+	if rootGT < 0 {
+		return body
+	}
+	rootGT += pos
+
+	// 根元素本身就是 StackPanel 时，直接插到根内部。
+	name := strings.TrimSpace(s[pos+1 : rootGT])
+	if i := strings.IndexAny(name, " \t\r\n"); i >= 0 {
+		name = name[:i]
+	}
+	if strings.EqualFold(name, "StackPanel") {
+		return []byte(s[:rootGT+1] + "\n    " + newSiteHint + s[rootGT+1:])
+	}
+
+	// 否则（如 local:MyCard）：横条放进根元素内的第一个 StackPanel 开头。
+	sp := strings.Index(s[rootGT+1:], "<StackPanel")
+	if sp >= 0 {
+		sp += rootGT + 1
+		if gt := strings.IndexByte(s[sp:], '>'); gt >= 0 {
+			ins := sp + gt + 1
+			return []byte(s[:ins] + "\n    " + newSiteHint + s[ins:])
+		}
+	}
+	return []byte(s[:rootGT+1] + "\n    " + newSiteHint + s[rootGT+1:])
 }
 
 // injectHTMLBanner 在旧版生成的 HTML 页面（如 /verify 访问验证页）</body> 前插入新版横幅。
