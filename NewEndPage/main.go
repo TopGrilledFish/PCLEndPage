@@ -165,6 +165,8 @@ const (
 	xamlCT      = "application/xml; charset=utf-8"
 	noStore     = "no-store, no-cache, must-revalidate, max-age=0, s-maxage=0"
 	newSiteHint = `<local:MyHint Margin="0,0,0,12" Theme="Yellow" Text="您现在访问的是新版测试站点" />`
+	// htmlBanner 用于旧版 HTML 页面（如 /verify 访问验证页），样式与 nginx sub_filter 的横幅一致。
+	htmlBanner = `<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#f9d423;color:#000;text-align:center;padding:6px 0;font:14px/1.4 sans-serif;">您现在访问的是新版测试站点</div>`
 )
 
 func newServer(cfg *Config, dataDir string) (*Server, error) {
@@ -318,8 +320,14 @@ func newLegacyProxy(backend string) *httputil.ReverseProxy {
 		if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" {
 			return nil
 		}
+		// /admin 由 nginx 的 sub_filter 注入 HTML 横幅，这里不重复处理。
+		if resp.Request != nil && strings.HasPrefix(resp.Request.URL.Path, "/admin") {
+			return nil
+		}
 		ct := resp.Header.Get("Content-Type")
-		if !strings.Contains(ct, "xml") {
+		xamlPage := strings.Contains(ct, "xml")
+		htmlPage := strings.Contains(ct, "text/html")
+		if !xamlPage && !htmlPage {
 			return nil
 		}
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -327,7 +335,11 @@ func newLegacyProxy(backend string) *httputil.ReverseProxy {
 			return err
 		}
 		resp.Body.Close()
-		body = injectNewSiteHint(body)
+		if xamlPage {
+			body = injectNewSiteHint(body)
+		} else {
+			body = injectHTMLBanner(body)
+		}
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		resp.ContentLength = int64(len(body))
 		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
@@ -364,6 +376,17 @@ func injectNewSiteHint(body []byte) []byte {
 		return []byte(s[:gt+1] + "\n    " + newSiteHint + s[gt+1:])
 	}
 	return body
+}
+
+// injectHTMLBanner 在旧版生成的 HTML 页面（如 /verify 访问验证页）</body> 前插入新版横幅。
+// /admin 已由 nginx 的 sub_filter 注入，调用方会跳过。
+func injectHTMLBanner(body []byte) []byte {
+	s := string(body)
+	i := strings.LastIndex(s, "</body>")
+	if i < 0 {
+		return body
+	}
+	return []byte(s[:i] + htmlBanner + s[i:])
 }
 
 // ---------- 小工具 ----------
