@@ -15,10 +15,10 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -81,6 +81,10 @@ type Config struct {
 	UAPIKey             string     `json:"uapi_key"`
 	UAPIKeys            StringList `json:"uapi_keys"`
 	LegacyBackend       string     `json:"legacy_backend"`
+	VerifyEnabled       bool       `json:"verify_enabled"`
+	VerifyDays          int        `json:"verify_days"`
+	VerifyFile          string     `json:"verify_file"`
+	PrefFile            string     `json:"pref_file"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -103,6 +107,10 @@ func loadConfig(path string) (*Config, error) {
 		TrustProxyHeaders:   true,
 		MaxRetries:          2,
 		LegacyBackend:       "127.0.0.1:8787",
+		VerifyEnabled:       true,
+		VerifyDays:          7,
+		VerifyFile:          "/root/PCLEndPage/var/verify.json",
+		PrefFile:            "pref.json",
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -155,6 +163,7 @@ type Server struct {
 	saying        *SayingService
 	lunar         *LunarService
 	proxy         *httputil.ReverseProxy
+	pref          *PrefStore
 	started       time.Time
 }
 
@@ -197,7 +206,9 @@ func newServer(cfg *Config, dataDir string) (*Server, error) {
 	s.weather = newWeatherService(cfg, s.uapi, s.i18n)
 	s.saying = newSayingService(cfg, s.uapi, dataDir, s.text)
 	s.lunar = newLunarService(cfg, s.uapi, dataDir, s.cal)
+	s.pref = newPrefStore(filepath.Join(dataDir, cfg.PrefFile))
 	s.proxy = newLegacyProxy(cfg.LegacyBackend)
+	s.proxy.ModifyResponse = s.modifyLegacyResponse
 	return s, nil
 }
 
@@ -207,13 +218,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := r.URL.Path
+	ip := clientIP(r, s.cfg)
+	isNew := s.pref.get(ip)
+	if isNew {
+		w.Header().Set("X-New-EndPage", "1")
+	} else {
+		w.Header().Set("X-New-EndPage", "0")
+	}
 	switch {
+	case p == "/_new":
+		s.handlePref(w, r, true)
+		return
+	case p == "/_old":
+		s.handlePref(w, r, false)
+		return
 	case p == "/" || p == "/Custom.xaml":
-		s.handleHome(w, r, false)
+		s.routeHome(w, r, false, ip, isNew)
 	case p == markPrefix || p == markPrefix+"/":
-		s.handleHome(w, r, true)
+		s.routeHome(w, r, true, ip, isNew)
 	case p == markPrefix+"/Custom.xaml":
-		s.handleHome(w, r, true)
+		s.routeHome(w, r, true, ip, isNew)
 	case p == "/Custom.xaml.version" || p == "/version":
 		writeNoStore(w, strconv.FormatInt(time.Now().Unix(), 10))
 	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version":
@@ -227,10 +251,35 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeNoStore(w, strconv.FormatInt(time.Now().Unix(), 10))
 			return
 		}
-		s.handleHome(w, r, false)
+		s.routeHome(w, r, false, ip, isNew)
 	default:
 		s.proxy.ServeHTTP(w, r)
 	}
+}
+
+// routeHome 处理主页类请求：主动选择了新版且已通过验证才用新版渲染，
+// 否则交给旧版服务（未选择新版 = 旧版主页；已选择未验证 = 旧版验证卡）。
+func (s *Server) routeHome(w http.ResponseWriter, r *http.Request, marker bool, ip string, isNew bool) {
+	if isNew && s.verifyOK(ip) {
+		s.handleHome(w, r, marker)
+		return
+	}
+	s.proxy.ServeHTTP(w, r)
+}
+
+// handlePref 记录/撤销某个 IP 的新版偏好，并返回一个可关闭的提示页。
+func (s *Server) handlePref(w http.ResponseWriter, r *http.Request, preferNew bool) {
+	ip := clientIP(r, s.cfg)
+	s.pref.set(ip, preferNew)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", noStore)
+	title, msg := "已返回旧版主页", "之后访问主页将使用旧版页面，顶部不再显示新版测试站点横条。"
+	if preferNew {
+		title, msg = "已切换到新版测试站点", "之后访问主页将使用新版页面（顶部带黄色横条）；如尚未通过访问验证，会先显示验证页面。"
+	}
+	io.WriteString(w, "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>"+title+
+		"</title></head><body style=\"font-family:sans-serif;background:#fdf6e3;color:#333;text-align:center;padding:80px 20px;\"><h2>"+title+
+		"</h2><p>"+msg+"</p><p style=\"color:#888;\">本页面可以关闭，回到 PCL 刷新主页即可生效。</p></body></html>")
 }
 
 func writeNoStore(w http.ResponseWriter, body string) {
@@ -314,60 +363,70 @@ func newLegacyProxy(backend string) *httputil.ReverseProxy {
 		log.Printf("[Proxy] 旧服务不可用：%v", err)
 		http.Error(w, "legacy backend unavailable", http.StatusBadGateway)
 	}
-	// 旧版生成的 XAML 页面（/ai_page.*、/calc.*、/visit_page.* 等）在顶部补一条
-	// 「新版测试站点」横条；主页由 Go 版自己渲染，已有横条。
-	p.ModifyResponse = func(resp *http.Response) error {
-		if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" {
-			return nil
-		}
-		// /admin 由 nginx 的 sub_filter 注入 HTML 横幅，这里不重复处理。
-		if resp.Request != nil && strings.HasPrefix(resp.Request.URL.Path, "/admin") {
-			return nil
-		}
-		ct := resp.Header.Get("Content-Type")
-		xamlPage := strings.Contains(ct, "xml")
-		htmlPage := strings.Contains(ct, "text/html")
-		if !xamlPage && !htmlPage {
-			return nil
-		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		if err != nil {
-			return err
-		}
-		resp.Body.Close()
-		if xamlPage {
-			body = injectNewSiteHint(body)
-		} else {
-			body = injectHTMLBanner(body)
-		}
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-		resp.ContentLength = int64(len(body))
-		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
-		return nil
-	}
 	return p
 }
 
-// injectNewSiteHint 在 XAML 页面内容区顶部插入新版横条。
-// 跳过 XML 声明、注释与空白；找不到根元素时原样返回。
-//
-// 注意：旧版多数页面根元素是 <local:MyCard>（只允许一个子元素），
-// 横条不能与卡片内的 StackPanel 并列，必须插进该 StackPanel 内部，
-// 否则 PCL 布局会错乱（横条压到页面中部）。
-func injectNewSiteHint(body []byte) []byte {
-	s := string(body)
+// modifyLegacyResponse 只对「主动选择新版」的 IP 注入新版标识：
+// XAML 页面在内容区顶部插入黄色横条，HTML 页面（/verify 等）插入固定横幅；
+// 设置页无论哪个版本都插入切换按钮；/admin 由 nginx sub_filter 处理，跳过。
+func (s *Server) modifyLegacyResponse(resp *http.Response) error {
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" {
+		return nil
+	}
+	if resp.Request == nil {
+		return nil
+	}
+	p := resp.Request.URL.Path
+	ct := resp.Header.Get("Content-Type")
+	xamlPage := strings.Contains(ct, "xml")
+	htmlPage := strings.Contains(ct, "text/html")
+	if !xamlPage && !htmlPage {
+		return nil
+	}
+	isNew := s.pref.get(clientIP(resp.Request, s.cfg))
+	if xamlPage && !isNew && p != "/settings_page.xaml" {
+		return nil
+	}
+	if htmlPage && !isNew {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if xamlPage {
+		if p == "/settings_page.xaml" {
+			body = injectPrefSwitch(body, s.cfg.BaseURL, isNew)
+		}
+		if isNew {
+			body = injectNewSiteHint(body)
+		}
+	} else {
+		body = injectHTMLBanner(body)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	return nil
+}
+
+// stackPanelInsertPos 返回 XAML 页面内容区（StackPanel）开标签后的偏移量。
+// 旧版多数页面根元素是 <local:MyCard>（只允许一个子元素），此时取它内部的
+// 第一个 StackPanel；找不到时返回 -1。
+func stackPanelInsertPos(s string) int {
 	pos := 0
 	for pos < len(s) {
 		for pos < len(s) && (s[pos] == ' ' || s[pos] == '\t' || s[pos] == '\r' || s[pos] == '\n') {
 			pos++
 		}
 		if pos >= len(s) || s[pos] != '<' {
-			return body
+			return -1
 		}
 		if pos+1 < len(s) && (s[pos+1] == '?' || s[pos+1] == '!') {
 			gt := strings.IndexByte(s[pos:], '>')
 			if gt < 0 {
-				return body
+				return -1
 			}
 			pos += gt + 1
 			continue
@@ -376,29 +435,54 @@ func injectNewSiteHint(body []byte) []byte {
 	}
 	rootGT := strings.IndexByte(s[pos:], '>')
 	if rootGT < 0 {
-		return body
+		return -1
 	}
 	rootGT += pos
-
-	// 根元素本身就是 StackPanel 时，直接插到根内部。
 	name := strings.TrimSpace(s[pos+1 : rootGT])
 	if i := strings.IndexAny(name, " \t\r\n"); i >= 0 {
 		name = name[:i]
 	}
 	if strings.EqualFold(name, "StackPanel") {
-		return []byte(s[:rootGT+1] + "\n    " + newSiteHint + s[rootGT+1:])
+		return rootGT + 1
 	}
-
-	// 否则（如 local:MyCard）：横条放进根元素内的第一个 StackPanel 开头。
 	sp := strings.Index(s[rootGT+1:], "<StackPanel")
-	if sp >= 0 {
-		sp += rootGT + 1
-		if gt := strings.IndexByte(s[sp:], '>'); gt >= 0 {
-			ins := sp + gt + 1
-			return []byte(s[:ins] + "\n    " + newSiteHint + s[ins:])
-		}
+	if sp < 0 {
+		return -1
 	}
-	return []byte(s[:rootGT+1] + "\n    " + newSiteHint + s[rootGT+1:])
+	sp += rootGT + 1
+	if gt := strings.IndexByte(s[sp:], '>'); gt >= 0 {
+		return sp + gt + 1
+	}
+	return -1
+}
+
+// injectNewSiteHint 在 XAML 页面内容区顶部插入新版横条。
+func injectNewSiteHint(body []byte) []byte {
+	pos := stackPanelInsertPos(string(body))
+	if pos < 0 {
+		return body
+	}
+	s := string(body)
+	return []byte(s[:pos] + "\n    " + newSiteHint + s[pos:])
+}
+
+// injectPrefSwitch 在个性设置页插入「切换到新版 / 返回旧版」按钮。
+// 按钮走「打开帮助」，由系统浏览器访问 /_new 或 /_old（与 PCL 同 IP，立即生效）。
+func injectPrefSwitch(body []byte, baseURL string, preferNew bool) []byte {
+	text := "切换到新版测试站点"
+	target := baseURL + "/_new"
+	if preferNew {
+		text = "返回旧版主页"
+		target = baseURL + "/_old"
+	}
+	btn := `<local:MyIconTextButton Height="36" Margin="0,0,0,12" HorizontalAlignment="Center" Text="` +
+		escapeAttr(text) + `" ColorType="Highlight" EventType="打开帮助" EventData="` + escapeAttr(target) + `" />`
+	pos := stackPanelInsertPos(string(body))
+	if pos < 0 {
+		return body
+	}
+	s := string(body)
+	return []byte(s[:pos] + "\n    " + btn + s[pos:])
 }
 
 // injectHTMLBanner 在旧版生成的 HTML 页面（如 /verify 访问验证页）</body> 前插入新版横幅。
@@ -464,5 +548,3 @@ func main() {
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
 }
-
-var assetOnce sync.Once
