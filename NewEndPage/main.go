@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash/crc32"
 	"html"
 	"io"
 	"log"
@@ -85,6 +86,15 @@ type Config struct {
 	VerifyDays          int        `json:"verify_days"`
 	VerifyFile          string     `json:"verify_file"`
 	PrefFile            string     `json:"pref_file"`
+	AdminToken          string     `json:"admin_token"`
+	AdminTOTPSecret     string     `json:"admin_totp_secret"`
+	AdminSessionHours   int        `json:"admin_session_hours"`
+	LegacyLogFile       string     `json:"legacy_log_file"`
+	LogFile             string     `json:"log_file"`
+	StoreFile           string     `json:"store_file"`
+	SiteName            string     `json:"site_name"`
+	EnableAI            bool       `json:"enable_ai"`
+	GuardClients        bool       `json:"guard_clients"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -111,6 +121,13 @@ func loadConfig(path string) (*Config, error) {
 		VerifyDays:          7,
 		VerifyFile:          "/root/PCLEndPage/var/verify.json",
 		PrefFile:            "pref.json",
+		AdminSessionHours:   8,
+		LegacyLogFile:       "/root/PCLEndPage/var/server.log",
+		LogFile:             "var/server.log",
+		StoreFile:           "/root/PCLEndPage/var/store.json",
+		SiteName:            "PCL2 主页",
+		EnableAI:            true,
+		GuardClients:        true,
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -164,10 +181,12 @@ type Server struct {
 	lunar         *LunarService
 	proxy         *httputil.ReverseProxy
 	pref          *PrefStore
+	admin         *Admin
+	newstats      *NewSiteStats
 	started       time.Time
 }
 
-var datedRE = regexp.MustCompile(`^/(\d{4})/(\d{1,2})/(\d{1,2})$`)
+var datedRE = regexp.MustCompile(`^/(\d{4})/(\d{1,2})/(\d{1,2})(?:/(version|Custom\.xaml\.version|Custom\.xaml))?/?$`)
 
 const (
 	markPrefix  = "/mark"
@@ -178,7 +197,7 @@ const (
 	htmlBanner = `<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#f9d423;color:#000;text-align:center;padding:6px 0;font:14px/1.4 sans-serif;">您现在访问的是新版测试站点</div>`
 )
 
-func newServer(cfg *Config, dataDir string) (*Server, error) {
+func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 	s := &Server{
 		cfg:           cfg,
 		template:      mustReadAsset("assets/Custom.xaml"),
@@ -207,12 +226,18 @@ func newServer(cfg *Config, dataDir string) (*Server, error) {
 	s.saying = newSayingService(cfg, s.uapi, dataDir, s.text)
 	s.lunar = newLunarService(cfg, s.uapi, dataDir, s.cal)
 	s.pref = newPrefStore(filepath.Join(dataDir, cfg.PrefFile))
+	s.newstats = newNewSiteStats(filepath.Join(dataDir, "newstats.json"))
 	s.proxy = newLegacyProxy(cfg.LegacyBackend)
 	s.proxy.ModifyResponse = s.modifyLegacyResponse
+	s.admin = newAdmin(cfg, cfgPath, s)
 	return s, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/admin") {
+		s.admin.ServeHTTP(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		s.proxy.ServeHTTP(w, r)
 		return
@@ -239,16 +264,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p == markPrefix+"/Custom.xaml":
 		s.routeHome(w, r, true, ip, isNew)
 	case p == "/Custom.xaml.version" || p == "/version":
-		writeNoStore(w, strconv.FormatInt(time.Now().Unix(), 10))
+		writeNoStore(w, s.staticVersion())
 	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version":
-		writeNoStore(w, strconv.FormatInt(time.Now().Unix(), 10))
+		writeNoStore(w, s.staticVersion())
 	case p == "/healthz":
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		io.WriteString(w, `{"ok":true,"service":"newendpage","uptime":`+
 			strconv.FormatInt(int64(time.Since(s.started).Seconds()), 10)+`}`)
 	case datedRE.MatchString(p):
-		if strings.HasSuffix(p, "/version") {
-			writeNoStore(w, strconv.FormatInt(time.Now().Unix(), 10))
+		m := datedRE.FindStringSubmatch(p)
+		if m[4] != "" && m[4] != "Custom.xaml" {
+			writeNoStore(w, datedVersion(m[1], m[2], m[3]))
 			return
 		}
 		s.routeHome(w, r, false, ip, isNew)
@@ -261,6 +287,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // 否则交给旧版服务（未选择新版 = 旧版主页；已选择未验证 = 旧版验证卡）。
 func (s *Server) routeHome(w http.ResponseWriter, r *http.Request, marker bool, ip string, isNew bool) {
 	if isNew && s.verifyOK(ip) {
+		s.newstats.hit(ip)
 		s.handleHome(w, r, marker)
 		return
 	}
@@ -288,12 +315,27 @@ func writeNoStore(w http.ResponseWriter, body string) {
 	io.WriteString(w, body)
 }
 
+// staticVersion 返回固定地址的版本号：取模板内容哈希，模板不变则版本号稳定，
+// PCL 不会每次启动都判定“有新版本”而重新下载主页（旧版用 Custom.xaml 的 mtime）。
+func (s *Server) staticVersion() string {
+	sum := crc32.ChecksumIEEE([]byte(s.template))
+	return strconv.FormatInt(int64(sum), 10)
+}
+
+// datedVersion 返回日期版版本号：同一天内固定，换天就变（旧版为 YYYYMMDD）。
+func datedVersion(year, month, day string) string {
+	y, _ := strconv.Atoi(year)
+	m, _ := strconv.Atoi(month)
+	d, _ := strconv.Atoi(day)
+	return fmt.Sprintf("%04d%02d%02d", y, m, d)
+}
+
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request, marker bool) {
 	ip := clientIP(r, s.cfg)
 	origin := requestOrigin(r)
 	body, err := s.buildHome(ip, origin, marker)
 	if err != nil {
-		log.Printf("[Home] 渲染失败：%v", err)
+		logError("[Home] 渲染失败：%v", err)
 		http.Error(w, "homepage render failed", http.StatusInternalServerError)
 		return
 	}
@@ -360,7 +402,7 @@ func newLegacyProxy(backend string) *httputil.ReverseProxy {
 		}
 	}
 	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("[Proxy] 旧服务不可用：%v", err)
+		logWarn("[Proxy] 旧服务不可用：%v", err)
 		http.Error(w, "legacy backend unavailable", http.StatusBadGateway)
 	}
 	return p
@@ -544,6 +586,12 @@ func escapeURL(v string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;").Replace(v)
 }
 
+// ---------- 日志（新版日志带级别前缀，后台按级别着色） ----------
+
+func logInfo(format string, args ...any)  { log.Printf("[INFO] "+format, args...) }
+func logWarn(format string, args ...any)  { log.Printf("[WARN] "+format, args...) }
+func logError(format string, args ...any) { log.Printf("[ERROR] "+format, args...) }
+
 func main() {
 	cfgPath := flag.String("config", "config.json", "配置文件路径")
 	dataDir := flag.String("data", "var", "运行时数据目录")
@@ -555,9 +603,16 @@ func main() {
 		log.Fatalf("[Boot] %v", err)
 	}
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
-		log.Printf("[Boot] 数据目录创建失败：%v", err)
+		logWarn("[Boot] 数据目录创建失败：%v", err)
 	}
-	srv, err := newServer(cfg, *dataDir)
+	if cfg.LogFile != "" {
+		if err := os.MkdirAll(filepath.Dir(cfg.LogFile), 0o755); err == nil {
+			if f, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+				log.SetOutput(io.MultiWriter(os.Stderr, f))
+			}
+		}
+	}
+	srv, err := newServer(cfg, *dataDir, *cfgPath)
 	if err != nil {
 		log.Fatalf("[Boot] 初始化失败：%v", err)
 	}
@@ -569,9 +624,12 @@ func main() {
 		Addr:              addr,
 		Handler:           srv,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	go func() {
-		log.Printf("[Boot] NewEndPage 启动：http://%s  旧服务：%s", addr, cfg.LegacyBackend)
+		logInfo("[Boot] NewEndPage 启动：http://%s  旧服务：%s", addr, cfg.LegacyBackend)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[Boot] 监听失败：%v", err)
 		}
@@ -580,7 +638,7 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Printf("[Boot] 收到退出信号，正在关闭……")
+	logInfo("[Boot] 收到退出信号，正在关闭……")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
