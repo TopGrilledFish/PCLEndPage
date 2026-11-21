@@ -5,7 +5,7 @@
 ## 新旧版切换（按 IP 选择，不再随机分流）
 
 - 默认所有访客走旧版；用户在 PCL 的「个性设置」页点「切换到新版测试站点」后，该 IP 才进入新版（记录在 `var/pref.json`），点「返回旧版主页」退出。
-- 入口：`/_new` 选择新版、`/_old` 返回旧版；设置页按钮由 Go 反代 `/settings_page.xaml` 时注入（按钮走「打开帮助」，用系统浏览器访问）。
+- 入口：`/_new` 选择新版、`/_old` 返回旧版；设置页按钮由 Go 反代 `/settings_page.xaml` 时注入（按钮 `EventType="打开网页"`，用系统浏览器访问）。
 - 新版入口的每个可见页面都有标识：主页与 XAML 页面顶部 `MyHint` 横条，`/verify`、`/admin` 等 HTML 页固定横幅；响应头 `X-New-EndPage: 1/0` 可直接区分新旧。
 - 人机验证复用旧版：Go 读旧版 `/root/PCLEndPage/var/verify.json`，未通过验证的 IP 仍返回旧版看图验证卡（每 IP 7 天）；验证通过后新版才渲染主页。
 
@@ -14,6 +14,8 @@
 | 文件 | 作用 |
 | --- | --- |
 | `main.go` | 配置加载（JSON）、路由与新旧版决策（`/`、`/Custom.xaml`、`/mark*`、版本端点、`/healthz`、`/_new`、`/_old`）、其余路径反代旧服务并注入新版标识 |
+| `admin.go` | 新版后台 `/admin`：令牌登录 + TOTP 两步验证、概览/配置/封禁/维护/AI/日志/工具，覆盖旧版 24 个 action（需要旧版数据的带 session 反代） |
+| `stats.go` | 新版首页渲染计数（`var/newstats.json`，后台概览展示） |
 | `pref.go` | 按 IP 记录「选择新版」偏好（JSON 原子写） |
 | `verify.go` | 读取旧版 `verify.json`，判断该 IP 是否已通过人机验证 |
 | `render.go` | 两阶段模板替换：构建期 `{{TOKEN}}`、请求期 `__TOKEN__`（含 `<!-- __X__ -->` 整块形态） |
@@ -23,8 +25,9 @@
 | `lunar.go` / `lunar_service.go` | 农历换算（1900–2100）与节气接口缓存 |
 | `uapi.go` | uapis.cn 多密钥轮换、401/402 冷却 30 分钟、匿名兜底 |
 | `i18n.go` | 语言表（缺键回退 en → zh-hans） |
+| `render_test.go` | 模板替换、横条注入、版本端点、TOTP 等单元测试 |
 | `assets/` | 从旧版导出的模板片段与数据，`//go:embed` 进二进制 |
-| `_deploy/` | 部署脚本：`setup.py` 生成服务器配置、`newendpage.service`、`disable_split.py`（关闭 nginx 随机分流，入口统一走 8778）、`update_config.py` |
+| `_deploy/` | 部署脚本：`setup.py`/`update_config.py`/`update_config_admin.py` 生成服务器配置、`newendpage.service`、`disable_split.py`（关闭 nginx 随机分流，入口统一走 8778）、`verify_new.sh` 快速验证 |
 
 ## 构建
 
@@ -44,4 +47,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o new
 
 - 顶部新增「您现在访问的是新版测试站点」横条（主页 `MyHint`，HTML 页固定横幅）。
 - 访问验证复用旧版（同一份 `verify.json`、同一套看图验证），不再区分新旧实现。
-- 访问统计、AI、计算器、后台等仍由旧版提供，Go 只做入口与主页渲染。
+- `/admin` 由本服务接管：令牌登录 + TOTP 两步验证；概览、配置、封禁、维护、AI、日志、工具全部可用，旧版日志按 `[WARN]` 红 / `[INFO]` 蓝着色。
+- 新版首页渲染次数记入 `var/newstats.json`（后台概览显示）；旧版 `stats.db` 的访问统计仍由旧版服务维护。
+- 版本端点：`/Custom.xaml.version`、`/version`、`/mark/version` 用模板内容 crc32（不再随请求变化）；`/YYYY/M/D/version` 为 `YYYYMMDD`。
+- 其余路径（AI、计算器、访问浏览、图片等）仍由 Go 透明反代回旧版。
