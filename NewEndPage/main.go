@@ -443,17 +443,53 @@ func stackPanelInsertPos(s string) int {
 		name = name[:i]
 	}
 	if strings.EqualFold(name, "StackPanel") {
-		return rootGT + 1
+		return skipPropertyElements(s, rootGT+1)
 	}
 	sp := strings.Index(s[rootGT+1:], "<StackPanel")
 	if sp < 0 {
 		return -1
 	}
 	sp += rootGT + 1
-	if gt := strings.IndexByte(s[sp:], '>'); gt >= 0 {
-		return sp + gt + 1
+	gt := strings.IndexByte(s[sp:], '>')
+	if gt < 0 {
+		return -1
 	}
-	return -1
+	return skipPropertyElements(s, sp+gt+1)
+}
+
+// skipPropertyElements 跳过 StackPanel 的属性元素（如 <StackPanel.Resources>…</StackPanel.Resources>），
+// 返回第一个普通子元素之前的位置。PCL 的 XAML 解析器要求属性元素排在子元素之前，否则会报
+// 「已对 StackPanel 设置 Children 属性」——所以横条/按钮不能插在属性元素前面。
+func skipPropertyElements(s string, pos int) int {
+	for {
+		rest := s[pos:]
+		trimmed := strings.TrimLeft(rest, " \t\r\n")
+		pos += len(rest) - len(trimmed)
+		if !strings.HasPrefix(trimmed, "<") {
+			return pos
+		}
+		gt := strings.IndexByte(trimmed, '>')
+		if gt < 0 {
+			return pos
+		}
+		tag := trimmed[1:gt]
+		if strings.HasPrefix(tag, "/") || strings.HasPrefix(tag, "!") || strings.HasPrefix(tag, "?") {
+			return pos
+		}
+		name := strings.TrimSpace(tag)
+		if i := strings.IndexAny(name, " \t\r\n/"); i >= 0 {
+			name = name[:i]
+		}
+		if !strings.Contains(name, ".") {
+			return pos
+		}
+		closeTag := "</" + name + ">"
+		ci := strings.Index(s[pos:], closeTag)
+		if ci < 0 {
+			return pos
+		}
+		pos += ci + len(closeTag)
+	}
 }
 
 // injectNewSiteHint 在 XAML 页面内容区顶部插入新版横条。
