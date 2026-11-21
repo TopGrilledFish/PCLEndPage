@@ -467,7 +467,8 @@ func injectNewSiteHint(body []byte) []byte {
 }
 
 // injectPrefSwitch 在个性设置页插入「切换到新版 / 返回旧版」按钮。
-// 按钮走「打开帮助」，由系统浏览器访问 /_new 或 /_old（与 PCL 同 IP，立即生效）。
+// 按钮走「打开网页」，由系统浏览器访问 /_new 或 /_old（与 PCL 同 IP，立即生效）。
+// 不能用「打开帮助」：该事件要求 EventData 指向 .json 帮助文件，否则 PCL 报错。
 func injectPrefSwitch(body []byte, baseURL string, preferNew bool) []byte {
 	text := "切换到新版测试站点"
 	target := baseURL + "/_new"
@@ -476,7 +477,7 @@ func injectPrefSwitch(body []byte, baseURL string, preferNew bool) []byte {
 		target = baseURL + "/_old"
 	}
 	btn := `<local:MyIconTextButton Height="36" Margin="0,0,0,12" HorizontalAlignment="Center" Text="` +
-		escapeAttr(text) + `" ColorType="Highlight" EventType="打开帮助" EventData="` + escapeAttr(target) + `" />`
+		escapeAttr(text) + `" ColorType="Highlight" LogoScale="0.75" Logo="M192 448 H640 V320 L896 512 L640 704 V576 H192 Z M832 576 H384 V704 L128 512 L384 320 V448 H832 Z" EventType="打开网页" EventData="` + escapeAttr(target) + `" />`
 	pos := stackPanelInsertPos(string(body))
 	if pos < 0 {
 		return body
