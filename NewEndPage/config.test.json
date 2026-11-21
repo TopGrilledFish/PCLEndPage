@@ -1,0 +1,10 @@
+{
+  "base_url": "",
+  "host": "127.0.0.1",
+  "port": 8778,
+  "enable_weather": false,
+  "enable_geo": false,
+  "enable_lunar": true,
+  "enable_saying": false,
+  "legacy_backend": "127.0.0.1:8787"
+}

@@ -1,0 +1,13 @@
+[Unit]
+Description=NewEndPage Go homepage (50% split test)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/NewEndPage
+ExecStart=/root/NewEndPage/newendpage -config /root/NewEndPage/config.json -data /root/NewEndPage/var
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

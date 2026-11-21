@@ -1,0 +1,13 @@
+newendpage
+newendpage.exe
+newendpage.linux
+var-test/
+var/
+*.log
+render.*.xaml
+render.diff*.txt
+_probe*.xaml
+_dbg.py
+_diff*.py
+_fixasset.py
+_keys.py
