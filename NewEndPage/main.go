@@ -9,12 +9,14 @@ import (
 	"hash/crc32"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -81,6 +83,8 @@ type Config struct {
 	UAPIKey             string     `json:"uapi_key"`
 	UAPIKeys            StringList `json:"uapi_keys"`
 	LegacyBackend       string     `json:"legacy_backend"`
+	StaticDir           string     `json:"static_dir"`
+	WallpaperPath       string     `json:"wallpaper_path"`
 	VerifyEnabled       bool       `json:"verify_enabled"`
 	VerifyDays          int        `json:"verify_days"`
 	VerifyFile          string     `json:"verify_file"`
@@ -134,6 +138,8 @@ func loadConfig(path string) (*Config, error) {
 		TrustProxyHeaders:   true,
 		MaxRetries:          2,
 		LegacyBackend:       "127.0.0.1:8787",
+		StaticDir:           "/root/NewEndPage/static",
+		WallpaperPath:       "/root/NewEndPage/var/cache/wallpaper.jpg",
 		VerifyEnabled:       true,
 		VerifyDays:          7,
 		VerifyFile:          "/root/NewEndPage/var/verify.json",
@@ -218,6 +224,8 @@ type Server struct {
 	stats         *visitStats
 	ai            *AI
 	dataDir       string
+	staticDir     string
+	wallpaperPath string
 	started       time.Time
 }
 
@@ -246,6 +254,8 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 		siteItems:     mustReadAsset("assets/site_items.xaml"),
 		footerCard:    mustReadAsset("assets/footer_card.xaml"),
 		dataDir:       dataDir,
+		staticDir:     cfg.StaticDir,
+		wallpaperPath: cfg.WallpaperPath,
 		started:       time.Now(),
 	}
 	i18n, err := newI18n(
@@ -316,6 +326,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := r.URL.Path
+	if s.serveStatic(w, r) {
+		return
+	}
 	switch {
 	case p == "/" || p == "/Custom.xaml":
 		s.routeHome(w, r, false, false, ip)
@@ -373,6 +386,80 @@ func writeNoStore(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", noStore)
 	io.WriteString(w, body)
+}
+
+// staticCacheRules 与旧版 STATIC_CACHE_RULES 一致。
+var staticCacheRules = []struct {
+	prefix  string
+	seconds int
+}{
+	{"/images/icons/", 2592000},
+	{"/music/music.json", 60},
+	{"/music/", 604800},
+	{"/favicon.png", 604800},
+}
+
+// serveStatic 接管 /images/、/music/、/favicon.png；其余前缀返回 false 交给反代。
+// 只从 static_dir 里取（images/wallpaper.jpg 额外优先用 wallpaper_path 缓存），
+// 防目录穿越，不暴露项目根目录。
+func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) bool {
+	p := r.URL.Path
+	if !(strings.HasPrefix(p, "/images/") || strings.HasPrefix(p, "/music/") || p == "/favicon.png") {
+		return false
+	}
+	safe := path.Clean(p)
+	rel := strings.TrimPrefix(safe, "/")
+	if safe == "/" || rel == "." || strings.HasPrefix(rel, "..") {
+		writeNotFoundText(w, p)
+		return true
+	}
+	candidates := []string{filepath.Join(s.staticDir, filepath.FromSlash(rel))}
+	if rel == "images/wallpaper.jpg" && s.wallpaperPath != "" {
+		candidates = append([]string{s.wallpaperPath}, candidates...)
+	}
+	target := ""
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			target = c
+			break
+		}
+	}
+	if target == "" {
+		writeNotFoundText(w, p)
+		return true
+	}
+	ct := mime.TypeByExtension(filepath.Ext(target))
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	if strings.HasPrefix(ct, "text/") || ct == "application/json" || ct == "image/svg+xml" {
+		ct += "; charset=utf-8"
+	}
+	maxAge := 0
+	for _, rule := range staticCacheRules {
+		if strings.HasPrefix(p, rule.prefix) {
+			maxAge = rule.seconds
+			break
+		}
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if maxAge > 0 {
+		w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(maxAge))
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		writeNotFoundText(w, p)
+		return true
+	}
+	w.Write(data)
+	return true
+}
+
+func writeNotFoundText(w http.ResponseWriter, p string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	io.WriteString(w, "未找到："+p)
 }
 
 // staticVersion 返回固定地址的版本号：取模板内容哈希，模板不变则版本号稳定，

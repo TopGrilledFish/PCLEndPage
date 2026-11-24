@@ -13,6 +13,7 @@
   "legacy_log_file": "F:\\EndPage\\pcl-homepage-py\\var\\server.log",
   "log_file": "F:\\EndPage\\NewEndPage\\var-test\\server.log",
   "port": 8778,
+  "static_dir": "F:\\EndPage\\pcl-homepage-py\\legacy-python\\static",
   "store_file": "F:\\EndPage\\NewEndPage\\var-test\\store.json",
   "verify_enabled": true,
   "verify_days": 7,
