@@ -42,6 +42,10 @@ _BINDING_EVENTDATA_RE = re.compile(
     r'EventData="\{Binding[^"]*?StringFormat=\'\{\}(.*?)\{0\}\'[^"]*?\}"'
 )
 _ANY_BINDING_EVENTDATA_RE = re.compile(r'EventData="\{[^"]*?\}"')
+# PCL-CE 明确不支持的 EventType（EventTypeMapper.UnsupportedTypes）：AXAML 加载器
+# 会把中文事件名直接塞进 enum 属性而抛 InvalidOperationException。WPF 渲染器对
+# 这类控件是「跳过」，AXAML 里改成禁用按钮，视觉上等价。
+_UNSUPPORTED_EVENTTYPE_RE = re.compile(r'EventType="(?:内存优化|加入房间|检查更新)"')
 
 _FORBIDDEN_ELEMENTS = {
     "window", "toplevel", "application", "webview", "nativewebview",
@@ -79,6 +83,7 @@ def to_axaml(xaml: str) -> str:
     text = _LOGO_SCALE_RE.sub("", text)
     text = _BINDING_EVENTDATA_RE.sub(r'EventData="\1"', text)
     text = _ANY_BINDING_EVENTDATA_RE.sub('EventData=""', text)
+    text = _UNSUPPORTED_EVENTTYPE_RE.sub('IsEnabled="False"', text)
 
     end = _root_open_tag_end(text)
     if end is None:

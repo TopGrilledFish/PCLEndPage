@@ -34,6 +34,10 @@ var (
 	// 这里把 StringFormat 里的静态 URL 提出来（保留功能入口，丢掉输入参数）。
 	axBindingEventDataRE    = regexp.MustCompile(`EventData="\{Binding[^"]*StringFormat='\{\}([^']*?)\{0\}'[^"]*\}"`)
 	axAnyBindingEventDataRE = regexp.MustCompile(`EventData="\{[^"]*\}"`)
+	// PCL-CE 明确不支持的 EventType（EventTypeMapper.UnsupportedTypes）：AXAML 加载器
+	// 会把中文事件名直接塞进 enum 属性而抛 InvalidOperationException。WPF 渲染器对
+	// 这类控件是「跳过」，AXAML 里改成禁用按钮，视觉上等价。
+	axUnsupportedEventTypeRE = regexp.MustCompile(`EventType="(?:内存优化|加入房间|检查更新)"`)
 )
 
 // isPCLCE 判断请求是否来自 PCL-CE（UA 里带 PCLCE/）。
@@ -56,6 +60,7 @@ func toAXAML(xaml string) string {
 	text = axLogoScaleRE.ReplaceAllString(text, "")
 	text = axBindingEventDataRE.ReplaceAllString(text, `EventData="$1"`)
 	text = axAnyBindingEventDataRE.ReplaceAllString(text, `EventData=""`)
+	text = axUnsupportedEventTypeRE.ReplaceAllString(text, `IsEnabled="False"`)
 	idx := rootOpenTagEnd(text)
 	if idx < 0 {
 		return xaml
