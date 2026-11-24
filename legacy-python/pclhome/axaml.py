@@ -78,16 +78,11 @@ _ICON_MAP = (
 )
 _ICON_DEFAULT = "arrow-right"
 
-# WPF 的字体样式块在 AXAML 里会被删掉；用 Avalonia 的 Styles 写法补一份
-# （Avalonia 的 Resources 只收资源，Style 必须放 Styles），否则 PCL-CE 用默认
-# 字体，中文比 PCL2 的 MiSans 细、发虚。
-_FONT_STYLE = (
-    '<StackPanel.Styles>'
-    '<Style Selector="TextBlock">'
-    '<Setter Property="FontFamily" Value="MiSans, Microsoft YaHei UI, Segoe UI" />'
-    '</Style>'
-    '</StackPanel.Styles>'
-)
+# WPF 的字体样式块在 AXAML 里会被删掉；PCL-CE 的 Avalonia 运行时加载器对
+# 控件级 <StackPanel.Styles> 支持不好（会报 “Unable to resolve ... Styles”），
+# 所以直接给每个 TextBlock 加 FontFamily 属性，避免使用 Styles。
+_FONT_FAMILY = "MiSans, Microsoft YaHei UI, Segoe UI"
+_TEXTBLOCK_RE = re.compile(r"<TextBlock\b")
 
 _FORBIDDEN_ELEMENTS = {
     "window", "toplevel", "application", "webview", "nativewebview",
@@ -140,13 +135,9 @@ def to_axaml(xaml: str) -> str:
         + ' xmlns:pclcontrols="using:PCL.UI.Controls"'
     )
     text = text[:end] + attrs + text[end:]
-    # WPF 的字体样式块被删掉了，AXAML 里用 Avalonia 的 Styles 写法补回来：
-    # 不设字体时 PCL-CE 用 Inter/系统默认，中文会显得比 PCL2 的 MiSans 细、发虚。
-    # 根不一定是 StackPanel（验证页/帮助页根是 MyCard），所以挂到正确的 StackPanel 上。
-    pos = _font_style_insert_pos(text)
-    if pos is None:
-        return text
-    return text[:pos + 1] + "\n    " + _FONT_STYLE + text[pos + 1:]
+    # WPF 的字体样式块被删掉了，而 PCL-CE 的运行时加载器不支持控件级 Styles，
+    # 所以直接给每个 TextBlock 补 FontFamily，避免中文回退到默认字体发虚。
+    return _TEXTBLOCK_RE.sub('<TextBlock FontFamily="%s"' % _FONT_FAMILY, text)
 
 
 
@@ -178,25 +169,6 @@ def _root_open_tag_end(s: str) -> int | None:
     if not match:
         return None
     return _tag_end_at(s, match.start())
-
-
-def _font_style_insert_pos(text: str) -> int | None:
-    """返回字体样式插在哪个 StackPanel 开标签之后（返回 ``>`` 的下标）。
-
-    根是 StackPanel 时直接挂在根上；根是 MyCard 等容器时，挂到它内部第一个
-    StackPanel 上——MyCard 只允许一个内容子元素，``<StackPanel.Styles>`` 也不能
-    直接写在 MyCard 里（会报 “Unable to resolve ... Styles”）。
-    """
-    root = _ROOT_ELEMENT_RE.search(text)
-    end = _root_open_tag_end(text)
-    if not root or end is None:
-        return None
-    if root.group(1) == "StackPanel":
-        return end
-    match = re.search(r"<StackPanel\b", text[end + 1:])
-    if not match:
-        return None
-    return _tag_end_at(text, end + 1 + match.start())
 
 
 def _tag_end_at(s: str, start: int) -> int | None:

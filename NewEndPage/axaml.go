@@ -55,7 +55,9 @@ var (
 	// <RotateTransform x:Name="spin"> 在 AXAML 下无法解析，去掉名字即可。
 	axTransformRE     = regexp.MustCompile(`<(?:Rotate|Translate|Scale|Skew|Matrix|TransformGroup)Transform\b[^>]*>`)
 	axTransformNameRE = regexp.MustCompile(`\s+x:Name="[^"]*"`)
-	axStackPanelRE    = regexp.MustCompile(`<StackPanel\b`)
+	// WPF 的字体样式块在 AXAML 里会被删掉；运行时加载器又不支持控件级
+	// <StackPanel.Styles>，所以直接给每个 TextBlock 补 FontFamily。
+	axTextBlockRE = regexp.MustCompile(`<TextBlock\b`)
 )
 
 // isPCLCE 判断请求是否来自 PCL-CE（UA 里带 PCLCE/）。
@@ -91,18 +93,13 @@ func toAXAML(xaml string) string {
 	}
 	attrs := ` xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:pclcontrols="using:PCL.UI.Controls"`
 	out := text[:idx] + attrs + text[idx:]
-	// WPF 的字体样式块被删掉了，AXAML 里用 Avalonia 的 Styles 写法补回来
-	// （Avalonia 的 Resources 只收资源，Style 必须放 Styles）：
-	// 不设字体时 PCL-CE 用 Inter/系统默认，中文会比 PCL2 的 MiSans 细、发虚。
-	// 根不一定是 StackPanel（验证页/帮助页根是 MyCard），样式要挂到真正的 StackPanel 上。
-	if p := fontStyleInsertPos(out); p >= 0 {
-		out = out[:p+1] + "\n    " + axFontStyle + out[p+1:]
-	}
-	return out
+	// WPF 的字体样式块被删掉了；PCL-CE 的 Avalonia 运行时加载器对控件级
+	// <StackPanel.Styles> 支持不好（会报 “Unable to resolve ... Styles”），
+	// 所以直接给每个 TextBlock 补 FontFamily，避免中文回退默认字体发虚。
+	return axTextBlockRE.ReplaceAllString(out, `<TextBlock FontFamily="`+axFontFamily+`"`)
 }
 
-// axFontStyle 是 AXAML 版全局字体样式（Avalonia 用 Selector，而且 Style 只能放 Styles）。
-const axFontStyle = `<StackPanel.Styles><Style Selector="TextBlock"><Setter Property="FontFamily" Value="MiSans, Microsoft YaHei UI, Segoe UI" /></Style></StackPanel.Styles>`
+const axFontFamily = "MiSans, Microsoft YaHei UI, Segoe UI"
 
 // rootOpenTagEnd 返回根元素开标签末尾 “>” 的下标（跳过属性值里的 “>”）。
 func rootOpenTagEnd(s string) int {
@@ -132,30 +129,6 @@ func tagEndAt(s string, start int) int {
 		}
 	}
 	return -1
-}
-
-// fontStyleInsertPos 返回字体样式插在哪个 StackPanel 开标签之后（返回 “>” 的下标）。
-//
-// 根是 StackPanel 时直接挂在根上；根是 MyCard 等容器时，挂到它内部第一个
-// StackPanel 上——MyCard 只允许一个内容子元素，<StackPanel.Styles> 也不能直接
-// 写在 MyCard 里（会报 “Unable to resolve ... Styles”）。
-func fontStyleInsertPos(text string) int {
-	loc := axRootRE.FindStringIndex(text)
-	if loc == nil {
-		return -1
-	}
-	end := rootOpenTagEnd(text)
-	if end < 0 {
-		return -1
-	}
-	if text[loc[0]+1:loc[1]] == "StackPanel" {
-		return end
-	}
-	m := axStackPanelRE.FindStringIndex(text[end+1:])
-	if m == nil {
-		return -1
-	}
-	return tagEndAt(text, end+1+m[1])
 }
 
 // replaceGeomLogos 把按钮上的几何 Logo 换成 PCL-CE 内置 SVG 图标名（lucide/xxx）。
