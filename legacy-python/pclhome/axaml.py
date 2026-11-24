@@ -140,10 +140,13 @@ def to_axaml(xaml: str) -> str:
         + ' xmlns:pclcontrols="using:PCL.UI.Controls"'
     )
     text = text[:end] + attrs + text[end:]
-    # WPF 的字体样式块被删掉了，AXAML 里用 Avalonia 的 Selector 写法补回来：
+    # WPF 的字体样式块被删掉了，AXAML 里用 Avalonia 的 Styles 写法补回来：
     # 不设字体时 PCL-CE 用 Inter/系统默认，中文会显得比 PCL2 的 MiSans 细、发虚。
-    insert_at = end + len(attrs) + 1
-    return text[:insert_at] + "\n    " + _FONT_STYLE + text[insert_at:]
+    # 根不一定是 StackPanel（验证页/帮助页根是 MyCard），所以挂到正确的 StackPanel 上。
+    pos = _font_style_insert_pos(text)
+    if pos is None:
+        return text
+    return text[:pos + 1] + "\n    " + _FONT_STYLE + text[pos + 1:]
 
 
 
@@ -174,7 +177,31 @@ def _root_open_tag_end(s: str) -> int | None:
     match = _ROOT_ELEMENT_RE.search(s)
     if not match:
         return None
-    i = match.end()
+    return _tag_end_at(s, match.start())
+
+
+def _font_style_insert_pos(text: str) -> int | None:
+    """返回字体样式插在哪个 StackPanel 开标签之后（返回 ``>`` 的下标）。
+
+    根是 StackPanel 时直接挂在根上；根是 MyCard 等容器时，挂到它内部第一个
+    StackPanel 上——MyCard 只允许一个内容子元素，``<StackPanel.Styles>`` 也不能
+    直接写在 MyCard 里（会报 “Unable to resolve ... Styles”）。
+    """
+    root = _ROOT_ELEMENT_RE.search(text)
+    end = _root_open_tag_end(text)
+    if not root or end is None:
+        return None
+    if root.group(1) == "StackPanel":
+        return end
+    match = re.search(r"<StackPanel\b", text[end + 1:])
+    if not match:
+        return None
+    return _tag_end_at(text, end + 1 + match.start())
+
+
+def _tag_end_at(s: str, start: int) -> int | None:
+    """从 ``start``（``<`` 位置）向后找开标签末尾 ``>``，跳过属性值里的 ``>``。"""
+    i = start
     quote = ""
     while i < len(s):
         ch = s[i]
