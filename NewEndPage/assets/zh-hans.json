@@ -180,6 +180,7 @@
   "settings.name_empty": "玩家名不能空着。",
   "settings.code_title": "个性码",
   "settings.code_hint": "导出个性码分享给朋友",
+  "settings.ce_input_hint": "PCL CE 兼容版暂不支持读取输入框，改名和粘贴个性码请改用 PCL2 官方版。",
   "settings.code_export": "导出个性码",
   "settings.code_import": "导入",
   "settings.code_box": "粘贴个性码",

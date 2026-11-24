@@ -1,9 +1,14 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -127,4 +132,177 @@ func normalizeLang(value string) string {
 		return "zh-hant"
 	}
 	return "zh-hans"
+}
+
+// ---------- 温度单位 ----------
+
+var profileUnits = []string{"c", "f"}
+
+func normalizeUnit(value string) string {
+	text := strings.ToLower(strings.TrimSpace(value))
+	switch text {
+	case "f", "fahrenheit", "华氏", "华氏度", "℉", "°f":
+		return "f"
+	}
+	return "c"
+}
+
+// ---------- 写入 ----------
+
+// bind 记下这个 IP 的设置（与旧版 profiles.bind 同规则：先按 IP、再按同名，都没有就新建）。
+// name/lang/unit 传空串表示这次不动；panel/text 传 nil 表示这次不动。
+func (p *Profiles) bind(ip, name, lang, unit string, panel, text *int) (map[string]any, bool) {
+	ip = strings.TrimSpace(ip)
+	if lang != "" {
+		lang = normalizeLang(lang)
+	}
+	name = strings.TrimSpace(name)
+	if runes := []rune(name); len(runes) > 32 {
+		name = string(runes[:32])
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var record map[string]any
+	fresh := false
+	if ip != "" {
+		for _, item := range p.records {
+			for _, v := range asAnyList(item["ips"]) {
+				if toString(v) == ip {
+					record = item
+					break
+				}
+			}
+			if record != nil {
+				break
+			}
+		}
+	}
+	if record == nil && name != "" {
+		key := strings.ToLower(name)
+		for _, item := range p.records {
+			if strings.ToLower(strings.TrimSpace(toString(item["name"]))) == key {
+				record = item
+				break
+			}
+		}
+	}
+	now := float64(time.Now().Unix())
+	if record == nil {
+		record = map[string]any{"name": "", "ips": []any{}, "lang": "zh-hans",
+			"unit": "c", "created": now, "updated": now}
+		p.records[randHex(6)] = record
+		fresh = true
+	}
+	if ip != "" {
+		ips, found := []any{}, false
+		for _, v := range asAnyList(record["ips"]) {
+			ips = append(ips, v)
+			if toString(v) == ip {
+				found = true
+			}
+		}
+		if !found {
+			ips = append(ips, ip)
+			if len(ips) > profilesMaxIPs {
+				ips = ips[len(ips)-profilesMaxIPs:]
+			}
+		}
+		record["ips"] = ips
+	}
+	if name != "" {
+		record["name"] = name
+	}
+	if lang != "" {
+		record["lang"] = lang
+	}
+	if unit != "" {
+		record["unit"] = normalizeUnit(unit)
+	}
+	if panel != nil {
+		record["panel"] = float64(normalizeBrush(*panel, panelChoices, paletteDefaults["panel"]))
+	}
+	if text != nil {
+		record["text"] = float64(normalizeBrush(*text, textChoices, paletteDefaults["text"]))
+	}
+	record["updated"] = now
+	p.cleanupLocked()
+	p.flushLocked()
+	return record, fresh
+}
+
+// ---------- 个性码 ----------
+
+const profileCodePrefix = "PCLP1"
+
+func profileChecksum(payload string) string {
+	sum := sha256.Sum256([]byte(payload))
+	return strings.ToUpper(hex.EncodeToString(sum[:])[:4])
+}
+
+// encodeProfileCode 把一份设置编成 PCLP1-<base64url>-<4位校验>。与旧版逐字节一致。
+func encodeProfileCode(record map[string]any) string {
+	data := map[string]any{
+		"lang": normalizeLang(toString(record["lang"])),
+		"unit": normalizeUnit(toString(record["unit"])),
+	}
+	name := strings.TrimSpace(toString(record["name"]))
+	if name != "" {
+		data["name"] = name
+	}
+	pal := paletteFor(record)
+	for _, role := range []string{"panel", "text"} {
+		if pal[role] != paletteDefaults[role] {
+			data[role] = float64(pal[role])
+		}
+	}
+	// Go 的 encoding/json 对 map 按 key 排序，与 Python 的 sort_keys=True 一致。
+	raw, _ := json.Marshal(data)
+	body := base64.RawURLEncoding.EncodeToString(raw)
+	return profileCodePrefix + "-" + body + "-" + profileChecksum(body)
+}
+
+// decodeProfileCode 解个性码；格式不对、校验位不匹配都返回 nil。
+func decodeProfileCode(code string) map[string]any {
+	parts := strings.Split(strings.TrimSpace(code), "-")
+	if len(parts) != 3 || parts[0] != profileCodePrefix {
+		return nil
+	}
+	body := parts[1]
+	if !strings.EqualFold(parts[2], profileChecksum(body)) {
+		return nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(body)
+	if err != nil {
+		return nil
+	}
+	var data map[string]any
+	if json.Unmarshal(raw, &data) != nil || data == nil {
+		return nil
+	}
+	out := map[string]any{"lang": normalizeLang(toString(data["lang"]))}
+	if _, ok := data["unit"]; ok {
+		out["unit"] = normalizeUnit(toString(data["unit"]))
+	}
+	if name := strings.TrimSpace(toString(data["name"])); name != "" {
+		if runes := []rune(name); len(runes) > 32 {
+			name = string(runes[:32])
+		}
+		out["name"] = name
+	}
+	if v, ok := data["panel"]; ok {
+		out["panel"] = float64(normalizeBrush(v, panelChoices, paletteDefaults["panel"]))
+	}
+	if v, ok := data["text"]; ok {
+		out["text"] = float64(normalizeBrush(v, textChoices, paletteDefaults["text"]))
+	}
+	return out
+}
+
+func randHex(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return hex.EncodeToString(buf)
 }

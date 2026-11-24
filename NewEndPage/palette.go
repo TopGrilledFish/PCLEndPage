@@ -35,6 +35,8 @@ func toString(v any) string {
 	switch t := v.(type) {
 	case string:
 		return t
+	case int:
+		return strconv.Itoa(t)
 	case float64:
 		return strconv.FormatFloat(t, 'f', -1, 64)
 	case nil:

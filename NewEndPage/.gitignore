@@ -4,8 +4,6 @@ newendpage.linux
 var-test/
 var/
 *.log
-*.tmp
-main.go.broken
 render.*.xaml
 render.diff*.txt
 _probe*.xaml

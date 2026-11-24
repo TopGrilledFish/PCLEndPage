@@ -180,6 +180,7 @@
   "settings.name_empty": "The player name cannot be empty.",
   "settings.code_title": "Profile code",
   "settings.code_hint": "Export your profile code to share with friends",
+  "settings.ce_input_hint": "The PCL CE compatibility build cannot read input boxes. Use official PCL2 to rename or paste a personal code.",
   "settings.code_export": "Export code",
   "settings.code_import": "Import",
   "settings.code_box": "Paste a profile code",

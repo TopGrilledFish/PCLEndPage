@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"hash/crc32"
-	"html"
 	"io"
 	"log"
 	"net"
@@ -263,6 +262,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// 计算器（12 个工具 + 列表页）由新版接管。
 	if s.handleCalc(w, r, ip) {
+		return
+	}
+	// 个性设置页、语言选择页由新版接管。
+	if s.handleSettings(w, r, ip) {
+		return
+	}
+	if s.handleLanguages(w, r, ip) {
 		return
 	}
 	p := r.URL.Path
@@ -718,7 +724,8 @@ func injectHTMLBanner(body []byte) []byte {
 // ---------- 小工具 ----------
 
 func escapeAttr(v string) string {
-	s := html.EscapeString(v)
+	// 与旧版 xaml.escape_attr 一致：html.escape(quote=True) 输出 &#x27; 而不是 &#39;
+	s := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#x27;").Replace(v)
 	return strings.NewReplacer("{", "&#123;", "}", "&#125;").Replace(s)
 }
 

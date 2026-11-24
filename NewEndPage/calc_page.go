@@ -177,7 +177,7 @@ func (s *Server) calcHomeButton(text string, height int, margin string) string {
 	if margin != "" {
 		attrs = ` Margin="` + margin + `"`
 	}
-	return `<local:MyIconTextButton` + attrs + ` Height="` + strconv.Itoa(height) + `" Text="` +
+	return `<local:MyIconTextButton` + attrs + ` ColorType="Highlight" Height="` + strconv.Itoa(height) + `" Text="` +
 		escapeAttr(text) + `" LogoScale="0.8" Logo="` + iconHome + `" EventType="切换页面" EventData="Launch" />`
 }
 
