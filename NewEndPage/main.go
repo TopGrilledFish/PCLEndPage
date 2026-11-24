@@ -186,7 +186,7 @@ type Server struct {
 	started       time.Time
 }
 
-var datedRE = regexp.MustCompile(`^/(\d{4})/(\d{1,2})/(\d{1,2})(?:/(version|Custom\.xaml\.version|Custom\.xaml))?/?$`)
+var datedRE = regexp.MustCompile(`^/(\d{4})/(\d{1,2})/(\d{1,2})(?:/(version|Custom\.xaml\.version|Custom\.xaml\.ini|Custom\.xaml))?/?$`)
 
 const (
 	markPrefix  = "/mark"
@@ -263,9 +263,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.routeHome(w, r, true, ip, isNew)
 	case p == markPrefix+"/Custom.xaml":
 		s.routeHome(w, r, true, ip, isNew)
-	case p == "/Custom.xaml.version" || p == "/version":
+	case p == "/Custom.xaml.version" || p == "/version" || p == "/Custom.xaml.ini":
 		writeNoStore(w, s.staticVersion())
-	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version":
+	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version" || p == markPrefix+"/Custom.xaml.ini":
 		writeNoStore(w, s.staticVersion())
 	case p == "/healthz":
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -338,6 +338,14 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request, marker bool)
 		logError("[Home] 渲染失败：%v", err)
 		http.Error(w, "homepage render failed", http.StatusInternalServerError)
 		return
+	}
+	// PCL-CE（UA 带 PCLCE/）只认 Avalonia 格式的主页；转换不成功时退回 WPF
+	// XAML，让它走兼容渲染器，而不是给它一份必炸的 AXAML。
+	if isPCLCE(r.UserAgent()) {
+		if ax := toAXAML(body); axamlOK(ax) {
+			body = ax
+			w.Header().Set("X-Axaml", "1")
+		}
 	}
 	w.Header().Set("Content-Type", xamlCT)
 	w.Header().Set("Cache-Control", noStore)
@@ -439,6 +447,7 @@ func (s *Server) modifyLegacyResponse(resp *http.Response) error {
 	resp.Body.Close()
 	if xamlPage {
 		if p == "/settings_page.xaml" {
+			body = injectTwoColumn(body)
 			body = injectPrefSwitch(body, s.cfg.BaseURL, isNew)
 		}
 		if isNew {
@@ -542,6 +551,116 @@ func injectNewSiteHint(body []byte) []byte {
 	}
 	s := string(body)
 	return []byte(s[:pos] + "\n    " + newSiteHint + s[pos:])
+}
+
+// injectTwoColumn 把个性设置页的各个分组改成两列并排（单列在宽屏上显得太空）。
+// 只处理根 StackPanel 的直接子元素；末尾「保存」按钮组（HorizontalAlignment="Right"）保持整行。
+func injectTwoColumn(body []byte) []byte {
+	s := string(body)
+	pos := stackPanelInsertPos(s)
+	if pos < 0 {
+		return body
+	}
+	children, end := splitChildren(s, pos)
+	if len(children) < 4 || end <= pos {
+		return body
+	}
+	keepLast := 0
+	if strings.Contains(children[len(children)-1], `HorizontalAlignment="Right"`) {
+		keepLast = 1
+	}
+	n := len(children) - keepLast
+	if n < 4 {
+		return body
+	}
+	var left, right strings.Builder
+	for i := 0; i < n; i++ {
+		if i%2 == 0 {
+			left.WriteString(children[i])
+		} else {
+			right.WriteString(children[i])
+		}
+	}
+	tail := ""
+	if keepLast == 1 {
+		tail = children[len(children)-1]
+	}
+	block := `<Grid Margin="0,0,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>` +
+		`<StackPanel Grid.Column="0" Margin="0,0,12,0">` + left.String() + `</StackPanel>` +
+		`<StackPanel Grid.Column="1">` + right.String() + `</StackPanel></Grid>` + tail
+	return []byte(s[:pos] + block + s[end:])
+}
+
+// splitChildren 从 pos 开始逐个切出直接子元素，返回子元素列表与根元素内容结束位置。
+func splitChildren(s string, pos int) ([]string, int) {
+	var children []string
+	i := pos
+	for i < len(s) {
+		for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n') {
+			i++
+		}
+		if i >= len(s) || strings.HasPrefix(s[i:], "</") {
+			return children, i
+		}
+		if strings.HasPrefix(s[i:], "<!--") {
+			if e := strings.Index(s[i:], "-->"); e >= 0 {
+				i += e + 3
+				continue
+			}
+			return children, i
+		}
+		if s[i] != '<' {
+			i++
+			continue
+		}
+		j := elementEnd(s, i)
+		if j <= i {
+			return children, i
+		}
+		children = append(children, s[i:j])
+		i = j
+	}
+	return children, i
+}
+
+// elementEnd 返回从 start 开始的元素结束位置（含闭合标签），用标签栈处理嵌套与自闭合。
+func elementEnd(s string, start int) int {
+	depth := 0
+	i := start
+	for i < len(s) {
+		if strings.HasPrefix(s[i:], "<!--") {
+			if e := strings.Index(s[i:], "-->"); e >= 0 {
+				i += e + 3
+				continue
+			}
+			return len(s)
+		}
+		if s[i] != '<' {
+			i++
+			continue
+		}
+		gt := strings.IndexByte(s[i:], '>')
+		if gt < 0 {
+			return len(s)
+		}
+		gt += i
+		tag := strings.TrimSpace(s[i+1 : gt])
+		switch {
+		case strings.HasPrefix(tag, "/"):
+			depth--
+			if depth == 0 {
+				return gt + 1
+			}
+		case strings.HasPrefix(tag, "?"), strings.HasPrefix(tag, "!"):
+			// 声明/注释，跳过
+		case strings.HasSuffix(tag, "/"):
+			// 自闭合
+		default:
+			depth++
+		}
+		i = gt + 1
+	}
+	return len(s)
 }
 
 // injectPrefSwitch 在个性设置页插入「切换到新版 / 返回旧版」按钮。

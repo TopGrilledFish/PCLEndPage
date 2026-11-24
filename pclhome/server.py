@@ -40,6 +40,7 @@ from .render import build_home_data, render_homepage
 from .store import Stats, Store
 from .weather import WeatherService
 from . import ai
+from . import axaml
 from . import calc
 from . import palette
 from . import profiles
@@ -55,6 +56,23 @@ def _bot_xaml(ip: str) -> str:
     lang = profiles.lang_for(ip)
     return build_fallback_xaml(t("fallback.denied_title", lang),
                                t("fallback.bot_msg", lang), lang=lang)
+
+
+def _maybe_axaml(user_agent: str, body: str) -> str:
+    """PCL-CE 返回 AXAML 版主页，普通 PCL2 保持 WPF XAML。
+
+    转换结果先按 PCL-CE 的 ``AvaloniaXamlValidator`` 规则自查一遍，不通过就
+    退回 WPF XAML——宁可让 PCL-CE 走兼容渲染器，也不要给它一份必炸的
+    AXAML（客户端只会显示「主页加载失败」，具体原因藏在校验器里）。
+    """
+    if not axaml.is_pclce(user_agent):
+        return body
+    converted = axaml.to_axaml(body)
+    problems = axaml.validate(converted)
+    if problems:
+        log.warn("[Server] AXAML 校验未通过，已退回 WPF XAML：" + "；".join(problems[:3]))
+        return body
+    return converted
 
 
 def is_pcl_client(user_agent: str, referer: str = "") -> bool:
@@ -105,7 +123,7 @@ def _short_province(name) -> str:
 
 # 需要"仅 PCL 客户端与真实浏览器可访问"的动态数据端点
 DATA_ENDPOINTS = {"/Custom.xaml", "/"}
-VERSION_PATHS = {"/Custom.xaml.version", "/version"}
+VERSION_PATHS = {"/Custom.xaml.version", "/Custom.xaml.ini", "/version"}
 
 # 标记版主页。和 /Custom.xaml 是同一套模板、同一份数据，只有「日期大字」不同：
 # 这边交给 PCL 的 {date} 替换标记，加载时才填当天，所以即使 PCL 渲染的是昨天
@@ -118,6 +136,7 @@ MARK_PATHS = {
     MARK_PREFIX + "/version",
     MARK_PREFIX + "/Custom.xaml",
     MARK_PREFIX + "/Custom.xaml.version",
+    MARK_PREFIX + "/Custom.xaml.ini",
 }
 
 
@@ -141,7 +160,7 @@ def mark_version() -> str:
 # 走"全新下载"并重新实例化，不会再翻出前一天的缓存页（见维护报告 §2）。
 DATED_RE = re.compile(
     r"^/(\d{4})/(\d{1,2})/(\d{1,2})"
-    r"(?:/(version|Custom\.xaml|Custom\.xaml\.version))?/?$"
+    r"(?:/(version|Custom\.xaml|Custom\.xaml\.version|Custom\.xaml\.ini))?/?$"
 )
 
 
@@ -435,7 +454,7 @@ class Handler(BaseHTTPRequestHandler):
         dated = DATED_RE.match(path)
         if dated:
             tail = dated.group(4) or ""
-            if tail in ("version", "Custom.xaml.version"):
+            if tail in ("version", "Custom.xaml.version", "Custom.xaml.ini"):
                 self._note = "按日期的主页版本号（同一天内固定）"
                 self._send(Response.text(dated_version(dated), headers={
                     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0, s-maxage=0",
@@ -581,7 +600,7 @@ class Handler(BaseHTTPRequestHandler):
                 city = _city_of(data.weather_source)
             service.stats.record(marker_ip, country, city, province)
             self._note = "标记版主页：" + data.summary()
-            self._send(Response.xaml(body, vary_ip=True))
+            self._send(Response.xaml(_maybe_axaml(ua, body), vary_ip=True))
             return
 
         if self.command not in ("GET", "HEAD"):
@@ -661,7 +680,7 @@ class Handler(BaseHTTPRequestHandler):
             service.stats.record(ip, country, city, province)
             self._note = data.summary()
             log.debug("[Server] UA=" + (ua[:80] or "（空）") + " origin=" + origin)
-            self._send(Response.xaml(body, vary_ip=True))
+            self._send(Response.xaml(_maybe_axaml(ua, body), vary_ip=True))
             return
 
         if path in ("/healthz", "/health"):
