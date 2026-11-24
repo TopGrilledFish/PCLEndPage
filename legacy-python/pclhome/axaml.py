@@ -78,14 +78,15 @@ _ICON_MAP = (
 )
 _ICON_DEFAULT = "arrow-right"
 
-# WPF 的字体样式块在 AXAML 里会被删掉；用 Avalonia 的 Selector 写法补一份，
-# 否则 PCL-CE 用默认字体，中文比 PCL2 的 MiSans 细、发虚。
+# WPF 的字体样式块在 AXAML 里会被删掉；用 Avalonia 的 Styles 写法补一份
+# （Avalonia 的 Resources 只收资源，Style 必须放 Styles），否则 PCL-CE 用默认
+# 字体，中文比 PCL2 的 MiSans 细、发虚。
 _FONT_STYLE = (
-    '<StackPanel.Resources>'
+    '<StackPanel.Styles>'
     '<Style Selector="TextBlock">'
     '<Setter Property="FontFamily" Value="MiSans, Microsoft YaHei UI, Segoe UI" />'
     '</Style>'
-    '</StackPanel.Resources>'
+    '</StackPanel.Styles>'
 )
 
 _FORBIDDEN_ELEMENTS = {

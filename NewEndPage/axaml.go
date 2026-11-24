@@ -90,14 +90,15 @@ func toAXAML(xaml string) string {
 	}
 	attrs := ` xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:pclcontrols="using:PCL.UI.Controls"`
 	out := text[:idx] + attrs + text[idx:]
-	// WPF 的字体样式块被删掉了，AXAML 里用 Avalonia 的 Selector 写法补回来：
+	// WPF 的字体样式块被删掉了，AXAML 里用 Avalonia 的 Styles 写法补回来
+	// （Avalonia 的 Resources 只收资源，Style 必须放 Styles）：
 	// 不设字体时 PCL-CE 用 Inter/系统默认，中文会比 PCL2 的 MiSans 细、发虚。
 	insertAt := idx + len(attrs) + 1
 	return out[:insertAt] + "\n    " + axFontStyle + out[insertAt:]
 }
 
-// axFontStyle 是 AXAML 版全局字体样式（Avalonia 用 Selector，不认 WPF 的 TargetType）。
-const axFontStyle = `<StackPanel.Resources><Style Selector="TextBlock"><Setter Property="FontFamily" Value="MiSans, Microsoft YaHei UI, Segoe UI" /></Style></StackPanel.Resources>`
+// axFontStyle 是 AXAML 版全局字体样式（Avalonia 用 Selector，而且 Style 只能放 Styles）。
+const axFontStyle = `<StackPanel.Styles><Style Selector="TextBlock"><Setter Property="FontFamily" Value="MiSans, Microsoft YaHei UI, Segoe UI" /></Style></StackPanel.Styles>`
 
 // rootOpenTagEnd 返回根元素开标签末尾 “>” 的下标（跳过属性值里的 “>”）。
 func rootOpenTagEnd(s string) int {
