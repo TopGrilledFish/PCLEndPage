@@ -1036,7 +1036,11 @@ const adminHomePage = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="ut
  <div class="card"><h2>旧版日志（最近 100 行）</h2><pre id="oldlog" class="log">加载中…</pre><div class="row"><button class="ghost" onclick="loadLog('old')">刷新旧版日志</button></div></div>
 </div>
 <div id="tab-config" style="display:none"><div class="card"><h2>站点配置</h2><div id="cfgform"></div><div class="row"><button onclick="saveConfig()">保存配置</button><span id="cfgmsg"></span></div></div>
-<div class="card"><h2>自定义内容（store.json）</h2><div class="row"><textarea id="quote_custom" placeholder="每日一言，每行一条"></textarea></div><div class="row"><button onclick="saveQuote()">保存每日一言</button><span id="quotemsg"></span></div></div></div>
+<div class="card"><h2>自定义内容（store.json）</h2><div class="row"><textarea id="quote_custom" placeholder="每日一言，每行一条"></textarea></div><div class="row"><button onclick="saveQuote()">保存每日一言</button><span id="quotemsg"></span></div>
+<div class="row"><h2 style="margin:18px 0 6px">多公告轮播</h2><textarea id="banners" style="min-height:110px" placeholder="每行一条，至少 2 条才会轮播，最多 4 条"></textarea></div>
+<div class="row"><button onclick="saveBanners()">保存多公告轮播</button><span id="bannersmsg"></span></div>
+<div class="row" style="margin-top:14px"><label class="chk"><input type="checkbox" id="bannerOn"> 启用单条公告</label><input id="bannerText" placeholder="单条公告：≤40 字淡入，超长跑马灯"></div>
+<div class="row"><button onclick="saveBannerOne()">保存单条公告</button><span id="banner1msg"></span></div></div></div>
 <div id="tab-block" style="display:none"><div class="card"><h2>封禁列表</h2><div id="blocklist"></div></div>
 <div class="card"><h2>批量封禁 / 解封</h2><div class="row"><textarea id="blockips" placeholder="多个 IP，用换行或逗号分隔"></textarea></div><div class="row"><input id="blockreason" placeholder="封禁原因（可选）"><button onclick="blockDo(false)">封禁</button><button class="ghost" onclick="blockDo(true)">解封</button></div></div></div>
 <div id="tab-maint" style="display:none"><div class="card"><h2>维护模式</h2><label class="chk"><input type="checkbox" id="maint_on"> 开启维护模式（仅白名单可访问）</label><div class="row"><input id="maint_eta" placeholder="预计完成时间，如 10 分钟"><input id="maint_reason" placeholder="维护原因"></div><div class="row"><button onclick="saveMaint()">保存</button><span id="maintmsg"></span></div></div>
@@ -1109,6 +1113,10 @@ async function loadState() {
   $('cfgform').innerHTML = html;
   var store = STATE.store || {};
   $('quote_custom').value = store['quote_custom'] || '';
+  $('banners').value = store['banners'] || '';
+  var one = store['homepage_banner'] || {};
+  $('bannerOn').checked = !!one.enabled;
+  $('bannerText').value = one.text || '';
   var block = (store['block:list']) || {};
   window.BLOCK = block;
   renderBlock();
@@ -1143,6 +1151,14 @@ async function saveConfig() {
 async function saveQuote() {
   var r = await api('set', { key: 'quote_custom', value: $('quote_custom').value });
   $('quotemsg').textContent = r.ok ? '已保存' : ('失败：' + (r.error || ''));
+}
+async function saveBanners() {
+  var r = await api('set', { key: 'banners', value: $('banners').value });
+  $('bannersmsg').textContent = r.ok ? '已保存' : ('失败：' + (r.error || ''));
+}
+async function saveBannerOne() {
+  var r = await api('set', { key: 'homepage_banner', value: { enabled: $('bannerOn').checked, text: $('bannerText').value } });
+  $('banner1msg').textContent = r.ok ? '已保存' : ('失败：' + (r.error || ''));
 }
 async function blockDo(remove) {
   var ips = $('blockips').value.split(/[\n,]/).map(function(s){return s.trim();}).filter(Boolean);

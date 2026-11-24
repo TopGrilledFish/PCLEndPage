@@ -406,7 +406,7 @@ func (s *Server) buildHome(ip, origin string, marker bool) (string, error) {
 		"GREETING":         escapeAttr(s.pickGreeting(d)),
 		"GREETING_SUB":     escapeAttr(s.pickGreetingSub(d, ip)),
 		"QUOTE":            escapeAttr(s.pickQuote(d, ip)),
-		"BANNER":           newSiteHint,
+		"BANNER":           newSiteHint + s.homeBanners(),
 		"T_WELCOME":        escapeAttr(s.i18n.T("home.welcome")),
 		"T_GREETING_CLOSE": escapeAttr(s.i18n.T("home.greeting_close")),
 		"T_MONTH_SUFFIX":   escapeAttr(s.i18n.T("date.month_suffix")),
@@ -440,3 +440,81 @@ func (s *Server) buildHome(ip, origin string, marker bool) (string, error) {
 	out = strings.ReplaceAll(out, "__CALC_ENTRY__", calcEntry)
 	return out, nil
 }
+
+// ---------- 公告（照旧版 xaml.py 的公告卡片） ----------
+
+// homeBanners 读取旧版 store.json 的 banners/homepage_banner，生成公告卡片 XAML。
+func (s *Server) homeBanners() string {
+	store := readStoreFile(s.cfg.StoreFile)
+	if store == nil {
+		return ""
+	}
+	return buildMultiBanner(store["banners"]) + buildSingleBanner(store["homepage_banner"])
+}
+
+// buildMultiBanner 多公告轮播：每行一条，≥2 条才启用，最多 4 条，每条显示 8 秒。
+func buildMultiBanner(v any) string {
+	raw, _ := v.(string)
+	var lines []string
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		if t := strings.TrimSpace(line); t != "" {
+			lines = append(lines, t)
+		}
+	}
+	if len(lines) < 2 {
+		return ""
+	}
+	count := len(lines)
+	if count > 4 {
+		count = 4
+	}
+	const per = 8
+	var anims, texts []string
+	for i := 0; i < count; i++ {
+		onAt, offAt := i*per, (i+1)*per-1
+		idx := strconv.Itoa(i)
+		texts = append(texts, `<TextBlock x:Name="mb`+idx+`" Text="`+escapeAttr(lines[i])+`" FontSize="15" LineHeight="24" Foreground="{DynamicResource ColorBrush1}" VerticalAlignment="Center" Opacity="0"/>`)
+		anims = append(anims, `<DoubleAnimation Storyboard.TargetName="mb`+idx+`" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:1" BeginTime="0:0:`+strconv.Itoa(onAt)+`"/>`)
+		anims = append(anims, `<DoubleAnimation Storyboard.TargetName="mb`+idx+`" Storyboard.TargetProperty="Opacity" From="1" To="0" Duration="0:0:1" BeginTime="0:0:`+strconv.Itoa(offAt)+`"/>`)
+	}
+	return `<local:MyCard Title="公告" Margin="0,0,0,12" CanSwap="True" IsSwapped="False"><StackPanel Margin="25,36,23,16" ClipToBounds="True" Height="28"><Grid><Grid.Triggers><EventTrigger RoutedEvent="FrameworkElement.Loaded"><BeginStoryboard><Storyboard RepeatBehavior="Forever">` +
+		strings.Join(anims, "") +
+		`</Storyboard></BeginStoryboard></EventTrigger></Grid.Triggers>` +
+		strings.Join(texts, "") +
+		`</Grid></StackPanel></local:MyCard>`
+}
+
+// buildSingleBanner 单条公告：≤40 字淡入，超长跑马灯。
+func buildSingleBanner(v any) string {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	enabled, _ := obj["enabled"].(bool)
+	text, _ := obj["text"].(string)
+	text = strings.TrimSpace(text)
+	if !enabled || text == "" {
+		return ""
+	}
+	safe := escapeAttr(text)
+	if len([]rune(text)) <= 40 {
+		return `<local:MyCard Title="公告" Margin="0,0,0,12" CanSwap="True" IsSwapped="False"><StackPanel Margin="25,36,23,16"><StackPanel.Triggers><EventTrigger RoutedEvent="FrameworkElement.Loaded"><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="bqFade" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.6"/></Storyboard></BeginStoryboard></EventTrigger></StackPanel.Triggers><TextBlock x:Name="bqFade" TextWrapping="Wrap" FontSize="15" LineHeight="24" Foreground="{DynamicResource ColorBrush1}" Text="` +
+			safe +
+			`"/></StackPanel></local:MyCard>`
+	}
+	textWidth := len([]rune(text)) * 15
+	toX := -(textWidth + 40)
+	duration := (500 - toX) / 50
+	if duration < 8 {
+		duration = 8
+	}
+	if duration > 30 {
+		duration = 30
+	}
+	return `<local:MyCard Title="公告" Margin="0,0,0,12" CanSwap="True" IsSwapped="False"><StackPanel Margin="25,36,23,16" ClipToBounds="True" Height="28"><TextBlock Text="` +
+		safe +
+		`" FontSize="15" LineHeight="24" Foreground="{DynamicResource ColorBrush1}" VerticalAlignment="Center"><TextBlock.RenderTransform><TranslateTransform x:Name="bqMarquee" X="0"/></TextBlock.RenderTransform><TextBlock.Triggers><EventTrigger RoutedEvent="FrameworkElement.Loaded"><BeginStoryboard><Storyboard RepeatBehavior="Forever"><DoubleAnimation Storyboard.TargetName="bqMarquee" Storyboard.TargetProperty="X" From="500" To="` +
+		strconv.Itoa(toX) +
+		`" Duration="0:0:` + strconv.Itoa(duration) + `"/></Storyboard></BeginStoryboard></EventTrigger></TextBlock.Triggers></TextBlock></StackPanel></local:MyCard>`
+}
+

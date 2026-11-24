@@ -29,6 +29,9 @@ var (
 	axLocalRE     = regexp.MustCompile(`(</?)local:`)
 	axLogoRE      = regexp.MustCompile(`\s+Logo="([^"]*)"`)
 	axLogoScaleRE = regexp.MustCompile(`\s+LogoScale="[^"]*"`)
+	// 公告卡片靠 Opacity 动画淡入；AXAML 会删掉 Triggers/Storyboard，
+	// 这里把初始 Opacity="0" 改成 1，避免静态渲染后文字不可见。
+	axOpacityZeroRE = regexp.MustCompile(`Opacity="0"`)
 	// 几何 Logo 在 PCL-CE 的 AXAML 校验器里会被当成非法资源地址，改用它内置的
 	// SVG 图标名（lucide/xxx）——AXAML 加载器对 SvgIcon 不做地址检查。
 	axButtonLogoRE = regexp.MustCompile(`(?s)<pclcontrols:MyIconTextButton\b[^>]*?Logo="M[^"]*"[^>]*?/>`)
@@ -62,6 +65,7 @@ func toAXAML(xaml string) string {
 	text = axLocalRE.ReplaceAllString(text, "${1}pclcontrols:")
 	text = replaceGeomLogos(text)
 	text = axLogoScaleRE.ReplaceAllString(text, "")
+	text = axOpacityZeroRE.ReplaceAllString(text, `Opacity="1"`)
 	text = axBindingEventDataRE.ReplaceAllString(text, `EventData="$1"`)
 	text = axAnyBindingEventDataRE.ReplaceAllString(text, `EventData=""`)
 	text = axUnsupportedEventTypeRE.ReplaceAllString(text, `IsEnabled="False"`)
