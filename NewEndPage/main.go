@@ -85,6 +85,8 @@ type Config struct {
 	VerifyEnabled       bool       `json:"verify_enabled"`
 	VerifyDays          int        `json:"verify_days"`
 	VerifyFile          string     `json:"verify_file"`
+	TurnstileSiteKey    string     `json:"turnstile_site_key"`
+	TurnstileSecret     string     `json:"turnstile_secret"`
 	AdminToken          string     `json:"admin_token"`
 	AdminTOTPSecret     string     `json:"admin_totp_secret"`
 	AdminSessionHours   int        `json:"admin_session_hours"`
@@ -180,6 +182,8 @@ type Server struct {
 	proxy         *httputil.ReverseProxy
 	admin         *Admin
 	newstats      *NewSiteStats
+	verify        *Verifier
+	dataDir       string
 	started       time.Time
 }
 
@@ -207,9 +211,14 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 		actionButtons: mustReadAsset("assets/action_buttons.xaml"),
 		siteItems:     mustReadAsset("assets/site_items.xaml"),
 		footerCard:    mustReadAsset("assets/footer_card.xaml"),
+		dataDir:       dataDir,
 		started:       time.Now(),
 	}
-	i18n, err := newI18n(mustReadAsset("assets/zh-hans.json"))
+	i18n, err := newI18n(
+		mustReadAsset("assets/zh-hans.json"),
+		mustReadAsset("assets/en.json"),
+		mustReadAsset("assets/zh-hant.json"),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +238,7 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 	s.saying = newSayingService(cfg, s.uapi, dataDir, s.text)
 	s.lunar = newLunarService(cfg, s.uapi, dataDir, s.cal)
 	s.newstats = newNewSiteStats(filepath.Join(dataDir, "newstats.json"))
+	s.verify = newVerifier(s)
 	s.proxy = newLegacyProxy(cfg.LegacyBackend)
 	s.proxy.ModifyResponse = s.modifyLegacyResponse
 	s.admin = newAdmin(cfg, cfgPath, s)
@@ -244,8 +254,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.proxy.ServeHTTP(w, r)
 		return
 	}
-	p := r.URL.Path
 	ip := clientIP(r, s.cfg)
+	// 访问验证（看图验证码 / Turnstile）完全由新版接管。
+	if s.verify.handle(w, r, ip) {
+		return
+	}
+	p := r.URL.Path
 	switch {
 	case p == "/" || p == "/Custom.xaml":
 		s.routeHome(w, r, false, false, ip)
@@ -294,18 +308,9 @@ func (s *Server) routeHome(w http.ResponseWriter, r *http.Request, marker, axaml
 		s.handleHome(w, r, marker, axaml)
 		return
 	}
-	// 旧版只认识 /Custom.xaml；CE 请求转成它，并让旧版把验证页输出为 AXAML。
-	if axaml {
-		r2 := r.Clone(r.Context())
-		r2.URL.Path = "/Custom.xaml"
-		if marker {
-			r2.URL.Path = markPrefix + "/Custom.xaml"
-		}
-		r2.Header.Set("X-PCLCE", "1")
-		s.proxy.ServeHTTP(w, r2)
-		return
-	}
-	s.proxy.ServeHTTP(w, r)
+	// 未验证：新版直接渲染验证页（PCL2 用输入框版，PCL-CE 用浏览器验证版）。
+	base := s.verify.base(requestOrigin(r))
+	s.writeXAMLPage(w, r, s.verify.guideXAML(ip, s.verify.lang(ip), base, axaml), axaml)
 }
 
 func writeNoStore(w http.ResponseWriter, body string) {
@@ -720,6 +725,7 @@ func escapeURL(v string) string {
 func logInfo(format string, args ...any)  { log.Printf("[INFO] "+format, args...) }
 func logWarn(format string, args ...any)  { log.Printf("[WARN] "+format, args...) }
 func logError(format string, args ...any) { log.Printf("[ERROR] "+format, args...) }
+func logDebug(format string, args ...any) { log.Printf("[DEBUG] "+format, args...) }
 
 func main() {
 	cfgPath := flag.String("config", "config.json", "配置文件路径")
