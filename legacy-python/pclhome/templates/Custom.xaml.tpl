@@ -51,12 +51,12 @@
                         <StackPanel>
                             <StackPanel Orientation="Horizontal">
                                 <Border Width="26" Height="26" CornerRadius="13" Background="{DynamicResource ColorBrush1}" Margin="0,0,8,0" VerticalAlignment="Center">
-                                    <local:MyImage Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" Source="pack://application:,,,/images/Blocks/Grass.png" />
+                                    <!-- 草方块走站点 HTTP 图片：PCL2 自带 pack:// 资源，PCL-CE（Avalonia）读不到 -->
+                                    <local:MyImage Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" Source="__BASE_URL__/images/grass.png" />
                                 </Border>
-                                <!-- 问候语两侧的标点也是文案：中文是全角「，」「！」，英文是半角。
-                                     逗号并在 GREETING 那个令牌里（两个令牌占位符挨着写会被
-                                     替换器当成一个），句末那个单独一个令牌。 -->
-                                <TextBlock Text="__GREETING__{user}__T_GREETING_CLOSE__" FontSize="15" FontWeight="Bold" Foreground="White" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <!-- 问候语整句一个令牌：旧版由 PCL 填玩家名，PCL-CE 不认这个占位符，
+                                     会空成「凌晨好，！」，所以干脆连玩家名一起删掉，只保留问候语和句末标点。 -->
+                                <TextBlock Text="__GREETING_TEXT__" FontSize="15" FontWeight="Bold" Foreground="White" VerticalAlignment="Center" TextWrapping="Wrap" />
                             </StackPanel>
                             <TextBlock Text="__GREETING_SUB__" FontSize="11" Foreground="#D9FFFFFF" Margin="0,3,0,0" TextWrapping="Wrap" />
                         </StackPanel>

@@ -197,6 +197,9 @@ def render_homepage(template: str, data: HomeData, config: Config, origin: str,
         # 问候语带上后面那个逗号：中文「下午好，」、英文「Good afternoon, 」
         "GREETING": (t("greeting." + (date.period or "morning"), lang)
                      + t("home.greeting_open", lang)),
+        # 整句问候（含句末标点，不含玩家名）：PCL-CE 不认 {user} 占位符，干脆两版统一删掉玩家名
+        "GREETING_TEXT": escape_attr(t("greeting." + (date.period or "morning"), lang)
+                                     + t("home.greeting_close", lang)),
         "GREETING_SUB": escape_attr(data.greeting_sub),
         "QUOTE": escape_attr(data.quote),
         "FESTIVAL_BANNER": data.festival_banner,

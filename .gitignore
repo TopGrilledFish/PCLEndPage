@@ -36,3 +36,6 @@ __pycache__/
 venv/
 .idea/
 .vscode/
+
+# NewEndPage 的 XAML 模板是源码（根目录的 Custom.xaml 才是生成物）
+!NewEndPage/assets/Custom.xaml

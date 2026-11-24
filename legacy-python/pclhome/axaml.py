@@ -78,6 +78,16 @@ _ICON_MAP = (
 )
 _ICON_DEFAULT = "arrow-right"
 
+# WPF 的字体样式块在 AXAML 里会被删掉；用 Avalonia 的 Selector 写法补一份，
+# 否则 PCL-CE 用默认字体，中文比 PCL2 的 MiSans 细、发虚。
+_FONT_STYLE = (
+    '<StackPanel.Resources>'
+    '<Style Selector="TextBlock">'
+    '<Setter Property="FontFamily" Value="MiSans, Microsoft YaHei UI, Segoe UI" />'
+    '</Style>'
+    '</StackPanel.Resources>'
+)
+
 _FORBIDDEN_ELEMENTS = {
     "window", "toplevel", "application", "webview", "nativewebview",
     "objectdataprovider", "xmldataprovider", "xamlreader",
@@ -128,7 +138,12 @@ def to_axaml(xaml: str) -> str:
         + ' xmlns:x="%s"' % XAML_NS
         + ' xmlns:pclcontrols="using:PCL.UI.Controls"'
     )
-    return text[:end] + attrs + text[end:]
+    text = text[:end] + attrs + text[end:]
+    # WPF 的字体样式块被删掉了，AXAML 里用 Avalonia 的 Selector 写法补回来：
+    # 不设字体时 PCL-CE 用 Inter/系统默认，中文会显得比 PCL2 的 MiSans 细、发虚。
+    insert_at = end + len(attrs) + 1
+    return text[:insert_at] + "\n    " + _FONT_STYLE + text[insert_at:]
+
 
 
 _ROOT_ELEMENT_RE = re.compile(r"<([A-Za-z][\w.:-]*)")

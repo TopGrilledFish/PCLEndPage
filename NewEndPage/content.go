@@ -404,6 +404,8 @@ func (s *Server) buildHome(ip, origin string, marker bool) (string, error) {
 		"DATE_MAIN":        dateMain,
 		"T_WEEKDAY":        escapeAttr(s.weekdayName(d.Weekday)),
 		"GREETING":         escapeAttr(s.pickGreeting(d)),
+		// 整句问候（含句末标点，不含玩家名）：模板里一个令牌搞定，PCL2 / PCL-CE 表现一致
+		"GREETING_TEXT":    escapeAttr(s.i18n.T("greeting."+d.Period) + s.i18n.T("home.greeting_close")),
 		"GREETING_SUB":     escapeAttr(s.pickGreetingSub(d, ip)),
 		"QUOTE":            escapeAttr(s.pickQuote(d, ip)),
 		"BANNER":           newSiteHint + s.homeBanners(),
