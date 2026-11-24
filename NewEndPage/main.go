@@ -95,6 +95,23 @@ type Config struct {
 	SiteName            string     `json:"site_name"`
 	EnableAI            bool       `json:"enable_ai"`
 	GuardClients        bool       `json:"guard_clients"`
+	AIAPIBase           string     `json:"ai_api_base"`
+	AIAPIKey            string     `json:"ai_api_key"`
+	AIModel             string     `json:"ai_model"`
+	AIDisplayName       string     `json:"ai_display_name"`
+	AITokenLimit        int        `json:"ai_token_limit"`
+	AITokenWindowHours  float64    `json:"ai_token_window_hours"`
+	AIGlobalWeekTokens  int        `json:"ai_global_week_tokens"`
+	AIReserveTokens     int        `json:"ai_reserve_tokens"`
+	AIPeakMultiplier    float64    `json:"ai_peak_multiplier"`
+	AIRateLimit         int        `json:"ai_rate_limit"`
+	AIFreeIPs           StringList `json:"ai_free_ips"`
+	AIMaxLogChars       int        `json:"ai_max_log_chars"`
+	AIMaxTokens         int        `json:"ai_max_tokens"`
+	AIReasoningEffort   string     `json:"ai_reasoning_effort"`
+	AIReasoningMaxChars int        `json:"ai_reasoning_max_chars"`
+	AITimeout           float64    `json:"ai_timeout"`
+	AIRefundOnFailure   bool       `json:"ai_refund_on_failure"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -127,6 +144,21 @@ func loadConfig(path string) (*Config, error) {
 		SiteName:            "PCL2 主页",
 		EnableAI:            true,
 		GuardClients:        true,
+		AIAPIBase:           "https://api.deepseek.com/v1",
+		AIModel:             "deepseek-flash",
+		AIDisplayName:       "DeepSeek V4 Flash",
+		AITokenLimit:        60000,
+		AITokenWindowHours:  5.0,
+		AIGlobalWeekTokens:  2000000,
+		AIReserveTokens:     8000,
+		AIPeakMultiplier:    2.0,
+		AIRateLimit:         20,
+		AIMaxLogChars:       40000,
+		AIMaxTokens:         6000,
+		AIReasoningEffort:   "low",
+		AIReasoningMaxChars: 2600,
+		AITimeout:           120,
+		AIRefundOnFailure:   true,
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -184,6 +216,7 @@ type Server struct {
 	verify        *Verifier
 	profiles      *Profiles
 	stats         *visitStats
+	ai            *AI
 	dataDir       string
 	started       time.Time
 }
@@ -242,6 +275,7 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 	s.verify = newVerifier(s)
 	s.profiles = newProfiles(filepath.Join(dataDir, "profiles.json"))
 	s.stats = newVisitStats(filepath.Join(dataDir, "visits.json"))
+	s.ai = newAI(s, dataDir)
 	s.proxy = newLegacyProxy(cfg.LegacyBackend)
 	s.proxy.ModifyResponse = s.modifyLegacyResponse
 	s.admin = newAdmin(cfg, cfgPath, s)
@@ -275,6 +309,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// 访问浏览页由新版接管。
 	if s.handleVisit(w, r, ip) {
+		return
+	}
+	// AI 日志分析（公用密钥 / 私人密钥 / 追问）由新版接管。
+	if s.ai.handleAI(w, r, ip) {
 		return
 	}
 	p := r.URL.Path

@@ -3,6 +3,7 @@
   "admin_token": "test123",
   "admin_totp_secret": "VFMAVWQCPPP5UT4BN7TCNM4EEBSAEBY2",
   "base_url": "http://127.0.0.1:8778",
+  "enable_ai": true,
   "enable_geo": false,
   "enable_lunar": true,
   "enable_saying": false,

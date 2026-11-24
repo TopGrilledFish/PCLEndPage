@@ -146,8 +146,12 @@ func (s *Server) calcHelpButton(text, logo, url string, height int, column int, 
 		escapeAttr(text) + `" LogoScale="0.8" Logo="` + logo + `" EventType="打开帮助" EventData="` + calcURLAttr(url) + `" />`
 }
 
-func (s *Server) calcInputRow(name, hint string, height int, margin string) string {
-	return `<Border Margin="` + margin + `" Height="` + strconv.Itoa(height) + `" Background="{DynamicResource ColorBrush7}" CornerRadius="5">` +
+func (s *Server) calcInputRow(name, hint string, height int, margin string, width ...int) string {
+	box := ` Height="` + strconv.Itoa(height) + `"`
+	if len(width) > 0 && width[0] > 0 {
+		box += ` Width="` + strconv.Itoa(width[0]) + `" HorizontalAlignment="Center"`
+	}
+	return `<Border Margin="` + margin + `"` + box + ` Background="{DynamicResource ColorBrush7}" CornerRadius="5">` +
 		`<local:MyTextBox x:Name="` + name + `" Height="` + strconv.Itoa(height) + `" Margin="10,0" HintText="` + calcAttr(hint) +
 		`" Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" /></Border>`
 }
