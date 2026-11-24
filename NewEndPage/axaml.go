@@ -48,6 +48,9 @@ var (
 	// Avalonia 的 Shape 没有 StrokeDashCap（WPF 有线帽属性），维护页 spinner 用它
 	// 会直接报「Unable to resolve suitable regular or attached property」。
 	axDashCapRE = regexp.MustCompile(`\s+StrokeDashCap="[^"]*"`)
+	// WPF 的 Shape 有 StrokeStartLineCap/StrokeEndLineCap，Avalonia 只有
+	// StrokeLineCap；残留会让加载器抛「Unable to resolve ... LineCap」。
+	axLineCapRE = regexp.MustCompile(`\s+Stroke(?:Start|End)LineCap="[^"]*"`)
 	// Avalonia 的 Transform 不是 Control，没有 Name 属性；WPF 模板里的
 	// <RotateTransform x:Name="spin"> 在 AXAML 下无法解析，去掉名字即可。
 	axTransformRE     = regexp.MustCompile(`<(?:Rotate|Translate|Scale|Skew|Matrix|TransformGroup)Transform\b[^>]*>`)
@@ -77,6 +80,7 @@ func toAXAML(xaml string) string {
 	text = axAnyBindingEventDataRE.ReplaceAllString(text, `EventData=""`)
 	text = axUnsupportedEventTypeRE.ReplaceAllString(text, `IsEnabled="False"`)
 	text = axDashCapRE.ReplaceAllString(text, "")
+	text = axLineCapRE.ReplaceAllString(text, "")
 	text = axTransformRE.ReplaceAllStringFunc(text, func(m string) string {
 		return axTransformNameRE.ReplaceAllString(m, "")
 	})

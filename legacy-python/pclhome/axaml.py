@@ -49,6 +49,9 @@ _UNSUPPORTED_EVENTTYPE_RE = re.compile(r'EventType="(?:内存优化|加入房间
 # Avalonia 的 Shape 没有 StrokeDashCap（WPF 有线帽属性），维护页 spinner 用它
 # 会直接报「Unable to resolve suitable regular or attached property」。
 _DASHCAP_RE = re.compile(r'\s+StrokeDashCap="[^"]*"')
+# WPF 的 Shape 有 StrokeStartLineCap/StrokeEndLineCap，Avalonia 只有 StrokeLineCap；
+# 残留会让加载器抛「Unable to resolve ... LineCap」。
+_LINECAP_RE = re.compile(r'\s+Stroke(?:Start|End)LineCap="[^"]*"')
 # Avalonia 的 Transform 不是 Control，没有 Name 属性；WPF 模板里的
 # <RotateTransform x:Name="spin"> 在 AXAML 下无法解析，去掉名字即可。
 _TRANSFORM_RE = re.compile(
@@ -113,6 +116,7 @@ def to_axaml(xaml: str) -> str:
     text = _ANY_BINDING_EVENTDATA_RE.sub('EventData=""', text)
     text = _UNSUPPORTED_EVENTTYPE_RE.sub('IsEnabled="False"', text)
     text = _DASHCAP_RE.sub("", text)
+    text = _LINECAP_RE.sub("", text)
     text = _TRANSFORM_RE.sub(lambda m: _TRANSFORM_NAME_RE.sub("", m.group(0)), text)
 
     end = _root_open_tag_end(text)

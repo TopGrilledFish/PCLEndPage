@@ -180,7 +180,6 @@ type Server struct {
 	proxy         *httputil.ReverseProxy
 	admin         *Admin
 	newstats      *NewSiteStats
-	ce            *ceStore
 	started       time.Time
 }
 
@@ -226,8 +225,7 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 	s.saying = newSayingService(cfg, s.uapi, dataDir, s.text)
 	s.lunar = newLunarService(cfg, s.uapi, dataDir, s.cal)
 	s.newstats = newNewSiteStats(filepath.Join(dataDir, "newstats.json"))
-	s.ce = newCEStore()
-	s.proxy = newLegacyProxy(cfg.LegacyBackend, s)
+	s.proxy = newLegacyProxy(cfg.LegacyBackend)
 	s.proxy.ModifyResponse = s.modifyLegacyResponse
 	s.admin = newAdmin(cfg, cfgPath, s)
 	return s, nil
@@ -248,26 +246,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p == "/" || p == "/Custom.xaml":
 		s.routeHome(w, r, false, false, ip)
 	case p == "/Custom-CE.xaml":
-		s.ce.mark(ip)
 		s.routeHome(w, r, false, true, ip)
 	case p == markPrefix || p == markPrefix+"/":
 		s.routeHome(w, r, true, false, ip)
 	case p == markPrefix+"/Custom.xaml":
 		s.routeHome(w, r, true, false, ip)
 	case p == markPrefix+"/Custom-CE.xaml":
-		s.ce.mark(ip)
 		s.routeHome(w, r, true, true, ip)
 	case p == "/Custom.xaml.version" || p == "/version" ||
 		p == "/Custom.xaml.ini" || p == "/Custom-CE.xaml.ini":
-		if strings.Contains(p, "Custom-CE") {
-			s.ce.mark(ip)
-		}
 		writeNoStore(w, s.staticVersion())
 	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version" ||
 		p == markPrefix+"/Custom.xaml.ini" || p == markPrefix+"/Custom-CE.xaml.ini":
-		if strings.Contains(p, "Custom-CE") {
-			s.ce.mark(ip)
-		}
 		writeNoStore(w, s.staticVersion())
 	case p == "/healthz":
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -277,14 +267,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case datedRE.MatchString(p):
 		m := datedRE.FindStringSubmatch(p)
 		if m[4] != "" && m[4] != "Custom.xaml" && m[4] != "Custom-CE.xaml" {
-			if strings.Contains(m[4], "Custom-CE") {
-				s.ce.mark(ip)
-			}
 			writeNoStore(w, datedVersion(m[1], m[2], m[3]))
 			return
-		}
-		if strings.Contains(m[4], "Custom-CE") {
-			s.ce.mark(ip)
 		}
 		s.routeHome(w, r, false, m[4] == "Custom-CE.xaml", ip)
 	default:
@@ -408,7 +392,7 @@ func requestOrigin(r *http.Request) string {
 	return proto + "://" + r.Host
 }
 
-func newLegacyProxy(backend string, s *Server) *httputil.ReverseProxy {
+func newLegacyProxy(backend string) *httputil.ReverseProxy {
 	target, _ := url.Parse("http://" + backend)
 	p := httputil.NewSingleHostReverseProxy(target)
 	orig := p.Director
@@ -426,11 +410,6 @@ func newLegacyProxy(backend string, s *Server) *httputil.ReverseProxy {
 		}
 		if req.Header.Get("X-Forwarded-Proto") == "" {
 			req.Header.Set("X-Forwarded-Proto", "https")
-		}
-		// 该 IP 最近访问过 /Custom-CE.xaml：旧版把帮助页等也输出 AXAML，
-		// PCL-CE 的兼容渲染器才能正常显示。
-		if s != nil && s.ce.seen(ip) {
-			req.Header.Set("X-PCLCE", "1")
 		}
 	}
 	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
