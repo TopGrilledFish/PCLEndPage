@@ -284,11 +284,11 @@ func (v *Verifier) guideXAML(ip, lang, base string, pclce bool) string {
 		fmtStr := "{Binding Path=Text,ElementName=vcode,StringFormat='{}" + base + "/verify_submit.json?t=" + token + "&q={0}'}"
 		body = `<local:MyImage Source="` + escapeURL(image) + `" Height="76" HorizontalAlignment="Center" Margin="0,14,0,0" />` +
 			`<Border Margin="0,12,0,0" Height="38" Width="260" HorizontalAlignment="Center" Background="{DynamicResource ColorBrush7}" CornerRadius="5"><local:MyTextBox x:Name="vcode" Height="38" Margin="10,0" HintText="` + escapeAttr(t("verify.img_hint")) + `" Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" /></Border>` +
-			`<local:MyIconTextButton Height="40" Margin="0,12,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.submit")) + `" LogoScale="0.85" ColorType="Highlight" Logo="` + escapeAttr(refreshIcon) + `" EventType="打开帮助" EventData="` + escapeURL(fmtStr) + `" />` +
+			`<local:MyIconTextButton Height="40" Margin="0,12,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.submit")) + `" ColorType="Highlight" EventType="打开帮助" EventData="` + escapeURL(fmtStr) + `" />` +
 			`<TextBlock Text="` + escapeAttr(t("verify.refresh_tip")) + `" FontSize="16" TextWrapping="Wrap" HorizontalAlignment="Center" Foreground="#FF000000" Margin="0,16,0,0" />`
 	}
 	return `<local:MyCard Title="` + escapeAttr(t("verify.title")) + `" CanSwap="False"><StackPanel Margin="25,40,23,20"><TextBlock Text="` + escapeAttr(t("verify.need_title")) + `" FontSize="24" FontWeight="Bold" HorizontalAlignment="Center" Foreground="#FF000000" />` + body +
-		`<local:MyIconTextButton Height="36" Margin="0,14,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.refresh")) + `" LogoScale="0.85" Logo="` + escapeAttr(refreshIcon) + `" EventType="刷新页面" EventData="-" /></StackPanel></local:MyCard>`
+		`<local:MyIconTextButton Height="36" Margin="0,14,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.refresh")) + `" EventType="刷新页面" EventData="-" /></StackPanel></local:MyCard>`
 }
 
 // submitXAML PCL 点提交后打开的页面：判定、记账、给结果。
@@ -306,7 +306,7 @@ func (v *Verifier) submitXAML(ip, lang, base, token, answer string) string {
 			days = 7
 		}
 		desc = strings.ReplaceAll(t("verify.ok_page_desc"), "{days}", itoa(days))
-		extra = `<local:MyIconTextButton Height="40" Margin="0,18,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.ok_back")) + `" LogoScale="0.85" ColorType="Highlight" Logo="` + escapeAttr(refreshIcon) + `" EventType="切换页面" EventData="Launch" />` +
+		extra = `<local:MyIconTextButton Height="40" Margin="0,18,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.ok_back")) + `" ColorType="Highlight" EventType="切换页面" EventData="Launch" />` +
 			`<TextBlock Text="` + escapeAttr(t("verify.ok_refresh_hint")) + `" FontSize="11" TextWrapping="Wrap" HorizontalAlignment="Center" Foreground="{DynamicResource ColorBrush3}" Margin="0,12,0,0" />`
 	} else {
 		count := v.noteFail(ip)
@@ -314,7 +314,7 @@ func (v *Verifier) submitXAML(ip, lang, base, token, answer string) string {
 		if count >= verifyFailForCF && v.cfConfigured() {
 			return v.cfCard(ip, base, lang)
 		}
-		bottom = `<local:MyIconTextButton Height="36" Margin="0,16,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.refresh")) + `" LogoScale="0.85" Logo="` + escapeAttr(refreshIcon) + `" EventType="刷新页面" EventData="-" />`
+		bottom = `<local:MyIconTextButton Height="36" Margin="0,16,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.refresh")) + `" EventType="刷新页面" EventData="-" />`
 		left := verifyFailForCF - count
 		if left < 0 {
 			left = 0
@@ -330,7 +330,7 @@ func (v *Verifier) submitXAML(ip, lang, base, token, answer string) string {
 		fmtStr := "{Binding Path=Text,ElementName=vsb,StringFormat='{}" + base + "/verify_submit.json?t=" + token + "&q={0}'}"
 		extra = `<local:MyImage Source="` + escapeURL(image) + `" Height="76" HorizontalAlignment="Center" Margin="0,12,0,0" />` +
 			`<Border Margin="0,12,0,0" Height="38" Width="260" HorizontalAlignment="Center" Background="{DynamicResource ColorBrush7}" CornerRadius="5"><local:MyTextBox x:Name="vsb" Height="38" Margin="10,0" HintText="` + escapeAttr(t("verify.img_hint")) + `" Foreground="{DynamicResource ColorBrush2}" VerticalAlignment="Center" /></Border>` +
-			`<local:MyIconTextButton Height="40" Margin="0,12,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.submit")) + `" LogoScale="0.85" ColorType="Highlight" Logo="` + escapeAttr(refreshIcon) + `" EventType="打开帮助" EventData="` + escapeURL(fmtStr) + `" />`
+			`<local:MyIconTextButton Height="40" Margin="0,12,0,0" HorizontalAlignment="Center" Text="` + escapeAttr(t("verify.submit")) + `" ColorType="Highlight" EventType="打开帮助" EventData="` + escapeURL(fmtStr) + `" />`
 	}
 	return `<local:MyCard Title="` + escapeAttr(t("verify.title")) + `" CanSwap="False"><StackPanel Margin="25,40,23,20"><TextBlock Text="` + escapeAttr(head) + `" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center" Foreground="#FF000000" /><TextBlock Text="` + escapeAttr(desc) + `" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource ColorBrush3}" Margin="0,10,0,0" />` + extra + bottom + `</StackPanel></local:MyCard>`
 }
