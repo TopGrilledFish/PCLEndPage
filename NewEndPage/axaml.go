@@ -29,6 +29,10 @@ var (
 	axLocalRE     = regexp.MustCompile(`(</?)local:`)
 	axLogoRE      = regexp.MustCompile(`\s+Logo="([^"]*)"`)
 	axLogoScaleRE = regexp.MustCompile(`\s+LogoScale="[^"]*"`)
+	// 几何 Logo 在 PCL-CE 的 AXAML 校验器里会被当成非法资源地址，改用它内置的
+	// SVG 图标名（lucide/xxx）——AXAML 加载器对 SvgIcon 不做地址检查。
+	axButtonLogoRE = regexp.MustCompile(`(?s)<pclcontrols:MyIconTextButton\b[^>]*?Logo="M[^"]*"[^>]*?/>`)
+	axButtonTextRE = regexp.MustCompile(`Text="([^"]*)"`)
 	// PCL-CE 的 AXAML 校验器只允许 DynamicResource/StaticResource/TemplateBinding，
 	// 旧版页面里「输入框 Text 拼进 EventData」的 {Binding} 在 AXAML 下必须去掉：
 	// 这里把 StringFormat 里的静态 URL 提出来（保留功能入口，丢掉输入参数）。
@@ -56,7 +60,7 @@ func toAXAML(xaml string) string {
 	text = axTriggersRE.ReplaceAllString(text, "")
 	text = axEffectRE.ReplaceAllString(text, "")
 	text = axLocalRE.ReplaceAllString(text, "${1}pclcontrols:")
-	text = stripGeomLogos(text)
+	text = replaceGeomLogos(text)
 	text = axLogoScaleRE.ReplaceAllString(text, "")
 	text = axBindingEventDataRE.ReplaceAllString(text, `EventData="$1"`)
 	text = axAnyBindingEventDataRE.ReplaceAllString(text, `EventData=""`)
@@ -94,17 +98,39 @@ func rootOpenTagEnd(s string) int {
 	return -1
 }
 
-// stripGeomLogos 删掉几何路径形式的 Logo（PCL-CE 的 AXAML 校验器不接受），
-// 图片地址形式的 Logo 原样保留。
-func stripGeomLogos(text string) string {
-	return axLogoRE.ReplaceAllStringFunc(text, func(match string) string {
-		value := strings.ToLower(strings.TrimSpace(axLogoRE.FindStringSubmatch(match)[1]))
-		if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") ||
-			strings.HasPrefix(value, "avares://") || strings.HasPrefix(value, "pack://") {
-			return match
+// replaceGeomLogos 把按钮上的几何 Logo 换成 PCL-CE 内置 SVG 图标名（lucide/xxx）。
+func replaceGeomLogos(text string) string {
+	return axButtonLogoRE.ReplaceAllStringFunc(text, func(button string) string {
+		label := ""
+		if m := axButtonTextRE.FindStringSubmatch(button); m != nil {
+			label = m[1]
 		}
-		return ""
+		icon := iconForText(label)
+		button = axLogoScaleRE.ReplaceAllString(button, "")
+		return axLogoRE.ReplaceAllString(button, ` SvgIcon="lucide/`+icon+`"`)
 	})
+}
+
+var axIconMap = []struct{ key, icon string }{
+	{"内存优化", "gauge"},
+	{"刷新数据", "refresh-cw"},
+	{"刷新页面", "refresh-cw"},
+	{"AI 分析", "sparkles"},
+	{"计算器", "grid-2x2"},
+	{"个性设置", "settings"},
+	{"访问浏览", "earth"},
+	{"打开仓库", "box"},
+	{"打开原仓库", "link-2"},
+	{"赞助", "heart"},
+}
+
+func iconForText(text string) string {
+	for _, item := range axIconMap {
+		if strings.Contains(text, item.key) {
+			return item.icon
+		}
+	}
+	return "arrow-right"
 }
 
 // axamlOK 粗略确认这份 AXAML 具备 PCL-CE 识别与渲染所需的条件。

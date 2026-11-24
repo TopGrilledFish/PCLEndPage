@@ -85,7 +85,6 @@ type Config struct {
 	VerifyEnabled       bool       `json:"verify_enabled"`
 	VerifyDays          int        `json:"verify_days"`
 	VerifyFile          string     `json:"verify_file"`
-	PrefFile            string     `json:"pref_file"`
 	AdminToken          string     `json:"admin_token"`
 	AdminTOTPSecret     string     `json:"admin_totp_secret"`
 	AdminSessionHours   int        `json:"admin_session_hours"`
@@ -120,7 +119,6 @@ func loadConfig(path string) (*Config, error) {
 		VerifyEnabled:       true,
 		VerifyDays:          7,
 		VerifyFile:          "/root/PCLEndPage/var/verify.json",
-		PrefFile:            "pref.json",
 		AdminSessionHours:   8,
 		LegacyLogFile:       "/root/PCLEndPage/var/server.log",
 		LogFile:             "var/server.log",
@@ -180,14 +178,12 @@ type Server struct {
 	saying        *SayingService
 	lunar         *LunarService
 	proxy         *httputil.ReverseProxy
-	pref          *PrefStore
 	admin         *Admin
 	newstats      *NewSiteStats
-	pclce         *PCLCEStore
 	started       time.Time
 }
 
-var datedRE = regexp.MustCompile(`^/(\d{4})/(\d{1,2})/(\d{1,2})(?:/(version|Custom\.xaml\.version|Custom\.xaml\.ini|Custom\.xaml))?/?$`)
+var datedRE = regexp.MustCompile(`^/(\d{4})/(\d{1,2})/(\d{1,2})(?:/(version|Custom\.xaml\.version|Custom\.xaml\.ini|Custom\.xaml|Custom-CE\.xaml|Custom-CE\.xaml\.ini))?/?$`)
 
 const (
 	markPrefix  = "/mark"
@@ -228,10 +224,8 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 	s.weather = newWeatherService(cfg, s.uapi, s.i18n)
 	s.saying = newSayingService(cfg, s.uapi, dataDir, s.text)
 	s.lunar = newLunarService(cfg, s.uapi, dataDir, s.cal)
-	s.pref = newPrefStore(filepath.Join(dataDir, cfg.PrefFile))
 	s.newstats = newNewSiteStats(filepath.Join(dataDir, "newstats.json"))
-	s.pclce = newPCLCEStore(time.Hour)
-	s.proxy = newLegacyProxy(cfg.LegacyBackend, s)
+	s.proxy = newLegacyProxy(cfg.LegacyBackend)
 	s.proxy.ModifyResponse = s.modifyLegacyResponse
 	s.admin = newAdmin(cfg, cfgPath, s)
 	return s, nil
@@ -248,86 +242,61 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	p := r.URL.Path
 	ip := clientIP(r, s.cfg)
-	isNew := s.pref.get(ip)
-	if isNew {
-		w.Header().Set("X-New-EndPage", "1")
-	} else {
-		w.Header().Set("X-New-EndPage", "0")
-	}
 	switch {
-	case p == "/_new":
-		s.handlePref(w, r, true)
-		return
-	case p == "/_old":
-		s.handlePref(w, r, false)
-		return
 	case p == "/" || p == "/Custom.xaml":
-		s.routeHome(w, r, false, ip, isNew)
+		s.routeHome(w, r, false, false, ip)
+	case p == "/Custom-CE.xaml":
+		s.routeHome(w, r, false, true, ip)
 	case p == markPrefix || p == markPrefix+"/":
-		s.routeHome(w, r, true, ip, isNew)
+		s.routeHome(w, r, true, false, ip)
 	case p == markPrefix+"/Custom.xaml":
-		s.routeHome(w, r, true, ip, isNew)
-	case p == "/Custom.xaml.version" || p == "/version":
+		s.routeHome(w, r, true, false, ip)
+	case p == markPrefix+"/Custom-CE.xaml":
+		s.routeHome(w, r, true, true, ip)
+	case p == "/Custom.xaml.version" || p == "/version" ||
+		p == "/Custom.xaml.ini" || p == "/Custom-CE.xaml.ini":
 		writeNoStore(w, s.staticVersion())
-	case p == "/Custom.xaml.ini":
-		// PCL-CE 的版本检查走 .xaml.ini；顺手记下这个 IP，之后主页请求给 AXAML。
-		// 返回毫秒时间戳（每次都变）而不是内容哈希：PCL-CE 的版本号不变时会用
-		// 本地缓存的上一份主页（可能是 WPF 格式），强制它重新拉取的代价很小。
-		s.pclce.mark(ip)
-		writeNoStore(w, strconv.FormatInt(time.Now().UnixMilli(), 10))
-	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version":
+	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version" ||
+		p == markPrefix+"/Custom.xaml.ini" || p == markPrefix+"/Custom-CE.xaml.ini":
 		writeNoStore(w, s.staticVersion())
-	case p == markPrefix+"/Custom.xaml.ini":
-		s.pclce.mark(ip)
-		writeNoStore(w, strconv.FormatInt(time.Now().UnixMilli(), 10))
 	case p == "/healthz":
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", noStore)
 		io.WriteString(w, `{"ok":true,"service":"newendpage","uptime":`+
 			strconv.FormatInt(int64(time.Since(s.started).Seconds()), 10)+`}`)
 	case datedRE.MatchString(p):
 		m := datedRE.FindStringSubmatch(p)
-		if m[4] != "" && m[4] != "Custom.xaml" {
-			if m[4] == "Custom.xaml.ini" {
-				s.pclce.mark(ip)
-			}
+		if m[4] != "" && m[4] != "Custom.xaml" && m[4] != "Custom-CE.xaml" {
 			writeNoStore(w, datedVersion(m[1], m[2], m[3]))
 			return
 		}
-		s.routeHome(w, r, false, ip, isNew)
+		s.routeHome(w, r, false, m[4] == "Custom-CE.xaml", ip)
 	default:
 		s.proxy.ServeHTTP(w, r)
 	}
 }
 
-// routeHome 处理主页类请求：主动选择了新版且已通过验证才用新版渲染，
-// 否则交给旧版服务（未选择新版 = 旧版主页；已选择未验证 = 旧版验证卡）。
-func (s *Server) routeHome(w http.ResponseWriter, r *http.Request, marker bool, ip string, isNew bool) {
-	if isNew && s.verifyOK(ip) {
+// routeHome 处理主页类请求：通过访问验证后用新版渲染，否则交给旧版
+// （未验证时旧版返回看图验证页；CE 请求会带上 X-PCLCE 让旧版输出 AXAML）。
+// axaml 只由请求路径决定：/Custom-CE.xaml 系列给 PCL-CE，其余给 PCL2 原版。
+func (s *Server) routeHome(w http.ResponseWriter, r *http.Request, marker, axaml bool, ip string) {
+	if !s.cfg.VerifyEnabled || s.verifyOK(ip) {
 		s.newstats.hit(ip)
-		s.handleHome(w, r, marker)
+		s.handleHome(w, r, marker, axaml)
 		return
 	}
-	// 该 IP 刚请求过 .xaml.ini，说明是 PCL-CE：让旧版渲染 AXAML（旧版按
-	// X-PCLCE 头判断），免得它先交给旧版、又被旧版返回 WPF。
-	if s.pclce.seen(ip) {
-		r.Header.Set("X-PCLCE", "1")
+	// 旧版只认识 /Custom.xaml；CE 请求转成它，并让旧版把验证页输出为 AXAML。
+	if axaml {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/Custom.xaml"
+		if marker {
+			r2.URL.Path = markPrefix + "/Custom.xaml"
+		}
+		r2.Header.Set("X-PCLCE", "1")
+		s.proxy.ServeHTTP(w, r2)
+		return
 	}
 	s.proxy.ServeHTTP(w, r)
-}
-
-// handlePref 记录/撤销某个 IP 的新版偏好，并返回一个可关闭的提示页。
-func (s *Server) handlePref(w http.ResponseWriter, r *http.Request, preferNew bool) {
-	ip := clientIP(r, s.cfg)
-	s.pref.set(ip, preferNew)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", noStore)
-	title, msg := "已返回旧版主页", "之后访问主页将使用旧版页面，顶部不再显示新版测试站点横条。"
-	if preferNew {
-		title, msg = "已切换到新版测试站点", "之后访问主页将使用新版页面（顶部带黄色横条）；如尚未通过访问验证，会先显示验证页面。"
-	}
-	io.WriteString(w, "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>"+title+
-		"</title></head><body style=\"font-family:sans-serif;background:#fdf6e3;color:#333;text-align:center;padding:80px 20px;\"><h2>"+title+
-		"</h2><p>"+msg+"</p><p style=\"color:#888;\">本页面可以关闭，回到 PCL 刷新主页即可生效。</p></body></html>")
 }
 
 func writeNoStore(w http.ResponseWriter, body string) {
@@ -351,7 +320,7 @@ func datedVersion(year, month, day string) string {
 	return fmt.Sprintf("%04d%02d%02d", y, m, d)
 }
 
-func (s *Server) handleHome(w http.ResponseWriter, r *http.Request, marker bool) {
+func (s *Server) handleHome(w http.ResponseWriter, r *http.Request, marker, wantAXAML bool) {
 	ip := clientIP(r, s.cfg)
 	origin := requestOrigin(r)
 	body, err := s.buildHome(ip, origin, marker)
@@ -360,12 +329,14 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request, marker bool)
 		http.Error(w, "homepage render failed", http.StatusInternalServerError)
 		return
 	}
-	// PCL-CE（UA 带 PCLCE/，或刚请求过 .xaml.ini）只认 Avalonia 格式的主页；
-	// 转换不成功时退回 WPF XAML，让它走兼容渲染器，而不是给它一份必炸的 AXAML。
-	if isPCLCE(r.UserAgent()) || s.pclce.seen(ip) {
+	// /Custom-CE.xaml 系列固定给 PCL-CE 的 Avalonia 渲染器：WPF 主页转 AXAML，
+	// 转换失败时仍返回 WPF（PCL-CE 兼容渲染器能显示，只是事件不可用）。
+	if wantAXAML {
 		if ax := toAXAML(body); axamlOK(ax) {
 			body = ax
 			w.Header().Set("X-Axaml", "1")
+		} else {
+			logWarn("[Home] AXAML 转换失败，退回 WPF XAML")
 		}
 	}
 	w.Header().Set("Content-Type", xamlCT)
@@ -410,7 +381,7 @@ func requestOrigin(r *http.Request) string {
 	return proto + "://" + r.Host
 }
 
-func newLegacyProxy(backend string, s *Server) *httputil.ReverseProxy {
+func newLegacyProxy(backend string) *httputil.ReverseProxy {
 	target, _ := url.Parse("http://" + backend)
 	p := httputil.NewSingleHostReverseProxy(target)
 	orig := p.Director
@@ -429,11 +400,6 @@ func newLegacyProxy(backend string, s *Server) *httputil.ReverseProxy {
 		if req.Header.Get("X-Forwarded-Proto") == "" {
 			req.Header.Set("X-Forwarded-Proto", "https")
 		}
-		// 让旧版把这一页转成 AXAML：PCL-CE 走兼容渲染器虽然能显示，但旧版页面里
-		// 的 {Binding}（验证页）在兼容渲染器里不求值，提交按钮会打不开。
-		if s != nil && (isPCLCE(req.UserAgent()) || (s.pclce != nil && s.pclce.seen(ip))) {
-			req.Header.Set("X-PCLCE", "1")
-		}
 	}
 	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		logWarn("[Proxy] 旧服务不可用：%v", err)
@@ -442,9 +408,9 @@ func newLegacyProxy(backend string, s *Server) *httputil.ReverseProxy {
 	return p
 }
 
-// modifyLegacyResponse 只对「主动选择新版」的 IP 注入新版标识：
-// XAML 页面在内容区顶部插入黄色横条，HTML 页面（/verify 等）插入固定横幅；
-// 设置页无论哪个版本都插入切换按钮；/admin 由 nginx sub_filter 处理，跳过。
+// modifyLegacyResponse 给旧版返回的页面注入新版标识：
+// XAML 页面在内容区顶部插入黄色横条（AXAML 页面用 pclcontrols: 前缀），
+// 设置页再切成双列；HTML 页面（/verify 等）插入固定横幅。
 func (s *Server) modifyLegacyResponse(resp *http.Response) error {
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" {
 		return nil
@@ -459,13 +425,6 @@ func (s *Server) modifyLegacyResponse(resp *http.Response) error {
 	if !xamlPage && !htmlPage {
 		return nil
 	}
-	isNew := s.pref.get(clientIP(resp.Request, s.cfg))
-	if xamlPage && !isNew && p != "/settings_page.xaml" {
-		return nil
-	}
-	if htmlPage && !isNew {
-		return nil
-	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return err
@@ -474,11 +433,8 @@ func (s *Server) modifyLegacyResponse(resp *http.Response) error {
 	if xamlPage {
 		if p == "/settings_page.xaml" {
 			body = injectTwoColumn(body)
-			body = injectPrefSwitch(body, s.cfg.BaseURL, isNew)
 		}
-		if isNew {
-			body = injectNewSiteHint(body)
-		}
+		body = injectNewSiteHint(body)
 	} else {
 		body = injectHTMLBanner(body)
 	}
@@ -693,33 +649,6 @@ func elementEnd(s string, start int) int {
 		i = gt + 1
 	}
 	return len(s)
-}
-
-// injectPrefSwitch 在个性设置页插入「切换到新版 / 返回旧版」按钮。
-// 按钮走「打开网页」，由系统浏览器访问 /_new 或 /_old（与 PCL 同 IP，立即生效）。
-// 不能用「打开帮助」：该事件要求 EventData 指向 .json 帮助文件，否则 PCL 报错。
-func injectPrefSwitch(body []byte, baseURL string, preferNew bool) []byte {
-	text := "切换到新版测试站点"
-	target := baseURL + "/_new"
-	if preferNew {
-		text = "返回旧版主页"
-		target = baseURL + "/_old"
-	}
-	btn := `<local:MyIconTextButton Height="36" Margin="0,0,0,12" HorizontalAlignment="Center" Text="` +
-		escapeAttr(text) + `" ColorType="Highlight" LogoScale="0.75" Logo="M192 448 H640 V320 L896 512 L640 704 V576 H192 Z M832 576 H384 V704 L128 512 L384 320 V448 H832 Z" EventType="打开网页" EventData="` + escapeAttr(target) + `" />`
-	if strings.Contains(string(body), "xmlns:pclcontrols") {
-		btn = strings.Replace(btn, "<local:MyIconTextButton", "<pclcontrols:MyIconTextButton", 1)
-		btn = strings.Replace(btn, "</local:MyIconTextButton", "</pclcontrols:MyIconTextButton", 1)
-		// AXAML 校验器不接受几何 Logo，用图片地址形式保留一个图标更稳妥；
-		// 直接去掉 Logo 与 LogoScale，避免 pclcontrols 版按钮校验失败。
-		btn = strings.Replace(btn, ` LogoScale="0.75" Logo="M192 448 H640 V320 L896 512 L640 704 V576 H192 Z M832 576 H384 V704 L128 512 L384 320 V448 H832 Z"`, "", 1)
-	}
-	pos := stackPanelInsertPos(string(body))
-	if pos < 0 {
-		return body
-	}
-	s := string(body)
-	return []byte(s[:pos] + "\n    " + btn + s[pos:])
 }
 
 // injectHTMLBanner 在旧版生成的 HTML 页面（如 /verify 访问验证页）</body> 前插入新版横幅。

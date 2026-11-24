@@ -46,6 +46,25 @@ _ANY_BINDING_EVENTDATA_RE = re.compile(r'EventData="\{[^"]*?\}"')
 # 会把中文事件名直接塞进 enum 属性而抛 InvalidOperationException。WPF 渲染器对
 # 这类控件是「跳过」，AXAML 里改成禁用按钮，视觉上等价。
 _UNSUPPORTED_EVENTTYPE_RE = re.compile(r'EventType="(?:内存优化|加入房间|检查更新)"')
+# 几何 Logo 在 PCL-CE 的 AXAML 校验器里会被当成非法资源地址，改用它内置的
+# SVG 图标名（lucide/xxx）——AXAML 加载器对 SvgIcon 不做地址检查。
+_BUTTON_LOGO_RE = re.compile(
+    r'<pclcontrols:MyIconTextButton\b[^>]*?Logo="M[^"]*"[^>]*?/>', re.S
+)
+_BUTTON_TEXT_RE = re.compile(r'Text="([^"]*)"')
+_ICON_MAP = (
+    ("内存优化", "gauge"),
+    ("刷新数据", "refresh-cw"),
+    ("刷新页面", "refresh-cw"),
+    ("AI 分析", "sparkles"),
+    ("计算器", "grid-2x2"),
+    ("个性设置", "settings"),
+    ("访问浏览", "earth"),
+    ("打开仓库", "box"),
+    ("打开原仓库", "link-2"),
+    ("赞助", "heart"),
+)
+_ICON_DEFAULT = "arrow-right"
 
 _FORBIDDEN_ELEMENTS = {
     "window", "toplevel", "application", "webview", "nativewebview",
@@ -79,7 +98,7 @@ def to_axaml(xaml: str) -> str:
     text = _EFFECT_RE.sub("", text)
 
     text = _LOCAL_PREFIX_RE.sub(r"\1pclcontrols:", text)
-    text = _GEOM_LOGO_RE.sub("", text)
+    text = _replace_geom_logos(text)
     text = _LOGO_SCALE_RE.sub("", text)
     text = _BINDING_EVENTDATA_RE.sub(r'EventData="\1"', text)
     text = _ANY_BINDING_EVENTDATA_RE.sub('EventData=""', text)
@@ -98,6 +117,25 @@ def to_axaml(xaml: str) -> str:
 
 
 _ROOT_ELEMENT_RE = re.compile(r"<([A-Za-z][\w.:-]*)")
+
+
+def _replace_geom_logos(text: str) -> str:
+    """把按钮上的几何 Logo 换成 PCL-CE 内置 SVG 图标名（lucide/xxx）。"""
+    def repl(match: re.Match[str]) -> str:
+        button = match.group(0)
+        text_match = _BUTTON_TEXT_RE.search(button)
+        icon = _icon_for_text(text_match.group(1) if text_match else "")
+        button = re.sub(r'\s+LogoScale="[^"]*"', "", button)
+        return re.sub(r'\s+Logo="M[^"]*"', ' SvgIcon="lucide/%s"' % icon, button, count=1)
+
+    return _BUTTON_LOGO_RE.sub(repl, text)
+
+
+def _icon_for_text(text: str) -> str:
+    for key, icon in _ICON_MAP:
+        if key in text:
+            return icon
+    return _ICON_DEFAULT
 
 
 def _root_open_tag_end(s: str) -> int | None:

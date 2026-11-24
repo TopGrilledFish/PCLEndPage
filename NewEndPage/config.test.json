@@ -1,10 +1,16 @@
 {
-  "base_url": "",
-  "host": "127.0.0.1",
-  "port": 8778,
-  "enable_weather": false,
+  "admin_session_hours": 8,
+  "admin_token": "test123",
+  "admin_totp_secret": "VFMAVWQCPPP5UT4BN7TCNM4EEBSAEBY2",
+  "base_url": "http://127.0.0.1:8778",
   "enable_geo": false,
   "enable_lunar": true,
   "enable_saying": false,
-  "legacy_backend": "127.0.0.1:8787"
+  "enable_weather": false,
+  "host": "127.0.0.1",
+  "legacy_backend": "127.0.0.1:8787",
+  "legacy_log_file": "F:\\EndPage\\pcl-homepage-py\\var\\server.log",
+  "port": 8778,
+  "pref_file": "pref.test.json",
+  "verify_enabled": false
 }

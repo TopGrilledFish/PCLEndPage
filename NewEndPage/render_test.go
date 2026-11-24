@@ -30,7 +30,6 @@ func newTestServer(t *testing.T) *Server {
 		GeoCacheHours:       24,
 		WeatherCacheSeconds: 3600,
 		LegacyBackend:       "127.0.0.1:8787",
-		PrefFile:            "pref.json",
 		VerifyFile:          filepath.Join(dir, "verify.json"),
 		AdminToken:          "test",
 		AdminSessionHours:   1,
