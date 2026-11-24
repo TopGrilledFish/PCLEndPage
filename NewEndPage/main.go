@@ -317,7 +317,9 @@ func writeNoStore(w http.ResponseWriter, body string) {
 // staticVersion 返回固定地址的版本号：取模板内容哈希，模板不变则版本号稳定，
 // PCL 不会每次启动都判定“有新版本”而重新下载主页（旧版用 Custom.xaml 的 mtime）。
 // 尾部的修订号让“只改了 AXAML 转换层、模板没动”的发布也能让 PCL 重新拉取主页。
-const axamlRenderRevision = "\n<!-- axaml-render-2 -->"
+// axamlRenderRevision 计入版本号：AXAML 转换逻辑改变（例如去掉 Styles）时
+// 必须 bump，否则 PCL-CE 认为版本号没变，继续用缓存里的旧页面。
+const axamlRenderRevision = "\n<!-- axaml-render-3 -->"
 
 func (s *Server) staticVersion() string {
 	sum := crc32.ChecksumIEEE([]byte(s.template + axamlRenderRevision))
