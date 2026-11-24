@@ -314,6 +314,21 @@ func (a *AI) resetKeys(ip string) int {
 	return count
 }
 
+// resetAI 对应旧版 ai.reset(scope, ip)：quota 清额度、jobs 清任务、keys 清自带密钥。
+func (a *AI) resetAI(scope, ip string) map[string]any {
+	result := map[string]any{}
+	if scope == "quota" || scope == "all" {
+		result["quota"] = a.quota.reset("", ip)
+	}
+	if scope == "jobs" || scope == "all" {
+		result["jobs"] = a.resetJobs(ip)
+	}
+	if scope == "keys" || scope == "all" {
+		result["keys"] = a.resetKeys(ip)
+	}
+	return result
+}
+
 // ---------- 额度 ----------
 
 func (a *AI) quotaState(ip, lang string) map[string]any {

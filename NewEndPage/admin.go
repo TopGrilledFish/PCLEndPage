@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -388,7 +389,7 @@ func (a *Admin) serveAPI(w http.ResponseWriter, r *http.Request) {
 	case "state":
 		a.apiState(w, r)
 	case "stats":
-		a.proxyLegacy(w, r, "stats", nil)
+		a.apiStats(w)
 	case "info":
 		a.apiInfo(w)
 	case "set", "set_batch", "delete":
@@ -399,8 +400,16 @@ func (a *Admin) serveAPI(w http.ResponseWriter, r *http.Request) {
 		a.apiWhitelist(w, raw)
 	case "maintenance":
 		a.apiMaintenance(w, raw)
-	case "ai_reset", "ai_log", "ai_log_clear", "regenerate", "doctor":
-		a.proxyLegacy(w, r, action, raw)
+	case "ai_reset":
+		a.apiAIReset(w, raw)
+	case "ai_log":
+		a.apiAILog(w, r)
+	case "ai_log_clear":
+		a.apiAILogClear(w)
+	case "regenerate":
+		writeJSON(w, 200, map[string]any{"ok": true})
+	case "doctor":
+		a.apiDoctor(w)
 	case "preview":
 		a.apiPreview(w)
 	case "log":
@@ -434,25 +443,9 @@ func (a *Admin) apiState(w http.ResponseWriter, r *http.Request) {
 		hits, uniques := a.srv.newstats.snapshot()
 		state["new_site"] = map[string]any{"today_hits": hits, "unique_ips": uniques}
 	}
-	// stats 与 ai 状态尽量从旧版取，失败就给空。
-	if resp, err := a.legacy.do(a.cfg.AdminToken, http.MethodGet, "/admin/api/stats", "", nil); err == nil {
-		defer resp.Body.Close()
-		var v map[string]any
-		if json.NewDecoder(resp.Body).Decode(&v) == nil {
-			if s, ok := v["stats"]; ok {
-				state["stats"] = s
-			}
-		}
-	}
-	if resp, err := a.legacy.do(a.cfg.AdminToken, http.MethodGet, "/admin/api/state", "", nil); err == nil {
-		defer resp.Body.Close()
-		var v map[string]any
-		if json.NewDecoder(resp.Body).Decode(&v) == nil {
-			if ai, ok := v["ai"]; ok {
-				state["ai"] = ai
-			}
-		}
-	}
+	// stats 与 ai 状态现在由新版直接提供（旧版下线后不再可用）。
+	state["stats"] = a.statsMap()
+	state["ai"] = a.aiState()
 	writeJSON(w, 200, state)
 }
 
@@ -486,6 +479,143 @@ func (a *Admin) info() map[string]any {
 
 func (a *Admin) apiInfo(w http.ResponseWriter) {
 	writeJSON(w, 200, map[string]any{"ok": true, "info": a.info()})
+}
+
+// ---- 统计 / AI / 体检（新版自营，不再依赖旧版 API）----
+
+func (a *Admin) statsMap() map[string]any {
+	if a.srv == nil || a.srv.stats == nil {
+		return map[string]any{}
+	}
+	sum := a.srv.stats.summary(7)
+	return map[string]any{
+		"today":          sum.Today,
+		"unique":         sum.Unique,
+		"week":           sum.Total,
+		"foreign":        sum.Foreign,
+		"domestic":       sum.Domestic,
+		"total":          sum.Total,
+		"countries":      sum.Countries,
+		"regions":        sum.Regions,
+		"regions_cn":     sum.RegionsCN,
+		"regions_abroad": sum.RegionsAbroad,
+		"provinces":      sum.Provinces,
+		"hosts":          sum.Hosts,
+		"recent":         sum.Recent,
+		"trend":          sum.Trend,
+	}
+}
+
+func (a *Admin) apiStats(w http.ResponseWriter) {
+	writeJSON(w, 200, map[string]any{"ok": true, "stats": a.statsMap()})
+}
+
+func (a *Admin) aiState() map[string]any {
+	if a.srv == nil || a.srv.ai == nil {
+		return map[string]any{}
+	}
+	state := a.srv.ai.quotaState("127.0.0.1", "zh-hans")
+	state["own_key"] = "未配置"
+	if len(a.srv.ai.ownKey("127.0.0.1")) > 0 {
+		state["own_key"] = "已配置"
+	}
+	return state
+}
+
+func (a *Admin) apiAIReset(w http.ResponseWriter, raw []byte) {
+	if a.srv == nil || a.srv.ai == nil {
+		writeJSON(w, 400, map[string]any{"ok": false, "error": "ai_disabled"})
+		return
+	}
+	var req struct {
+		Scope string `json:"scope"`
+		IP    string `json:"ip"`
+	}
+	json.Unmarshal(raw, &req)
+	if req.Scope == "" {
+		req.Scope = "all"
+	}
+	if req.Scope != "quota" && req.Scope != "jobs" && req.Scope != "keys" && req.Scope != "all" {
+		writeJSON(w, 400, map[string]any{"ok": false, "error": "bad_scope"})
+		return
+	}
+	result := a.srv.ai.resetAI(req.Scope, req.IP)
+	writeJSON(w, 200, map[string]any{"ok": true, "scope": req.Scope, "result": result})
+}
+
+func (a *Admin) apiAILog(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	entries := a.srv.ai.recentAnalyses(limit)
+	writeJSON(w, 200, map[string]any{
+		"ok": true, "entries": entries, "count": len(entries),
+		"file": filepath.Join(a.srv.dataDir, "ai_log.json"), "max": aiLogMax,
+	})
+}
+
+func (a *Admin) apiAILogClear(w http.ResponseWriter) {
+	removed := len(a.srv.ai.recentAnalyses(aiLogMax))
+	a.srv.ai.clearAnalyses()
+	writeJSON(w, 200, map[string]any{"ok": true, "removed": removed})
+}
+
+func (a *Admin) apiDoctor(w http.ResponseWriter) {
+	type check struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		Detail string `json:"detail"`
+	}
+	checks := []check{}
+	okCount, warnCount, failCount := 0, 0, 0
+	add := func(name, status, detail string) {
+		checks = append(checks, check{Name: name, Status: status, Detail: detail})
+		switch status {
+		case "ok":
+			okCount++
+		case "warn":
+			warnCount++
+		default:
+			failCount++
+		}
+	}
+	if raw, err := os.ReadFile(a.cfgPath); err == nil && len(raw) > 0 {
+		add("配置文件", "ok", a.cfgPath)
+	} else {
+		add("配置文件", "fail", "读取失败")
+	}
+	if a.cfg.AdminToken == "" || a.cfg.AdminToken == "admin" {
+		add("后台口令", "warn", "未设置或仍为默认值")
+	} else {
+		add("后台口令", "ok", "已设置")
+	}
+	for _, item := range []struct{ name, path string }{
+		{"验证数据", a.cfg.VerifyFile},
+		{"访问统计", filepath.Join(a.srv.dataDir, "visits.json")},
+		{"store 数据", a.cfg.StoreFile},
+	} {
+		if _, err := os.Stat(item.path); err == nil {
+			add(item.name, "ok", item.path)
+		} else {
+			add(item.name, "warn", "未创建："+item.path)
+		}
+	}
+	if st, err := os.Stat(a.cfg.StaticDir); err == nil && st.IsDir() {
+		add("静态资源", "ok", a.cfg.StaticDir)
+	} else {
+		add("静态资源", "warn", "目录不存在："+a.cfg.StaticDir)
+	}
+	if err := os.MkdirAll(filepath.Dir(a.cfg.LogFile), 0o755); err == nil {
+		add("日志目录", "ok", filepath.Dir(a.cfg.LogFile))
+	} else {
+		add("日志目录", "fail", err.Error())
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "report": map[string]any{
+		"ok": okCount, "warn": warnCount, "fail": failCount, "took_ms": 0, "checks": checks,
+	}, "cached": false, "at": time.Now().Unix()})
 }
 
 // ---- store.json ----
