@@ -58,14 +58,50 @@ def _bot_xaml(ip: str) -> str:
                                t("fallback.bot_msg", lang), lang=lang)
 
 
-def _maybe_axaml(user_agent: str, body: str) -> str:
+_PCLCE_LOCK = threading.Lock()
+_PCLCE_TTL = 3600.0
+_PCLCE_IPS: dict[str, float] = {}
+
+
+def _mark_pclce_ip(ip: str) -> None:
+    """PCL-CE 拉主页前会先请求 ``.xaml.ini`` 版本号，用它标记该 IP。
+
+    有些 PCL-CE 版本（或经过代理/CDN 的请求）到服务端的 UA 里不一定带
+    ``PCLCE/``，光靠 UA 会漏判；``.ini`` 版本端点只有 PCL-CE 会用，PCL2
+    请求的是 ``.xaml.version``，所以这个信号不会误伤普通客户端。
+    """
+    if not ip:
+        return
+    now = time.time()
+    with _PCLCE_LOCK:
+        if len(_PCLCE_IPS) > 4096:
+            for key in [k for k, v in _PCLCE_IPS.items() if v <= now]:
+                _PCLCE_IPS.pop(key, None)
+        _PCLCE_IPS[ip] = now + _PCLCE_TTL
+
+
+def _is_pclce_ip(ip: str) -> bool:
+    if not ip:
+        return False
+    with _PCLCE_LOCK:
+        exp = _PCLCE_IPS.get(ip)
+        if exp and exp > time.time():
+            return True
+        _PCLCE_IPS.pop(ip, None)
+    return False
+
+
+def _maybe_axaml(user_agent: str, body: str, ip: str = "", forced: bool = False) -> str:
     """PCL-CE 返回 AXAML 版主页，普通 PCL2 保持 WPF XAML。
+
+    判定优先看 UA 里的 ``PCLCE/``；再看该 IP 是否刚请求过 ``.xaml.ini``
+    （``_mark_pclce_ip`` 标记），最后看反向代理传来的 ``X-PCLCE`` 头。
 
     转换结果先按 PCL-CE 的 ``AvaloniaXamlValidator`` 规则自查一遍，不通过就
     退回 WPF XAML——宁可让 PCL-CE 走兼容渲染器，也不要给它一份必炸的
     AXAML（客户端只会显示「主页加载失败」，具体原因藏在校验器里）。
     """
-    if not axaml.is_pclce(user_agent):
+    if not (axaml.is_pclce(user_agent) or forced or _is_pclce_ip(ip)):
         return body
     converted = axaml.to_axaml(body)
     problems = axaml.validate(converted)
@@ -600,7 +636,8 @@ class Handler(BaseHTTPRequestHandler):
                 city = _city_of(data.weather_source)
             service.stats.record(marker_ip, country, city, province)
             self._note = "标记版主页：" + data.summary()
-            self._send(Response.xaml(_maybe_axaml(ua, body), vary_ip=True))
+            forced = (self.headers.get("X-PCLCE") or "").strip() == "1"
+            self._send(Response.xaml(_maybe_axaml(ua, body, marker_ip, forced), vary_ip=True))
             return
 
         if self.command not in ("GET", "HEAD"):
@@ -628,6 +665,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         if path in VERSION_PATHS:
+            if path.endswith(".ini"):
+                _mark_pclce_ip(self._log_ip)
             self._note = "版本号（每次返回新时间戳，逼 PCL 重新拉主页）"
             self._send(Response.text(str(int(time.time() * 1000)), headers={
                 "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0, s-maxage=0",
@@ -680,7 +719,8 @@ class Handler(BaseHTTPRequestHandler):
             service.stats.record(ip, country, city, province)
             self._note = data.summary()
             log.debug("[Server] UA=" + (ua[:80] or "（空）") + " origin=" + origin)
-            self._send(Response.xaml(_maybe_axaml(ua, body), vary_ip=True))
+            forced = (self.headers.get("X-PCLCE") or "").strip() == "1"
+            self._send(Response.xaml(_maybe_axaml(ua, body, ip, forced), vary_ip=True))
             return
 
         if path in ("/healthz", "/health"):

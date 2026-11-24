@@ -183,6 +183,7 @@ type Server struct {
 	pref          *PrefStore
 	admin         *Admin
 	newstats      *NewSiteStats
+	pclce         *PCLCEStore
 	started       time.Time
 }
 
@@ -227,6 +228,7 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 	s.lunar = newLunarService(cfg, s.uapi, dataDir, s.cal)
 	s.pref = newPrefStore(filepath.Join(dataDir, cfg.PrefFile))
 	s.newstats = newNewSiteStats(filepath.Join(dataDir, "newstats.json"))
+	s.pclce = newPCLCEStore(time.Hour)
 	s.proxy = newLegacyProxy(cfg.LegacyBackend)
 	s.proxy.ModifyResponse = s.modifyLegacyResponse
 	s.admin = newAdmin(cfg, cfgPath, s)
@@ -263,10 +265,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.routeHome(w, r, true, ip, isNew)
 	case p == markPrefix+"/Custom.xaml":
 		s.routeHome(w, r, true, ip, isNew)
-	case p == "/Custom.xaml.version" || p == "/version" || p == "/Custom.xaml.ini":
+	case p == "/Custom.xaml.version" || p == "/version":
 		writeNoStore(w, s.staticVersion())
-	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version" || p == markPrefix+"/Custom.xaml.ini":
+	case p == "/Custom.xaml.ini":
+		// PCL-CE 的版本检查走 .xaml.ini；顺手记下这个 IP，之后主页请求给 AXAML。
+		// 返回毫秒时间戳（每次都变）而不是内容哈希：PCL-CE 的版本号不变时会用
+		// 本地缓存的上一份主页（可能是 WPF 格式），强制它重新拉取的代价很小。
+		s.pclce.mark(ip)
+		writeNoStore(w, strconv.FormatInt(time.Now().UnixMilli(), 10))
+	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version":
 		writeNoStore(w, s.staticVersion())
+	case p == markPrefix+"/Custom.xaml.ini":
+		s.pclce.mark(ip)
+		writeNoStore(w, strconv.FormatInt(time.Now().UnixMilli(), 10))
 	case p == "/healthz":
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		io.WriteString(w, `{"ok":true,"service":"newendpage","uptime":`+
@@ -274,6 +285,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case datedRE.MatchString(p):
 		m := datedRE.FindStringSubmatch(p)
 		if m[4] != "" && m[4] != "Custom.xaml" {
+			if m[4] == "Custom.xaml.ini" {
+				s.pclce.mark(ip)
+			}
 			writeNoStore(w, datedVersion(m[1], m[2], m[3]))
 			return
 		}
@@ -290,6 +304,11 @@ func (s *Server) routeHome(w http.ResponseWriter, r *http.Request, marker bool, 
 		s.newstats.hit(ip)
 		s.handleHome(w, r, marker)
 		return
+	}
+	// 该 IP 刚请求过 .xaml.ini，说明是 PCL-CE：让旧版渲染 AXAML（旧版按
+	// X-PCLCE 头判断），免得它先交给旧版、又被旧版返回 WPF。
+	if s.pclce.seen(ip) {
+		r.Header.Set("X-PCLCE", "1")
 	}
 	s.proxy.ServeHTTP(w, r)
 }
@@ -339,9 +358,9 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request, marker bool)
 		http.Error(w, "homepage render failed", http.StatusInternalServerError)
 		return
 	}
-	// PCL-CE（UA 带 PCLCE/）只认 Avalonia 格式的主页；转换不成功时退回 WPF
-	// XAML，让它走兼容渲染器，而不是给它一份必炸的 AXAML。
-	if isPCLCE(r.UserAgent()) {
+	// PCL-CE（UA 带 PCLCE/，或刚请求过 .xaml.ini）只认 Avalonia 格式的主页；
+	// 转换不成功时退回 WPF XAML，让它走兼容渲染器，而不是给它一份必炸的 AXAML。
+	if isPCLCE(r.UserAgent()) || s.pclce.seen(ip) {
 		if ax := toAXAML(body); axamlOK(ax) {
 			body = ax
 			w.Header().Set("X-Axaml", "1")
