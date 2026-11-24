@@ -46,6 +46,15 @@ _ANY_BINDING_EVENTDATA_RE = re.compile(r'EventData="\{[^"]*?\}"')
 # 会把中文事件名直接塞进 enum 属性而抛 InvalidOperationException。WPF 渲染器对
 # 这类控件是「跳过」，AXAML 里改成禁用按钮，视觉上等价。
 _UNSUPPORTED_EVENTTYPE_RE = re.compile(r'EventType="(?:内存优化|加入房间|检查更新)"')
+# Avalonia 的 Shape 没有 StrokeDashCap（WPF 有线帽属性），维护页 spinner 用它
+# 会直接报「Unable to resolve suitable regular or attached property」。
+_DASHCAP_RE = re.compile(r'\s+StrokeDashCap="[^"]*"')
+# Avalonia 的 Transform 不是 Control，没有 Name 属性；WPF 模板里的
+# <RotateTransform x:Name="spin"> 在 AXAML 下无法解析，去掉名字即可。
+_TRANSFORM_RE = re.compile(
+    r'<(?:Rotate|Translate|Scale|Skew|Matrix|TransformGroup)Transform\b[^>]*>'
+)
+_TRANSFORM_NAME_RE = re.compile(r'\s+x:Name="[^"]*"')
 # 几何 Logo 在 PCL-CE 的 AXAML 校验器里会被当成非法资源地址，改用它内置的
 # SVG 图标名（lucide/xxx）——AXAML 加载器对 SvgIcon 不做地址检查。
 _BUTTON_LOGO_RE = re.compile(
@@ -103,6 +112,8 @@ def to_axaml(xaml: str) -> str:
     text = _BINDING_EVENTDATA_RE.sub(r'EventData="\1"', text)
     text = _ANY_BINDING_EVENTDATA_RE.sub('EventData=""', text)
     text = _UNSUPPORTED_EVENTTYPE_RE.sub('IsEnabled="False"', text)
+    text = _DASHCAP_RE.sub("", text)
+    text = _TRANSFORM_RE.sub(lambda m: _TRANSFORM_NAME_RE.sub("", m.group(0)), text)
 
     end = _root_open_tag_end(text)
     if end is None:

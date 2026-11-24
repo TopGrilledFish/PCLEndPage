@@ -45,6 +45,13 @@ var (
 	// 会把中文事件名直接塞进 enum 属性而抛 InvalidOperationException。WPF 渲染器对
 	// 这类控件是「跳过」，AXAML 里改成禁用按钮，视觉上等价。
 	axUnsupportedEventTypeRE = regexp.MustCompile(`EventType="(?:内存优化|加入房间|检查更新)"`)
+	// Avalonia 的 Shape 没有 StrokeDashCap（WPF 有线帽属性），维护页 spinner 用它
+	// 会直接报「Unable to resolve suitable regular or attached property」。
+	axDashCapRE = regexp.MustCompile(`\s+StrokeDashCap="[^"]*"`)
+	// Avalonia 的 Transform 不是 Control，没有 Name 属性；WPF 模板里的
+	// <RotateTransform x:Name="spin"> 在 AXAML 下无法解析，去掉名字即可。
+	axTransformRE     = regexp.MustCompile(`<(?:Rotate|Translate|Scale|Skew|Matrix|TransformGroup)Transform\b[^>]*>`)
+	axTransformNameRE = regexp.MustCompile(`\s+x:Name="[^"]*"`)
 )
 
 // isPCLCE 判断请求是否来自 PCL-CE（UA 里带 PCLCE/）。
@@ -69,6 +76,10 @@ func toAXAML(xaml string) string {
 	text = axBindingEventDataRE.ReplaceAllString(text, `EventData="$1"`)
 	text = axAnyBindingEventDataRE.ReplaceAllString(text, `EventData=""`)
 	text = axUnsupportedEventTypeRE.ReplaceAllString(text, `IsEnabled="False"`)
+	text = axDashCapRE.ReplaceAllString(text, "")
+	text = axTransformRE.ReplaceAllStringFunc(text, func(m string) string {
+		return axTransformNameRE.ReplaceAllString(m, "")
+	})
 	idx := rootOpenTagEnd(text)
 	if idx < 0 {
 		return xaml
