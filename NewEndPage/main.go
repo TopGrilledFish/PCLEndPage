@@ -120,11 +120,11 @@ func loadConfig(path string) (*Config, error) {
 		LegacyBackend:       "127.0.0.1:8787",
 		VerifyEnabled:       true,
 		VerifyDays:          7,
-		VerifyFile:          "/root/PCLEndPage/var/verify.json",
+		VerifyFile:          "/root/NewEndPage/var/verify.json",
 		AdminSessionHours:   8,
 		LegacyLogFile:       "/root/PCLEndPage/var/server.log",
 		LogFile:             "var/server.log",
-		StoreFile:           "/root/PCLEndPage/var/store.json",
+		StoreFile:           "/root/NewEndPage/var/store.json",
 		SiteName:            "PCL2 主页",
 		EnableAI:            true,
 		GuardClients:        true,
@@ -183,6 +183,7 @@ type Server struct {
 	admin         *Admin
 	newstats      *NewSiteStats
 	verify        *Verifier
+	profiles      *Profiles
 	dataDir       string
 	started       time.Time
 }
@@ -239,6 +240,7 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 	s.lunar = newLunarService(cfg, s.uapi, dataDir, s.cal)
 	s.newstats = newNewSiteStats(filepath.Join(dataDir, "newstats.json"))
 	s.verify = newVerifier(s)
+	s.profiles = newProfiles(filepath.Join(dataDir, "profiles.json"))
 	s.proxy = newLegacyProxy(cfg.LegacyBackend)
 	s.proxy.ModifyResponse = s.modifyLegacyResponse
 	s.admin = newAdmin(cfg, cfgPath, s)
@@ -257,6 +259,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r, s.cfg)
 	// 访问验证（看图验证码 / Turnstile）完全由新版接管。
 	if s.verify.handle(w, r, ip) {
+		return
+	}
+	// 计算器（12 个工具 + 列表页）由新版接管。
+	if s.handleCalc(w, r, ip) {
 		return
 	}
 	p := r.URL.Path

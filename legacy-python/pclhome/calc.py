@@ -786,7 +786,10 @@ def _example(item: dict, lang: str) -> str:
 
 
 def _preset_block(item: dict, base: str, lang: str) -> str:
-    """快捷值按钮：一行三个，点一下直接出结果。"""
+    """快捷值按钮：文字带上实际输入值，点一下直接出结果。
+
+    列数按本行按钮数走（两个按钮的网页不留空列）。
+    """
     presets = PRESETS.get(item["id"]) or []
     if not presets:
         return ""
@@ -801,11 +804,11 @@ def _preset_block(item: dict, base: str, lang: str) -> str:
             # 枚举（默认 Black / Highlight / Red…），画刷资源名传进去，PCL 解析整份
             # XAML 时就抛 XamlParseException，用户看到的是「加载帮助 XAML 失败」。
             cells.append(help_button(
-                t(label_key, lang), ICON_CALC,
+                t(label_key, lang) + " · " + value, ICON_CALC,
                 base + "/calc_" + item["id"] + ".json?q=" + value,
                 34, column=index, margin="0,0,6,6", color=""))
         rows.append('<Grid><Grid.ColumnDefinitions>'
-                    + '<ColumnDefinition Width="1*" />' * 3
+                    + '<ColumnDefinition Width="1*" />' * len(group)
                     + "</Grid.ColumnDefinitions>" + "".join(cells) + "</Grid>")
     return (heading(t("calc.preset_title", lang), "0,6,0,8")
             + '<StackPanel>' + "".join(rows) + "</StackPanel>")

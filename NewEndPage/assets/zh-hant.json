@@ -517,6 +517,7 @@
   "calc.other": "換個計算器",
   "calc.meta_desc": "Minecraft 常用計算",
   "calc.separator_hint": "僅支持逗號作分割（英文中文都可以）",
+  "calc.ce_input_hint": "PCL CE 相容版暫不支援讀取輸入框，請點擊上方快捷值，或改用 PCL2 官方版。",
   "calc.note": "說明",
   "calc.blocks": "{n} 格",
   "calc.err.numbers": "只能填數字，多個數用逗號隔開。",

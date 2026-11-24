@@ -519,6 +519,7 @@
   "calc.other": "Another calculator",
   "calc.meta_desc": "Common Minecraft calculators",
   "calc.separator_hint": "Comma-separated only (either , or ，)",
+  "calc.ce_input_hint": "The PCL CE compatibility build cannot read the input box. Use the shortcut buttons above, or use official PCL2.",
   "calc.note": "Note",
   "calc.blocks": "{n} blocks",
   "calc.err.numbers": "Numbers only; separate several with commas.",

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // I18n 语言包，只读。支持 zh-hans / en / zh-hant，缺键依次回退。
@@ -34,6 +35,15 @@ func newI18n(zhHans, en, zhHant string) (*I18n, error) {
 // T 取默认语言（zh-hans）文案；缺失返回空串。
 func (i *I18n) T(key string) string {
 	return i.Tlang(key, i.defaultLang)
+}
+
+// Tf 取文案并替换占位符：kv 是成对的 {name} / 值。
+func (i *I18n) Tf(key, lang string, kv ...string) string {
+	text := i.Tlang(key, lang)
+	for idx := 0; idx+1 < len(kv); idx += 2 {
+		text = strings.ReplaceAll(text, "{"+kv[idx]+"}", kv[idx+1])
+	}
+	return text
 }
 
 // Tlang 按语言取文案，缺键回退 en → zh-hans。
