@@ -103,6 +103,8 @@ def _maybe_axaml(user_agent: str, body: str, ip: str = "", forced: bool = False)
     """
     if not (axaml.is_pclce(user_agent) or forced or _is_pclce_ip(ip)):
         return body
+    if "xmlns:pclcontrols" in body:
+        return body
     converted = axaml.to_axaml(body)
     problems = axaml.validate(converted)
     if problems:
@@ -415,6 +417,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, response: Response) -> None:
         body = response.body
+        if (getattr(self, "_axaml_mode", False)
+                and isinstance(body, (bytes, bytearray))
+                and "xml" in (response.content_type or "")):
+            text = body.decode("utf-8", "replace")
+            if "xmlns:pclcontrols" not in text:
+                try:
+                    converted = axaml.to_axaml(text)
+                    problems = axaml.validate(converted)
+                    if problems:
+                        note = "AXAML 未转换：" + "；".join(problems[:2])
+                        self._note = (self._note + " " + note) if self._note else note
+                        log.warn("[Server] " + note)
+                    else:
+                        body = converted.encode("utf-8")
+                        if "X-Axaml" not in response.headers:
+                            response.headers["X-Axaml"] = "1"
+                except Exception as exc:
+                    log.warn("[Server] AXAML 转换异常：" + repr(exc))
         self._status = response.status
         self._size = len(body)
         self.send_response(response.status)
@@ -452,6 +472,13 @@ class Handler(BaseHTTPRequestHandler):
             self._log_ip = self._client_ip()
         except Exception:
             self._log_ip = "-"
+        try:
+            self._axaml_mode = (
+                axaml.is_pclce(self.headers.get("User-Agent") or "")
+                or (self.headers.get("X-PCLCE") or "").strip() == "1"
+                or _is_pclce_ip(self._log_ip))
+        except Exception:
+            self._axaml_mode = False
         started = time.perf_counter()
         try:
             self._route()
@@ -610,7 +637,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._note = "未通过访问验证（标记版），返回引导页"
                 self._send(Response.xaml(verify.guide_xaml(
                     marker_ip, profiles.lang_for(marker_ip), self._origin(),
-                    service.config.turnstile_site_key)))
+                    service.config.turnstile_site_key,
+                    pclce=getattr(self, "_axaml_mode", False))))
                 return
             try:
                 body, data = service.homepage(marker_ip, self._origin(), marker=True)
@@ -690,7 +718,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._note = "未通过访问验证，返回引导页"
                 self._send(Response.xaml(verify.guide_xaml(
                     ip, profiles.lang_for(ip), origin,
-                    service.config.turnstile_site_key)))
+                    service.config.turnstile_site_key,
+                    pclce=getattr(self, "_axaml_mode", False))))
                 return
             country = self.headers.get("CF-IPCountry") or "XX"
             try:

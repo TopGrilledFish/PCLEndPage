@@ -557,14 +557,35 @@ def _cf_card(ip: str, base: str, lang: str) -> str:
 
 
 def guide_xaml(ip: str, lang: str = DEFAULT_LANG, origin: str = "",
-               site_key: str = "") -> str:
-    """PCL 侧的验证页。**不组装主页**，所以不会调 uapi / ip-api。"""
+               site_key: str = "", pclce: bool = False) -> str:
+    """PCL 侧的验证页。**不组装主页**，所以不会调 uapi / ip-api。
+
+    ``pclce=True`` 时生成 PCL-CE/AXAML 版：AXAML 校验器不允许 ``{Binding}``，
+    而 PCL-CE 的兼容渲染器也不解析 Binding，所以输入框提交在 PCL-CE 里必然
+    失效；这里改为引导用户去浏览器完成同一道看图验证（``/verify`` HTML 页），
+    完成后回 PCL 点「刷新页面」。
+    """
     lang = lang or DEFAULT_LANG
     base = (origin or "").rstrip("/")
     if need_turnstile(ip, site_key):
         # 连错够次数：整张卡只留「请验证您是真人」+ 一个按钮
         return palette.apply(_cf_card(ip, base, lang),
                              profiles.PROFILES.palette_for(ip))
+    elif pclce:
+        token, _code = make_token(ip)
+        image = base + "/verify_img.png?t=" + urllib.parse.quote(token)
+        body = (
+            '<local:MyImage Source="' + escape_url_attr(image) + '" Height="76"'
+            ' HorizontalAlignment="Center" Margin="0,14,0,0" />'
+            '<TextBlock Text="' + escape_attr(
+                "请点击下方按钮，在浏览器中完成人机验证；完成后回到 PCL，点「刷新页面」即可进入主页。") + '"'
+            ' FontSize="14" TextWrapping="Wrap" HorizontalAlignment="Center"'
+            ' Foreground="{DynamicResource ColorBrush3}" Margin="0,14,0,0" />'
+            '<local:MyIconTextButton Height="40" Margin="0,12,0,0" HorizontalAlignment="Center"'
+            ' Text="' + escape_attr("在浏览器中验证") + '"'
+            ' ColorType="Highlight" EventType="打开网页"'
+            ' EventData="' + escape_url_attr(base + "/verify") + '" />'
+        )
     else:
         token, _code = make_token(ip)
         image = base + "/verify_img.png?t=" + urllib.parse.quote(token)

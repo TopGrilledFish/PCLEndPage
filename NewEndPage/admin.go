@@ -1090,6 +1090,8 @@ async function loadState() {
   if (!statsHTML && st && typeof st === 'object') {
     Object.keys(st).forEach(function(k){ statsHTML += '<div class="kv"><b>' + esc(k) + '</b><span>' + esc(st[k]) + '</span></div>'; });
   }
+  var ns = STATE.new_site || null;
+  if (ns) statsHTML += '<div class="kv"><b>新版今日渲染</b><span>' + esc(ns.today_hits) + ' 次 · 独立 IP ' + esc(ns.unique_ips) + '</span></div>';
   $('stats').innerHTML = statsHTML || '<span class="hint">暂无统计</span>';
   var info = STATE.info || {};
   var infoHTML = '';

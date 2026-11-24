@@ -35,6 +35,13 @@ _EFFECT_RE = re.compile(r"\s*<([A-Za-z][\w.]*)\.Effect>.*?</\1\.Effect>", re.S)
 _LOCAL_PREFIX_RE = re.compile(r"(</?)local:")
 _GEOM_LOGO_RE = re.compile(r'\s+Logo="(?!https?://|avares://|pack://)[^"]*"', re.I)
 _LOGO_SCALE_RE = re.compile(r'\s+LogoScale="[^"]*"')
+# PCL-CE 的 AXAML 校验器只允许 DynamicResource/StaticResource/TemplateBinding，
+# 旧版页面里「输入框 Text 拼进 EventData」的 {Binding} 在 AXAML 下必须去掉：
+# 这里把 StringFormat 里的静态 URL 提出来（保留功能入口，丢掉输入参数）。
+_BINDING_EVENTDATA_RE = re.compile(
+    r'EventData="\{Binding[^"]*?StringFormat=\'\{\}(.*?)\{0\}\'[^"]*?\}"'
+)
+_ANY_BINDING_EVENTDATA_RE = re.compile(r'EventData="\{[^"]*?\}"')
 
 _FORBIDDEN_ELEMENTS = {
     "window", "toplevel", "application", "webview", "nativewebview",
@@ -61,30 +68,51 @@ def is_pclce(user_agent: str) -> bool:
 
 def to_axaml(xaml: str) -> str:
     """把渲染好的 WPF 主页片段转成 AXAML；结构不像主页时原样返回。"""
-    match = _ROOT_TAG_RE.search(xaml)
-    if not match:
-        return xaml
-
     text = _RESOURCES_RE.sub("", xaml, count=1)
     # WPF 的 EventTrigger/Storyboard/BlurEffect 在 Avalonia 里没有对应类型，
     # 留在内容里会让 AvaloniaRuntimeXamlLoader 直接抛异常。
     text = _TRIGGERS_RE.sub("", text)
     text = _EFFECT_RE.sub("", text)
-    match = _ROOT_TAG_RE.search(text)
-    if not match:
-        return xaml
 
     text = _LOCAL_PREFIX_RE.sub(r"\1pclcontrols:", text)
     text = _GEOM_LOGO_RE.sub("", text)
     text = _LOGO_SCALE_RE.sub("", text)
+    text = _BINDING_EVENTDATA_RE.sub(r'EventData="\1"', text)
+    text = _ANY_BINDING_EVENTDATA_RE.sub('EventData=""', text)
 
-    match = _ROOT_TAG_RE.search(text)
+    end = _root_open_tag_end(text)
+    if end is None:
+        return xaml
+
     attrs = (
         ' xmlns="%s"' % AVALONIA_NS
         + ' xmlns:x="%s"' % XAML_NS
         + ' xmlns:pclcontrols="using:PCL.UI.Controls"'
     )
-    return text[:match.end()] + attrs + text[match.end():]
+    return text[:end] + attrs + text[end:]
+
+
+_ROOT_ELEMENT_RE = re.compile(r"<([A-Za-z][\w.:-]*)")
+
+
+def _root_open_tag_end(s: str) -> int | None:
+    """返回根元素开标签末尾 ``>`` 的下标（跳过属性值里的 ``>``）。"""
+    match = _ROOT_ELEMENT_RE.search(s)
+    if not match:
+        return None
+    i = match.end()
+    quote = ""
+    while i < len(s):
+        ch = s[i]
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch == ">":
+            return i
+        i += 1
+    return None
 
 
 def validate(xaml: str) -> list[str]:

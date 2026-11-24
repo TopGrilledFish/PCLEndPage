@@ -22,13 +22,18 @@ import (
 )
 
 var (
-	axRootRE      = regexp.MustCompile(`<StackPanel\b`)
+	axRootRE      = regexp.MustCompile(`<([A-Za-z][\w.:-]*)`)
 	axResourcesRE = regexp.MustCompile(`(?s)\s*<StackPanel\.Resources>.*?</StackPanel\.Resources>`)
 	axTriggersRE  = regexp.MustCompile(`(?s)\s*<[A-Za-z][\w.]*\.Triggers>.*?</[A-Za-z][\w.]*\.Triggers>`)
 	axEffectRE    = regexp.MustCompile(`(?s)\s*<[A-Za-z][\w.]*\.Effect>.*?</[A-Za-z][\w.]*\.Effect>`)
 	axLocalRE     = regexp.MustCompile(`(</?)local:`)
 	axLogoRE      = regexp.MustCompile(`\s+Logo="([^"]*)"`)
 	axLogoScaleRE = regexp.MustCompile(`\s+LogoScale="[^"]*"`)
+	// PCL-CE 的 AXAML 校验器只允许 DynamicResource/StaticResource/TemplateBinding，
+	// 旧版页面里「输入框 Text 拼进 EventData」的 {Binding} 在 AXAML 下必须去掉：
+	// 这里把 StringFormat 里的静态 URL 提出来（保留功能入口，丢掉输入参数）。
+	axBindingEventDataRE    = regexp.MustCompile(`EventData="\{Binding[^"]*StringFormat='\{\}([^']*?)\{0\}'[^"]*\}"`)
+	axAnyBindingEventDataRE = regexp.MustCompile(`EventData="\{[^"]*\}"`)
 )
 
 // isPCLCE 判断请求是否来自 PCL-CE（UA 里带 PCLCE/）。
@@ -40,18 +45,48 @@ func toAXAML(xaml string) string {
 	if !axRootRE.MatchString(xaml) {
 		return xaml
 	}
+	if strings.Contains(xaml, "xmlns:pclcontrols") {
+		return xaml
+	}
 	text := axResourcesRE.ReplaceAllString(xaml, "")
 	text = axTriggersRE.ReplaceAllString(text, "")
 	text = axEffectRE.ReplaceAllString(text, "")
 	text = axLocalRE.ReplaceAllString(text, "${1}pclcontrols:")
 	text = stripGeomLogos(text)
 	text = axLogoScaleRE.ReplaceAllString(text, "")
-	idx := axRootRE.FindStringIndex(text)
-	if idx == nil {
+	text = axBindingEventDataRE.ReplaceAllString(text, `EventData="$1"`)
+	text = axAnyBindingEventDataRE.ReplaceAllString(text, `EventData=""`)
+	idx := rootOpenTagEnd(text)
+	if idx < 0 {
 		return xaml
 	}
 	attrs := ` xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:pclcontrols="using:PCL.UI.Controls"`
-	return text[:idx[1]] + attrs + text[idx[1]:]
+	return text[:idx] + attrs + text[idx:]
+}
+
+// rootOpenTagEnd 返回根元素开标签末尾 “>” 的下标（跳过属性值里的 “>”）。
+func rootOpenTagEnd(s string) int {
+	loc := axRootRE.FindStringIndex(s)
+	if loc == nil {
+		return -1
+	}
+	var quote byte
+	for i := loc[1]; i < len(s); i++ {
+		ch := s[i]
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '"', '\'':
+			quote = ch
+		case '>':
+			return i
+		}
+	}
+	return -1
 }
 
 // stripGeomLogos 删掉几何路径形式的 Logo（PCL-CE 的 AXAML 校验器不接受），

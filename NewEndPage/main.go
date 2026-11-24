@@ -194,6 +194,8 @@ const (
 	xamlCT      = "application/xml; charset=utf-8"
 	noStore     = "no-store, no-cache, must-revalidate, max-age=0, s-maxage=0"
 	newSiteHint = `<local:MyHint Margin="0,0,0,12" Theme="Yellow" Text="您现在访问的是新版测试站点" />`
+	// newSiteHintAXAML 是 AXAML 版（旧版页面已转 AXAML 时，注入 local: 会成为未声明前缀）。
+	newSiteHintAXAML = `<pclcontrols:MyHint Margin="0,0,0,12" Theme="Yellow" Text="您现在访问的是新版测试站点" />`
 	// htmlBanner 用于旧版 HTML 页面（如 /verify 访问验证页），样式与 nginx sub_filter 的横幅一致。
 	htmlBanner = `<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#f9d423;color:#000;text-align:center;padding:6px 0;font:14px/1.4 sans-serif;">您现在访问的是新版测试站点</div>`
 )
@@ -229,7 +231,7 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 	s.pref = newPrefStore(filepath.Join(dataDir, cfg.PrefFile))
 	s.newstats = newNewSiteStats(filepath.Join(dataDir, "newstats.json"))
 	s.pclce = newPCLCEStore(time.Hour)
-	s.proxy = newLegacyProxy(cfg.LegacyBackend)
+	s.proxy = newLegacyProxy(cfg.LegacyBackend, s)
 	s.proxy.ModifyResponse = s.modifyLegacyResponse
 	s.admin = newAdmin(cfg, cfgPath, s)
 	return s, nil
@@ -408,7 +410,7 @@ func requestOrigin(r *http.Request) string {
 	return proto + "://" + r.Host
 }
 
-func newLegacyProxy(backend string) *httputil.ReverseProxy {
+func newLegacyProxy(backend string, s *Server) *httputil.ReverseProxy {
 	target, _ := url.Parse("http://" + backend)
 	p := httputil.NewSingleHostReverseProxy(target)
 	orig := p.Director
@@ -426,6 +428,11 @@ func newLegacyProxy(backend string) *httputil.ReverseProxy {
 		}
 		if req.Header.Get("X-Forwarded-Proto") == "" {
 			req.Header.Set("X-Forwarded-Proto", "https")
+		}
+		// 让旧版把这一页转成 AXAML：PCL-CE 走兼容渲染器虽然能显示，但旧版页面里
+		// 的 {Binding}（验证页）在兼容渲染器里不求值，提交按钮会打不开。
+		if s != nil && (isPCLCE(req.UserAgent()) || (s.pclce != nil && s.pclce.seen(ip))) {
+			req.Header.Set("X-PCLCE", "1")
 		}
 	}
 	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
@@ -563,13 +570,19 @@ func skipPropertyElements(s string, pos int) int {
 }
 
 // injectNewSiteHint 在 XAML 页面内容区顶部插入新版横条。
+// 旧版已转成 AXAML 的页面（含 xmlns:pclcontrols）要用 pclcontrols: 前缀，
+// 否则 local: 在 PCL-CE 的 Avalonia 解析器里是未声明前缀。
 func injectNewSiteHint(body []byte) []byte {
 	pos := stackPanelInsertPos(string(body))
 	if pos < 0 {
 		return body
 	}
+	hint := newSiteHint
+	if strings.Contains(string(body), "xmlns:pclcontrols") {
+		hint = newSiteHintAXAML
+	}
 	s := string(body)
-	return []byte(s[:pos] + "\n    " + newSiteHint + s[pos:])
+	return []byte(s[:pos] + "\n    " + hint + s[pos:])
 }
 
 // injectTwoColumn 把个性设置页的各个分组改成两列并排（单列在宽屏上显得太空）。
@@ -694,6 +707,13 @@ func injectPrefSwitch(body []byte, baseURL string, preferNew bool) []byte {
 	}
 	btn := `<local:MyIconTextButton Height="36" Margin="0,0,0,12" HorizontalAlignment="Center" Text="` +
 		escapeAttr(text) + `" ColorType="Highlight" LogoScale="0.75" Logo="M192 448 H640 V320 L896 512 L640 704 V576 H192 Z M832 576 H384 V704 L128 512 L384 320 V448 H832 Z" EventType="打开网页" EventData="` + escapeAttr(target) + `" />`
+	if strings.Contains(string(body), "xmlns:pclcontrols") {
+		btn = strings.Replace(btn, "<local:MyIconTextButton", "<pclcontrols:MyIconTextButton", 1)
+		btn = strings.Replace(btn, "</local:MyIconTextButton", "</pclcontrols:MyIconTextButton", 1)
+		// AXAML 校验器不接受几何 Logo，用图片地址形式保留一个图标更稳妥；
+		// 直接去掉 Logo 与 LogoScale，避免 pclcontrols 版按钮校验失败。
+		btn = strings.Replace(btn, ` LogoScale="0.75" Logo="M192 448 H640 V320 L896 512 L640 704 V576 H192 Z M832 576 H384 V704 L128 512 L384 320 V448 H832 Z"`, "", 1)
+	}
 	pos := stackPanelInsertPos(string(body))
 	if pos < 0 {
 		return body
