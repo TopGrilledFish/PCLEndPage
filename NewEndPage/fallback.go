@@ -109,6 +109,14 @@ func (s *Server) writeXAMLPage(w http.ResponseWriter, r *http.Request, body stri
 			w.Header().Set("X-Axaml", "1")
 		}
 	}
+	// 所有新版渲染的页面都带「是否新站」提示（主页/验证卡已自带，避免重复）。
+	if !strings.Contains(body, "您现在访问的是") {
+		if wantAXAML {
+			body = string(injectCESiteHint([]byte(body)))
+		} else {
+			body = string(injectNewSiteHint([]byte(body)))
+		}
+	}
 	w.Header().Set("Content-Type", xamlCT)
 	w.Header().Set("Cache-Control", noStore)
 	w.Header().Set("X-Content-Type-Options", "nosniff")

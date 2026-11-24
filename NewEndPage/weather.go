@@ -20,8 +20,9 @@ type weatherEntry struct {
 }
 
 type geoEntry struct {
-	at   time.Time
-	city string
+	at       time.Time
+	city     string
+	province string
 }
 
 // GeoService IP 定位（ip-api，24 小时缓存）。
@@ -229,8 +230,14 @@ func (w *WeatherService) buildXAML(location string, temp int, desc, wind, humidi
 }
 
 func (g *GeoService) locate(ip string) string {
+	city, _ := g.locateRegion(ip)
+	return city
+}
+
+// locateRegion 返回 (城市, 省份)；省份取 ip-api 的 regionName。
+func (g *GeoService) locateRegion(ip string) (string, string) {
 	if ip == "" || isUnlocatable(ip) {
-		return ""
+		return "", ""
 	}
 	ttl := time.Duration(g.cfg.GeoCacheHours) * time.Hour
 	if ttl <= 0 {
@@ -240,35 +247,36 @@ func (g *GeoService) locate(ip string) string {
 	entry, ok := g.cache[ip]
 	g.mu.Unlock()
 	if ok && time.Since(entry.at) < ttl {
-		return entry.city
+		return entry.city, entry.province
 	}
-	city := g.query(ip)
+	city, province := g.query(ip)
 	g.mu.Lock()
-	g.cache[ip] = geoEntry{at: time.Now(), city: city}
+	g.cache[ip] = geoEntry{at: time.Now(), city: city, province: province}
 	g.mu.Unlock()
-	return city
+	return city, province
 }
 
-func (g *GeoService) query(ip string) string {
+func (g *GeoService) query(ip string) (string, string) {
 	target := "http://ip-api.com/json/" + url.PathEscape(ip) + "?lang=zh-CN&fields=status,country,regionName,city"
 	resp, err := g.hc.Get(target)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var data map[string]any
 	if json.Unmarshal(body, &data) != nil {
-		return ""
+		return "", ""
 	}
 	if s, _ := data["status"].(string); s != "success" {
-		return ""
+		return "", ""
 	}
 	city := strField(data, "city")
+	province := strField(data, "regionName")
 	if city == "" {
-		city = strField(data, "regionName")
+		city = province
 	}
-	return city
+	return city, province
 }
 
 func isUnlocatable(ip string) bool {

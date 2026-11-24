@@ -183,6 +183,7 @@ type Server struct {
 	newstats      *NewSiteStats
 	verify        *Verifier
 	profiles      *Profiles
+	stats         *visitStats
 	dataDir       string
 	started       time.Time
 }
@@ -240,6 +241,7 @@ func newServer(cfg *Config, dataDir, cfgPath string) (*Server, error) {
 	s.newstats = newNewSiteStats(filepath.Join(dataDir, "newstats.json"))
 	s.verify = newVerifier(s)
 	s.profiles = newProfiles(filepath.Join(dataDir, "profiles.json"))
+	s.stats = newVisitStats(filepath.Join(dataDir, "visits.json"))
 	s.proxy = newLegacyProxy(cfg.LegacyBackend)
 	s.proxy.ModifyResponse = s.modifyLegacyResponse
 	s.admin = newAdmin(cfg, cfgPath, s)
@@ -269,6 +271,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.handleLanguages(w, r, ip) {
+		return
+	}
+	// 访问浏览页由新版接管。
+	if s.handleVisit(w, r, ip) {
 		return
 	}
 	p := r.URL.Path
@@ -361,6 +367,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request, marker, want
 	ip := clientIP(r, s.cfg)
 	origin := requestOrigin(r)
 	body, err := s.buildHome(ip, origin, marker)
+	s.recordVisit(r, ip)
 	if err != nil {
 		logError("[Home] 渲染失败：%v", err)
 		http.Error(w, "homepage render failed", http.StatusInternalServerError)
@@ -386,6 +393,24 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request, marker, want
 		return
 	}
 	io.WriteString(w, body)
+}
+
+// recordVisit 记录一次主页访问（country 取 Cloudflare 头，城市/省份异步定位）。
+func (s *Server) recordVisit(r *http.Request, ip string) {
+	if s.stats == nil || ip == "" {
+		return
+	}
+	country := strings.TrimSpace(r.Header.Get("CF-IPCountry"))
+	if country == "" {
+		country = "XX"
+	}
+	go func() {
+		city, province := "", ""
+		if s.weather != nil && s.cfg.EnableGeo {
+			city, province = s.weather.geo.locateRegion(ip)
+		}
+		s.stats.record(ip, country, city, province)
+	}()
 }
 
 func clientIP(r *http.Request, cfg *Config) string {
