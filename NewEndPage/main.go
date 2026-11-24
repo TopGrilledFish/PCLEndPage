@@ -192,6 +192,10 @@ const (
 	newSiteHint = `<local:MyHint Margin="0,0,0,12" Theme="Yellow" Text="您现在访问的是新版测试站点" />`
 	// newSiteHintAXAML 是 AXAML 版（旧版页面已转 AXAML 时，注入 local: 会成为未声明前缀）。
 	newSiteHintAXAML = `<pclcontrols:MyHint Margin="0,0,0,12" Theme="Yellow" Text="您现在访问的是新版测试站点" />`
+	// ceSiteHint 是 /Custom-CE.xaml 渲染的 AXAML 主页顶部提示（WPF 模板先按此文案渲染，再整体转 AXAML）。
+	ceSiteHint = `<local:MyHint Margin="0,0,0,12" Theme="Yellow" Text="您现在访问的是PCL2 CE 兼容版 完整体验请使用PCL2官方版" />`
+	// ceSiteHintAXAML 用于旧版已转 AXAML 的页面（如未验证时反代回来的验证卡）。
+	ceSiteHintAXAML = `<pclcontrols:MyHint Margin="0,0,0,12" Theme="Yellow" Text="您现在访问的是PCL2 CE 兼容版 完整体验请使用PCL2官方版" />`
 	// htmlBanner 用于旧版 HTML 页面（如 /verify 访问验证页），样式与 nginx sub_filter 的横幅一致。
 	htmlBanner = `<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#f9d423;color:#000;text-align:center;padding:6px 0;font:14px/1.4 sans-serif;">您现在访问的是新版测试站点</div>`
 )
@@ -343,6 +347,8 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request, marker, want
 	// /Custom-CE.xaml 系列固定给 PCL-CE 的 Avalonia 渲染器：WPF 主页转 AXAML，
 	// 转换失败时仍返回 WPF（PCL-CE 兼容渲染器能显示，只是事件不可用）。
 	if wantAXAML {
+		// CE 版顶部提示与 PCL2 版不同：先替换横条文案，再整体转 AXAML。
+		body = strings.Replace(body, newSiteHint, ceSiteHint, 1)
 		if ax := toAXAML(body); axamlOK(ax) {
 			body = ax
 			w.Header().Set("X-Axaml", "1")
@@ -445,7 +451,13 @@ func (s *Server) modifyLegacyResponse(resp *http.Response) error {
 		if p == "/settings_page.xaml" {
 			body = injectTwoColumn(body)
 		}
-		body = injectNewSiteHint(body)
+		isCECard := resp.Request != nil && resp.Request.Header.Get("X-PCLCE") == "1" &&
+			(p == "/Custom.xaml" || p == "/mark/Custom.xaml")
+		if isCECard {
+			body = injectCESiteHint(body)
+		} else {
+			body = injectNewSiteHint(body)
+		}
 	} else {
 		body = injectHTMLBanner(body)
 	}
@@ -547,6 +559,20 @@ func injectNewSiteHint(body []byte) []byte {
 	hint := newSiteHint
 	if strings.Contains(string(body), "xmlns:pclcontrols") {
 		hint = newSiteHintAXAML
+	}
+	s := string(body)
+	return []byte(s[:pos] + "\n    " + hint + s[pos:])
+}
+
+// injectCESiteHint 在 PCL-CE 版主页/验证卡顶部插入 CE 兼容提示。
+func injectCESiteHint(body []byte) []byte {
+	pos := stackPanelInsertPos(string(body))
+	if pos < 0 {
+		return body
+	}
+	hint := ceSiteHint
+	if strings.Contains(string(body), "xmlns:pclcontrols") {
+		hint = ceSiteHintAXAML
 	}
 	s := string(body)
 	return []byte(s[:pos] + "\n    " + hint + s[pos:])
