@@ -359,7 +359,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.routeHome(w, r, false, m[4] == "Custom-CE.xaml", ip)
 	default:
-		s.proxy.ServeHTTP(w, r)
+		// 旧版 Python 已下线，未迁移路径直接 404（不再反代 8787）。
+		writeNotFoundText(w, p)
 	}
 }
 
@@ -927,7 +928,7 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	go func() {
-		logInfo("[Boot] NewEndPage 启动：http://%s  旧服务：%s", addr, cfg.LegacyBackend)
+		logInfo("[Boot] NewEndPage 启动：http://%s（旧版 Python 已下线）", addr)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[Boot] 监听失败：%v", err)
 		}

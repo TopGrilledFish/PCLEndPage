@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
@@ -34,15 +33,6 @@ type Admin struct {
 	sessions   map[string]time.Time
 	pending    map[string]time.Time
 	setupSecre map[string]string
-
-	legacy *legacyAdmin
-}
-
-type legacyAdmin struct {
-	base   string
-	client *http.Client
-	mu     sync.Mutex
-	cookie string
 }
 
 func newAdmin(cfg *Config, cfgPath string, srv *Server) *Admin {
@@ -54,7 +44,6 @@ func newAdmin(cfg *Config, cfgPath string, srv *Server) *Admin {
 		sessions:   map[string]time.Time{},
 		pending:    map[string]time.Time{},
 		setupSecre: map[string]string{},
-		legacy:     &legacyAdmin{base: "http://" + cfg.LegacyBackend, client: &http.Client{Timeout: 20 * time.Second}},
 	}
 }
 
@@ -270,107 +259,6 @@ func (a *Admin) handle2FASubmit(w http.ResponseWriter, r *http.Request) {
 	a.setCookie(w, adminPendingCookie, "", -1)
 	a.setCookie(w, adminSessionCookie, a.newSession(), int(a.sessionTTL().Seconds()))
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
-}
-
-// ============ 旧版 API 代理 ============
-
-func (l *legacyAdmin) login(token string) error {
-	body, _ := json.Marshal(map[string]string{"token": token})
-	req, err := http.NewRequest(http.MethodPost, l.base+"/admin/api/login", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("旧版登录失败：HTTP %d", resp.StatusCode)
-	}
-	var got string
-	for _, c := range resp.Cookies() {
-		if c.Name == "admin_session" {
-			got = c.Value
-		}
-	}
-	if got == "" {
-		return fmt.Errorf("旧版登录失败：没有会话 Cookie")
-	}
-	l.mu.Lock()
-	l.cookie = got
-	l.mu.Unlock()
-	return nil
-}
-
-func (l *legacyAdmin) cookieValue() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.cookie
-}
-
-func (l *legacyAdmin) do(token, method, path, rawQuery string, body []byte) (*http.Response, error) {
-	call := func() (*http.Response, error) {
-		req, err := http.NewRequest(method, l.base+path, bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		if rawQuery != "" {
-			req.URL.RawQuery = rawQuery
-		}
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		if ck := l.cookieValue(); ck != "" {
-			req.Header.Set("Cookie", "admin_session="+ck)
-		}
-		return l.client.Do(req)
-	}
-	resp, err := call()
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if err := l.login(token); err != nil {
-			return nil, err
-		}
-		return call()
-	}
-	return resp, nil
-}
-
-// proxyLegacy 把请求转给旧版后台 API，结果原样写回。
-func (a *Admin) proxyLegacy(w http.ResponseWriter, r *http.Request, action string, body []byte) {
-	if a.cfg.AdminToken == "" {
-		writeJSON(w, 403, map[string]any{"ok": false, "error": "admin_token_not_configured"})
-		return
-	}
-	a.legacy.mu.Lock()
-	cookieMissing := a.legacy.cookie == ""
-	a.legacy.mu.Unlock()
-	if cookieMissing {
-		if err := a.legacy.login(a.cfg.AdminToken); err != nil {
-			writeJSON(w, 502, map[string]any{"ok": false, "error": err.Error()})
-			return
-		}
-	}
-	resp, err := a.legacy.do(a.cfg.AdminToken, r.Method, "/admin/api/"+action, r.URL.RawQuery, body)
-	if err != nil {
-		writeJSON(w, 502, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	for k, vs := range resp.Header {
-		for _, v := range vs {
-			w.Header().Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
 }
 
 // ============ API ============

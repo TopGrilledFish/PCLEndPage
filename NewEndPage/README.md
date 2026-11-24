@@ -1,53 +1,58 @@
 # NewEndPage
 
-用 Go 重写的 PCLEndPage 主页服务（旧版 `pclhome` 的替代实现）。目标：单二进制、低内存（约 14MB RSS）、高并发，主页外观与原 Python 版一致，并在顶部多一条「您现在访问的是新版测试站点」测试横条。
+用 Go 重写的 PCLEndPage 主页服务（旧版 Python `pclhome` 的替代实现）。单二进制、低内存、高并发，主页外观与原 Python 版一致。旧版代码已归档到仓库根目录的 `legacy-python/`，服务器上不再运行。
 
-## 新旧版切换（按 IP 选择，不再随机分流）
+## 入口
 
-- 默认所有访客走旧版；用户在 PCL 的「个性设置」页点「切换到新版测试站点」后，该 IP 才进入新版（记录在 `var/pref.json`），点「返回旧版主页」退出。
-- 入口：`/_new` 选择新版、`/_old` 返回旧版；设置页按钮由 Go 反代 `/settings_page.xaml` 时注入（按钮 `EventType="打开网页"`，用系统浏览器访问）。
-- 新版入口的每个可见页面都有标识：主页与 XAML 页面顶部 `MyHint` 横条，`/verify`、`/admin` 等 HTML 页固定横幅；响应头 `X-New-EndPage: 1/0` 可直接区分新旧。
-- 人机验证复用旧版：Go 读旧版 `/root/PCLEndPage/var/verify.json`，未通过验证的 IP 仍返回旧版看图验证卡（每 IP 7 天）；验证通过后新版才渲染主页。
+| 地址 | 客户端 | 格式 |
+| --- | --- | --- |
+| `/Custom.xaml` | PCL2 原版 | WPF XAML |
+| `/Custom-CE.xaml` | PCL-CE | AXAML（顶部有「您现在访问的是 PCL2 CE 兼容版」提示） |
+| `/mark/Custom.xaml`、`/mark/Custom-CE.xaml` | 标记版主页 | 同上，日期交给 PCL 替换 |
+| `/YYYY/M/D`、`/YYYY/M/D/Custom-CE.xaml` | 日期版主页 | 同上 |
+| `/Custom.xaml.version`、`/Custom.xaml.ini`、`/version` | 版本号 | 模板内容 crc32 + 渲染修订号 |
+| `/YYYY/M/D/version`、`/YYYY/M/D/Custom.xaml.ini` | 日期版版本号 | `YYYYMMDD` |
+
+PCL2 与 PCL-CE 完全按 URL 区分，不再按 UA 或 IP 标记。
+
+## 功能（全部由 Go 实现）
+
+- 主页：问候语/日期/星期/农历/节日/倒计时/一言/天气/公告/按钮/站点/关于卡，WPF 与 AXAML 两套输出。
+- 访问验证：5×7 点阵看图验证码、失败锁定、连续失败升级 Cloudflare Turnstile、每 IP 7 天；PCL-CE 走浏览器验证（AXAML 不允许 `{Binding}`）。
+- 计算器：12 个工具（下界/区块/距离/刻/经验/护甲/堆叠/颜色/UUID/种子/要塞/伤害）+ 快捷值按钮。
+- 个性设置、语言选择、访问浏览（中国地图、省份排行、地区分布、趋势、最近来访）。
+- AI 故障分析：内置密钥/访客自带密钥、token 额度与全站周额度、高峰倍率、多轮追问、思考过程、任务队列与 `ai_log.json` 记录。
+- 后台 `/admin`：令牌登录 + TOTP 两步验证；概览、配置、封禁、维护、公告、AI、日志、体检全部自营，日志按 `[WARN]` 红 / `[INFO]` 蓝着色。
+- 静态资源：`/images/*`、`/music/*`、`/favicon.png` 直接从 `static_dir` 读取（带缓存标头与目录穿越防护）。
 
 ## 结构
 
 | 文件 | 作用 |
 | --- | --- |
-| `main.go` | 配置加载（JSON）、路由与新旧版决策（`/`、`/Custom.xaml`、`/mark*`、版本端点、`/healthz`、`/_new`、`/_old`）、其余路径反代旧服务并注入新版标识 |
-| `admin.go` | 新版后台 `/admin`：令牌登录 + TOTP 两步验证、概览/配置/封禁/维护/AI/日志/工具，覆盖旧版 24 个 action（需要旧版数据的带 session 反代） |
-| `stats.go` | 新版首页渲染计数（`var/newstats.json`，后台概览展示） |
-| `pref.go` | 按 IP 记录「选择新版」偏好（JSON 原子写） |
-| `verify.go` | 读取旧版 `verify.json`，判断该 IP 是否已通过人机验证 |
-| `render.go` | 两阶段模板替换：构建期 `{{TOKEN}}`、请求期 `__TOKEN__`（含 `<!-- __X__ -->` 整块形态） |
-| `content.go` | 首页数据组装：问候语/日期/星期/农历/节日/倒计时/一言/按钮/站点/关于卡 |
-| `weather.go` | 天气卡片 + IP 定位（ip-api）、3 小时缓存、分级建议 |
-| `saying.go` | 每日一言（uapis 接口 + `var/saying.json` 缓存 + 内置 68 条兜底） |
-| `lunar.go` / `lunar_service.go` | 农历换算（1900–2100）与节气接口缓存 |
-| `uapi.go` | uapis.cn 多密钥轮换、401/402 冷却 30 分钟、匿名兜底 |
-| `i18n.go` | 语言表（缺键回退 en → zh-hans） |
-| `render_test.go` | 模板替换、横条注入、版本端点、TOTP 等单元测试 |
-| `assets/` | 从旧版导出的模板片段与数据，`//go:embed` 进二进制 |
-| `_deploy/` | 部署脚本：`setup.py`/`update_config.py`/`update_config_admin.py` 生成服务器配置、`newendpage.service`、`disable_split.py`（关闭 nginx 随机分流，入口统一走 8778）、`verify_new.sh` 快速验证 |
+| `main.go` | 配置、路由、主页渲染入口、静态资源 |
+| `render.go` | 两阶段模板替换（`{{TOKEN}}` 构建期、`__TOKEN__` 请求期） |
+| `content.go` | 首页数据组装（问候/日期/农历/节日/一言/公告） |
+| `axaml.go` | XAML → AXAML 转换（命名空间、`local:`→`pclcontrols:`、SvgIcon、字体等） |
+| `verify.go` / `verify_page.go` | 人机验证与看图验证码生成 |
+| `calc.go` / `calc_page.go` | 计算器逻辑与页面 |
+| `settings.go` / `languages.go` | 个性设置、语言选择 |
+| `visit.go` / `visit_page.go` | 访问统计（`visits.json`）与访问浏览页 |
+| `ai.go` / `ai_store.go` / `ai_http.go` / `ai_page.go` / `ai_route.go` | AI 分析：额度、密钥、任务、日志、页面 |
+| `admin.go` | 后台 |
+| `weather.go` / `saying.go` / `lunar.go` / `lunar_service.go` / `uapi.go` | 天气、一言、农历、uapis 密钥轮换 |
+| `i18n.go` / `render_test.go` | 语言表与单元测试 |
+| `assets/` | 模板、语言包、地图与数据（`//go:embed` 进二进制） |
 
 ## 构建
 
 ```bash
-go build -trimpath -ldflags "-s -w" -o newendpage .          # 本机
+go build -trimpath -ldflags "-s -w" -o newendpage .
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o newendpage.linux .
 ```
 
 ## 部署
 
-1. 服务器 `/root/NewEndPage/` 放二进制，`config.json` 由 `_deploy/setup.py` 生成（`base_url`、`version`、`uapi_keys` 从旧版 `/root/PCLEndPage/config.json` 取、`legacy_backend`），再补 `verify_enabled`、`verify_days`、`verify_file`、`pref_file`。
-2. `systemctl enable --now newendpage`（监听 `127.0.0.1:8778`，`legacy_backend` 指向旧版 `127.0.0.1:8787`）。
-3. 运行 `_deploy/disable_split.py`：删除 nginx 的 `split_clients`/`map`，两个 end vhost 的 `location /` 与 `/admin` 都改为 `proxy_pass http://127.0.0.1:8778;`，新旧版完全由 Go 按 IP 偏好决定。
-4. 未实现的路径（`/admin`、`/ai_page.xaml`、`/images/*` 等）由 Go 透明反代回旧版；旧版本继续跑 `pclhome.service`。
-
-## 与旧版的差异
-
-- 顶部新增「您现在访问的是新版测试站点」横条（主页 `MyHint`，HTML 页固定横幅）。
-- 访问验证复用旧版（同一份 `verify.json`、同一套看图验证），不再区分新旧实现。
-- `/admin` 由本服务接管：令牌登录 + TOTP 两步验证；概览、配置、封禁、维护、AI、日志、工具全部可用，旧版日志按 `[WARN]` 红 / `[INFO]` 蓝着色。
-- 新版首页渲染次数记入 `var/newstats.json`（后台概览显示）；旧版 `stats.db` 的访问统计仍由旧版服务维护。
-- 版本端点：`/Custom.xaml.version`、`/version`、`/mark/version` 用模板内容 crc32（不再随请求变化）；`/YYYY/M/D/version` 为 `YYYYMMDD`。
-- 其余路径（AI、计算器、访问浏览、图片等）仍由 Go 透明反代回旧版。
+1. `/root/NewEndPage/` 放二进制与 `config.json`（关键字段：`base_url`、`version`、`uapi_keys`、`verify_file`、`store_file`、`log_file`、`ai_*`、`admin_token`、`admin_totp_secret`）。
+2. `systemctl enable --now newendpage`（监听 `127.0.0.1:8778`）。
+3. nginx 的 end vhost 把 `/` 与 `/admin` 都 `proxy_pass http://127.0.0.1:8778;`。
+4. 旧版 `pclhome.service` 已停用；`/root/PCLEndPage` 只保留历史数据供查阅，可随时删除。
