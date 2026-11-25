@@ -1,7 +1,7 @@
 {
   "admin_session_hours": 8,
   "admin_token": "test123",
-  "admin_totp_secret": "VFMAVWQCPPP5UT4BN7TCNM4EEBSAEBY2",
+  "admin_totp_secret": "Your secret",
   "base_url": "http://127.0.0.1:8778",
   "enable_ai": true,
   "enable_geo": false,
