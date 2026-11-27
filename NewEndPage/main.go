@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"log"
 	"mime"
@@ -346,6 +345,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p == markPrefix+"/Custom.xaml.version" || p == markPrefix+"/version" ||
 		p == markPrefix+"/Custom.xaml.ini" || p == markPrefix+"/Custom-CE.xaml.ini":
 		writeNoStore(w, s.staticVersion())
+	case p == "/version.txt":
+		writeNoStore(w, s.staticVersion()+"\n")
 	case p == "/healthz":
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", noStore)
@@ -470,9 +471,24 @@ func writeNotFoundText(w http.ResponseWriter, p string) {
 // 必须 bump，否则 PCL-CE 认为版本号没变，继续用缓存里的旧页面。
 const axamlRenderRevision = "\n<!-- axaml-render-3 -->"
 
+// staticVersion 返回静态主页版本号：按 10 分钟分桶，
+// PCL 每 10 分钟就会认为主页有新版本并重新拉取，天气/一言等内容随访问刷新。
+// 同时 <dataDir>/version.txt 也由 versionLoop 每 10 分钟写入同一个值。
 func (s *Server) staticVersion() string {
-	sum := crc32.ChecksumIEEE([]byte(s.template + axamlRenderRevision))
-	return strconv.FormatInt(int64(sum), 10)
+	return strconv.FormatInt(time.Now().Unix()/600, 10)
+}
+
+// versionLoop 每 10 分钟把当前版本号写到 <dataDir>/version.txt，便于外部查看/探活。
+func (s *Server) versionLoop() {
+	write := func() {
+		_ = os.WriteFile(filepath.Join(s.dataDir, "version.txt"), []byte(s.staticVersion()+"\n"), 0o644)
+	}
+	write()
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for range t.C {
+		write()
+	}
 }
 
 // datedVersion 返回日期版版本号：同一天内固定，换天就变（旧版为 YYYYMMDD）。
@@ -928,6 +944,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("[Boot] 初始化失败：%v", err)
 	}
+	go srv.versionLoop()
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	if *listen != "" {
 		addr = *listen
