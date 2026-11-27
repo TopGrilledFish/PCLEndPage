@@ -203,7 +203,7 @@ func (v *visitStats) summary(days int) *visitSummary {
 	}
 	uniques := map[string]bool{}
 	for _, r := range records {
-		if r.TS >= cutoff {
+		if r.TS >= cutoff && !isLocalAddr(r.IP) {
 			uniques[r.IP] = true
 		}
 	}
