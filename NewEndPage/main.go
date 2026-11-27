@@ -541,17 +541,21 @@ func (s *Server) recordVisit(r *http.Request, ip string) {
 
 func clientIP(r *http.Request, cfg *Config) string {
 	if cfg.TrustProxyHeaders {
-		if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
-			return v
-		}
-		if v := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); v != "" {
-			return v
+		// 与旧版一致：CF-Connecting-IP 优先，其次 X-Real-IP，最后 X-Forwarded-For。
+		// nginx 经 stream 转发时 $remote_addr 是 127.0.0.1，X-Real-IP 没有参考价值，
+		// 因此本机地址直接跳过，继续尝试后面的头。
+		for _, header := range []string{"CF-Connecting-IP", "X-Real-IP"} {
+			if v := strings.TrimSpace(r.Header.Get(header)); v != "" && !isLocalAddr(v) {
+				return v
+			}
 		}
 		if v := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); v != "" {
 			if idx := strings.IndexByte(v, ','); idx >= 0 {
 				v = v[:idx]
 			}
-			return strings.TrimSpace(v)
+			if v = strings.TrimSpace(v); v != "" && !isLocalAddr(v) {
+				return v
+			}
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -559,6 +563,15 @@ func clientIP(r *http.Request, cfg *Config) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// isLocalAddr 判断 IP 是否为本机/回环地址（nginx 处于 stream 代理后面时 X-Real-IP 会是 127.0.0.1）。
+func isLocalAddr(value string) bool {
+	if value == "localhost" || value == "::1" || value == "127.0.0.1" {
+		return true
+	}
+	ip := net.ParseIP(value)
+	return ip != nil && ip.IsLoopback()
 }
 
 func requestOrigin(r *http.Request) string {
